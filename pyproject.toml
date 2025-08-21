@@ -1,0 +1,104 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "provesid"
+version = "0.1.0"
+description = "A Python package for chemical identifier resolution and experimental property extraction"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Ali A. Eftekhari and USEtox team", email = "e.eftekhari@gmail.com"},
+]
+keywords = ["chemistry", "cheminformatics", "pubchem", "chemical-identifiers", "api"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9", 
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "requests>=2.25.0",
+    "pandas>=1.3.0",
+    "numpy>=1.21.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "black>=21.0",
+    "flake8>=3.8",
+    "mkdocs>=1.4",
+    "mkdocs-material>=8.0",
+    "mkdocstrings[python]>=0.19",
+]
+test = [
+    "pytest>=6.0",
+    "pytest-cov>=2.0",
+]
+docs = [
+    "mkdocs>=1.4",
+    "mkdocs-material>=8.0",
+    "mkdocstrings[python]>=0.19",
+]
+
+[project.urls]
+Homepage = "https://github.com/provesid/provesid"
+Documentation = "https://provesid.github.io/"
+Repository = "https://github.com/provesid/provesid.git"
+"Bug Tracker" = "https://github.com/provesid/provesid/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+provesid = ["data/*.json"]
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["src/provesid"]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+precision = 2

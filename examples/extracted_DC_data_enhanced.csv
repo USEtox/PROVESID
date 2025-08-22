@@ -1,0 +1,36 @@
+CID,DataSource,StringWithMarkup,ExperimentalValue,Unit,Temperature,Conditions,ReferenceNumber,Name,ExternalTable
+2,Direct,3.6,3.6,,,,3.0,Acidic pKa,
+4,External Table Reference,External table: iupacpka,,,,,,,iupacpka
+6,External Table Reference,External table: iupacpka,,,,,,,iupacpka
+7,External Table Reference,External table: iupacpka,,,,,,,iupacpka
+19,Direct,2.91 (at 25 °C),2.91,,25°C,,13.0,pKa,
+19,External Table Reference,External table: iupacpka,,,,,,,iupacpka
+34,Direct,pKa = 14.31 @ 25 °C,14.31,,,,25.0,,
+34,External Table Reference,External table: iupacpka,,,,,,,iupacpka
+34,External Table Extracted (iupacpka),Extracted from iupacpka: 14.31,14.31,,,,,,iupacpka
+45,External Table Reference,External table: iupacpka,,,,,,,iupacpka
+58,External Table Reference,External table: iupacpka,,,,,,,iupacpka
+59,External Table Reference,External table: iupacpka,,,,,,,iupacpka
+66,Direct,pKa = 7.51,7.51,,,,20.0,,
+66,External Table Reference,External table: iupacpka,,,,,,,iupacpka
+66,External Table Extracted (iupacpka),Extracted from iupacpka: 7.51,7.51,,,,,,iupacpka
+72,Direct,4.26 (at 25 °C),4.26,,25°C,,11.0,pKa,
+72,External Table Reference,External table: iupacpka,,,,,,,iupacpka
+79,Direct,pKa = 1.39 at 24 °C (conjugate acid),1.39,,24°C,,18.0,,
+79,External Table Reference,External table: iupacpka,,,,,,,iupacpka
+79,External Table Extracted (iupacpka),Extracted from iupacpka: 1.39,1.39,,,,,,iupacpka
+86,External Table Reference,External table: iupacpka,,,,,,,iupacpka
+96,Direct,3.59 (at 0 °C),3.59,,0°C,,6.0,pKa,
+96,External Table Reference,External table: iupacpka,,,,,,,iupacpka
+102,External Table Reference,External table: iupacpka,,,,,,,iupacpka
+107,Direct,4.66 (at 18 °C),4.66,,18°C,,11.0,pKa,
+107,External Table Reference,External table: iupacpka,,,,,,,iupacpka
+119,Direct,10.6,10.6,,,,8.0,Basic pKa,
+119,External Table Reference,External table: iupacpka,,,,,,,iupacpka
+125,External Table Reference,External table: iupacpka,,,,,,,iupacpka
+126,Direct,7.61 (at 25 °C),7.61,,25°C,,13.0,pKa,
+126,External Table Reference,External table: iupacpka,,,,,,,iupacpka
+135,Direct,pKa = 4.54,4.54,,,,36.0,,
+135,Direct,K1=3.3X10-5; K2=4.8X10-10 at 19 °C,3.3e-5,,19°C,,36.0,,
+135,External Table Reference,External table: iupacpka,,,,,,,iupacpka
+135,External Table Extracted (iupacpka),Extracted from iupacpka: 4.54,4.54,,,,,,iupacpka

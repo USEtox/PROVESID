@@ -2,9 +2,6 @@ import pandas as pd
 import os
 from tqdm import tqdm
 
-df = pd.read_csv(os.path.join(os.path.dirname(__file__), 'PubChem_compound_logP.csv'))
-cid_list = df["Compound_CID"].to_list()
-
 from provesid import PubChemView, get_property_table
 
 df = pd.read_csv(os.path.join(os.path.dirname(__file__), 'PubChem_compound_logP.csv'))

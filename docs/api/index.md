@@ -11,6 +11,7 @@ PROVESID provides Python interfaces to several major chemical databases and web 
 - **[CAS Common Chemistry](cascommonchem.md)** - CAS Registry data access
 - **[OPSIN](opsin.md)** - IUPAC name to structure conversion
 - **[ClassyFire](classyfire.md)** - Chemical structure classification
+- **[ChEBI](chebi.md)** - Chemical Entities of Biological Interest database
 
 ## Quick Reference
 
@@ -24,11 +25,13 @@ from provesid.pubchemview import PubChemPUGViewAPI
 from provesid.cascommonchem import CASCommonChem
 from provesid.opsin import OPSIN
 from provesid.classyfire import ClassyFireAPI
+from provesid.chebi import ChEBI
 
 # Initialize (where needed)
 api = PubChemPUGViewAPI()
 cas_api = CASCommonChem()
 opsin = OPSIN()
+chebi = ChEBI()
 
 # ClassyFireAPI uses static methods
 result = ClassyFireAPI.submit_query("label", "CCO")
@@ -57,17 +60,24 @@ if structure['status'] == 'SUCCESS':
     
     # 4. Get classification
     response = ClassyFireAPI.submit_query("caffeine_classification", smiles)
+    
+    # 5. Get ChEBI information
+    chebi = ChEBI()
+    chebi_results = chebi.search_by_name(compound_name)
+    if chebi_results:
+        chebi_id = chebi_results[0]['chebiId']
+        chebi_entity = chebi.get_complete_entity(chebi_id)
 ```
 
 ## Module Comparison
 
-| Feature | PubChem | CAS Common | OPSIN | ClassyFire | NCI Resolver |
-|---------|---------|------------|-------|------------|--------------|
-| **Primary Use** | Properties | Registry data | Name→Structure | Classification | ID conversion |
-| **Input Types** | CID, Name, SMILES | CAS, Name, SMILES | IUPAC names | SMILES, InChI | Various IDs |
-| **Output Format** | JSON, DataFrame | JSON | JSON | JSON, SDF, CSV | JSON |
-| **Rate Limits** | Yes | Unofficial | Unofficial | Unofficial | Yes |
-| **Batch Support** | Yes | Manual | Yes | Manual | Yes |
+| Feature | PubChem | CAS Common | OPSIN | ClassyFire | NCI Resolver | ChEBI |
+|---------|---------|------------|-------|------------|--------------|--------|
+| **Primary Use** | Properties | Registry data | Name→Structure | Classification | ID conversion | Bio entities |
+| **Input Types** | CID, Name, SMILES | CAS, Name, SMILES | IUPAC names | SMILES, InChI | Various IDs | ChEBI ID, Name |
+| **Output Format** | JSON, DataFrame | JSON | JSON | JSON, SDF, CSV | JSON | XML, JSON |
+| **Rate Limits** | Yes | Unofficial | Unofficial | Unofficial | Yes | Yes |
+| **Batch Support** | Yes | Manual | Yes | Manual | Yes | Yes |
 
 ## Authentication Requirements
 
@@ -78,6 +88,7 @@ if structure['status'] == 'SUCCESS':
 | OPSIN | None | Cambridge University service |
 | ClassyFire | None | Long processing times |
 | NCI Resolver | None | Rate limits apply |
+| ChEBI | None | EBI service, rate limits apply |
 
 ## Error Handling Best Practices
 
@@ -144,7 +155,8 @@ def validate_compound_across_platforms(identifier, id_type="name"):
     platforms = {
         'pubchem': lambda: PubChemPUGViewAPI().get_compound_properties_by_smiles(smiles),
         'cas': lambda: CASCommonChem().smiles_to_detail(smiles),
-        'nci': lambda: NCIResolverAPI().smiles_to_names(smiles)
+        'nci': lambda: NCIResolverAPI().smiles_to_names(smiles),
+        'chebi': lambda: ChEBI().search_by_name(identifier) if id_type == "name" else None
     }
     
     for platform, method in platforms.items():
@@ -171,7 +183,8 @@ def generate_compound_report(compound_name):
         'structure': None,
         'properties': None,
         'classification': None,
-        'registry_data': None
+        'registry_data': None,
+        'chebi_data': None
     }
     
     # Structure information
@@ -196,6 +209,17 @@ def generate_compound_report(compound_name):
         if response and response.status_code == 200:
             query_id = response.json()['id']
             report['classification_query_id'] = query_id
+        
+        # ChEBI data
+        chebi = ChEBI()
+        chebi_results = chebi.search_by_name(compound_name)
+        if chebi_results:
+            report['chebi_data'] = chebi_results[0]
+            # Get detailed entity information
+            chebi_id = chebi_results[0]['chebiId']
+            entity = chebi.get_complete_entity(chebi_id)
+            if entity:
+                report['chebi_entity'] = entity
     
     return report
 ```

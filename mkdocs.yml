@@ -38,6 +38,7 @@ nav:
     - Common Chemistry: api/cascommonchem.md
     - ClassyFire: api/classyfire.md
     - OPSIN: api/opsin.md
+    - ChEBI: api/chebi.md
 
 markdown_extensions:
   - toc:

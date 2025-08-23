@@ -1,5 +1,6 @@
 # chemid __init__.py
 from .cascommonchem import CASCommonChem
+from .chebi import ChEBI, ChEBIError, get_chebi_entity, search_chebi
 from .classyfire import ClassyFireAPI
 from .opsin import OPSIN
 from .pubchem import PubChemAPI, CompoundProperties, PubChemNotFoundError, PubChemError

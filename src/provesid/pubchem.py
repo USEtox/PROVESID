@@ -5,6 +5,7 @@ import requests
 import time
 import json
 import logging
+import re
 from typing import Dict, List, Union, Optional, Any
 from urllib.parse import quote
 
@@ -110,7 +111,7 @@ class CompoundProperties:
     """Available compound properties for property tables"""
     MOLECULAR_FORMULA = "MolecularFormula"
     MOLECULAR_WEIGHT = "MolecularWeight"
-    SMILES = "ConnectivitySMILES"
+    SMILES = "SMILES"
     CONNECTIVITY_SMILES = "ConnectivitySMILES"
     INCHI = "InChI"
     INCHIKEY = "InChIKey"
@@ -134,6 +135,27 @@ class CompoundProperties:
     DEFINED_BOND_STEREO_COUNT = "DefinedBondStereoCount"
     UNDEFINED_BOND_STEREO_COUNT = "UndefinedBondStereoCount"
     COVALENT_UNIT_COUNT = "CovalentUnitCount"
+    PATENT_COUNT = "PatentCount"
+    PATENT_FAMILY_COUNT = "PatentFamilyCount"
+    ANNOTATION_TYPES = "AnnotationTypes"
+    ANNOTATION_TYPE_COUNT = "AnnotationTypeCount"
+    SOURCE_CATEGORIES = "SourceCategories"
+    LITERATURE_COUNT = "LiteratureCount"
+    VOLUME_3D = "Volume3D"
+    X_STERIC_QUADRUPOLE_3D = "XStericQuadrupole3D"
+    Y_STERIC_QUADRUPOLE_3D = "YStericQuadrupole3D"
+    Z_STERIC_QUADRUPOLE_3D = "ZStericQuadrupole3D"
+    FEATURE_COUNT_3D = "FeatureCount3D"
+    FEATURE_ACCEPTOR_COUNT_3D = "FeatureAcceptorCount3D"
+    FEATURE_DONOR_COUNT_3D = "FeatureDonorCount3D"
+    FEATURE_ANION_COUNT_3D = "FeatureAnionCount3D"
+    FEATURE_CATION_COUNT_3D = "FeatureCationCount3D"
+    FEATURE_RING_COUNT_3D = "FeatureRingCount3D"
+    FEATURE_HYDROPHOBE_COUNT_3D = "FeatureHydrophobeCount3D"
+    CONFORMER_MODEL_RMSD_3D = "ConformerModelRMSD3D"
+    EFFECTIVE_ROTOR_COUNT_3D = "EffectiveRotorCount3D"
+    CONFORMER_COUNT_3D = "ConformerCount3D"
+    FINGERPRINT_2D = "Fingerprint2D"
 
 class PubChemError(Exception):
     """Custom exception for PubChem API errors"""
@@ -394,28 +416,102 @@ class PubChemAPI:
         response = self._make_request(url)
         return self._parse_response(response, output_format)
     
-    def get_compound_properties(self, cids: Union[int, str, List[Union[int, str]]], 
+    def get_compound_properties(self, cid: Union[int, str], 
                                properties: List[str], 
-                               output_format: str = OutputFormat.JSON) -> Any:
+                               include_synonyms: bool = True,
+                               output_format: str = OutputFormat.JSON) -> Dict[str, Any]:
         """
-        Get compound properties by CID(s)
+        Get compound properties and synonyms by CID with direct property access
         
         Args:
-            cids: Single CID or list of CIDs
+            cid: Single Compound ID
+            properties: List of property names
+            include_synonyms: Whether to include synonyms in the output
+            output_format: Desired output format
+            
+        Returns:
+            Dictionary with properties directly accessible at top level,
+            plus 'success', 'cid', 'synonyms', and 'error' metadata keys
+        """
+        try:
+            props_str = ','.join(properties)
+            operation = f"{Operation.PROPERTY}/{props_str}"
+            url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.CID, cid,
+                                 operation, output_format)
+            response = self._make_request(url)
+            prop_data = self._parse_response(response, output_format)
+            
+            # Get synonyms if requested
+            synonyms_data = None
+            if include_synonyms:
+                try:
+                    synonyms_data = self.get_compound_synonyms(cid, output_format)
+                except Exception as e:
+                    # Don't fail the whole request if synonyms fail
+                    synonyms_data = []
+            
+            # Extract properties from nested structure
+            if prop_data and 'PropertyTable' in prop_data and 'Properties' in prop_data['PropertyTable']:
+                properties_dict = prop_data['PropertyTable']['Properties'][0]
+                
+                # Add metadata keys
+                properties_dict['success'] = True
+                properties_dict['cid'] = cid
+                properties_dict['error'] = None
+                if include_synonyms:
+                    properties_dict['synonyms'] = synonyms_data
+                
+                return properties_dict
+            else:
+                # Fallback for unexpected structure
+                result = {
+                    "success": False,
+                    "cid": cid,
+                    "error": "Unexpected response structure",
+                    "raw_response": prop_data
+                }
+                if include_synonyms:
+                    result['synonyms'] = synonyms_data
+                return result
+                
+        except Exception as e:
+            result = {
+                "success": False,
+                "cid": cid,
+                "error": str(e)
+            }
+            if include_synonyms:
+                result['synonyms'] = None
+            return result
+
+    def get_compound_properties_batch(self, cids: List[Union[int, str]], 
+                                     properties: List[str], 
+                                     output_format: str = OutputFormat.JSON) -> List[Dict[str, Any]]:
+        """
+        Get compound properties for multiple CIDs (legacy batch method)
+        
+        Args:
+            cids: List of CIDs
             properties: List of property names
             output_format: Desired output format
             
         Returns:
-            Property data
+            List of dictionaries, each with flat structure like get_compound_properties
         """
-        props_str = ','.join(properties)
-        operation = f"{Operation.PROPERTY}/{props_str}"
-        url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.CID, cids,
-                             operation, output_format)
-        response = self._make_request(url)
-        return self._parse_response(response, output_format)
+        results = []
+        for cid in cids:
+            try:
+                result = self.get_compound_properties(cid, properties, include_synonyms=False, output_format=output_format)
+                results.append(result)
+            except Exception as e:
+                results.append({
+                    "success": False,
+                    "cid": cid,
+                    "error": str(e)
+                })
+        return results
     
-    def get_compound_synonyms(self, cid: Union[int, str], output_format: str = OutputFormat.JSON) -> Any:
+    def get_compound_synonyms(self, cid: Union[int, str], output_format: str = OutputFormat.JSON) -> List[str]:
         """
         Get compound synonyms by CID
         
@@ -424,30 +520,76 @@ class PubChemAPI:
             output_format: Desired output format
             
         Returns:
-            Synonyms data
+            List of synonyms (flattened from nested structure)
         """
-        url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.CID, cid,
-                             Operation.SYNONYMS, output_format)
-        response = self._make_request(url)
-        return self._parse_response(response, output_format)
+        try:
+            url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.CID, cid,
+                                 Operation.SYNONYMS, output_format)
+            response = self._make_request(url)
+            raw_data = self._parse_response(response, output_format)
+            
+            # Extract synonyms from nested structure
+            if raw_data and 'InformationList' in raw_data:
+                info_list = raw_data['InformationList'].get('Information', [])
+                if info_list and len(info_list) > 0:
+                    return info_list[0].get('Synonym', [])
+            
+            # Return empty list if no synonyms found
+            return []
+            
+        except Exception:
+            # Return empty list on error to maintain consistent return type
+            return []
     
     def get_cids_by_name(self, name: str, output_format: str = OutputFormat.JSON,
-                        name_type: str = "word") -> Any:
+                        name_type: str = "word", domain: str = Domain.COMPOUND) -> Any:
         """
-        Get CIDs by compound name
+        Get CIDs by name from compound or substance domain
         
         Args:
-            name: Compound name
+            name: Compound or substance name
             output_format: Desired output format
             name_type: Name search type ("word" or "complete")
+            domain: Search domain (Domain.COMPOUND or Domain.SUBSTANCE)
             
         Returns:
-            CID list
+            CID list (extracted from nested response structure)
+            
+        Note:
+            When searching in the substance domain, this can find CIDs for substances
+            that may not be directly searchable in the compound domain.
         """
-        url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.NAME, name,
+        # Choose appropriate namespace based on domain
+        if domain == Domain.COMPOUND:
+            namespace = CompoundDomainNamespace.NAME
+        elif domain == Domain.SUBSTANCE:
+            namespace = SubstanceDomainNamespace.NAME
+        else:
+            raise ValueError(f"Unsupported domain: {domain}. Use Domain.COMPOUND or Domain.SUBSTANCE")
+        
+        url = self._build_url(domain, namespace, name,
                              Operation.CIDS, output_format, name_type=name_type)
         response = self._make_request(url)
-        return self._parse_response(response, output_format)
+        parsed_response = self._parse_response(response, output_format)
+        
+        # Extract CID list from nested structure if JSON format
+        if output_format == OutputFormat.JSON and isinstance(parsed_response, dict):
+            # Handle compound domain response structure
+            if 'IdentifierList' in parsed_response and 'CID' in parsed_response['IdentifierList']:
+                return parsed_response['IdentifierList']['CID']
+            # Handle substance domain response structure
+            elif 'InformationList' in parsed_response and 'Information' in parsed_response['InformationList']:
+                cids = []
+                for info in parsed_response['InformationList']['Information']:
+                    if 'CID' in info:
+                        cids.extend(info['CID'])
+                return list(set(cids))  # Remove duplicates and return unique CIDs
+            elif 'Fault' in parsed_response:
+                # Handle API fault response
+                raise PubChemNotFoundError(f"No CIDs found for name: {name}")
+        
+        # Return original response for non-JSON formats or if structure is different
+        return parsed_response
     
     def get_cids_by_smiles(self, smiles: str, output_format: str = OutputFormat.JSON) -> Any:
         """
@@ -615,7 +757,7 @@ class PubChemAPI:
             sourcename: Restrict to specific source
             
         Returns:
-            SID list
+            SID list (extracted from nested response structure)
         """
         options = {}
         if sourcename:
@@ -624,7 +766,18 @@ class PubChemAPI:
         url = self._build_url(Domain.SUBSTANCE, SubstanceDomainNamespace.NAME, name,
                              Operation.SIDS, output_format, **options)
         response = self._make_request(url)
-        return self._parse_response(response, output_format)
+        parsed_response = self._parse_response(response, output_format)
+        
+        # Extract SID list from nested structure if JSON format
+        if output_format == OutputFormat.JSON and isinstance(parsed_response, dict):
+            if 'IdentifierList' in parsed_response and 'SID' in parsed_response['IdentifierList']:
+                return parsed_response['IdentifierList']['SID']
+            elif 'Fault' in parsed_response:
+                # Handle API fault response
+                raise PubChemNotFoundError(f"No SIDs found for name: {name}")
+        
+        # Return original response for non-JSON formats or if structure is different
+        return parsed_response
     
     # Assay methods
     def get_assay_by_aid(self, aid: Union[int, str], output_format: str = OutputFormat.JSON) -> Any:
@@ -700,47 +853,33 @@ class PubChemAPI:
                 "data": None,
                 "error": str(e)
             }
-    
-    def get_basic_compound_info(self, cid: Union[int, str]) -> Dict[str, Any]:
+
+    def get_basic_compound_info(self, cid: Union[int, str], 
+                                include_synonyms: bool = False) -> Dict[str, Any]:
         """
-        Get basic compound information including properties and synonyms
-        
+        Get basic compound information including formula, molecular weight, 
+        and structure, and IUPAC name. Synonyms can be included optionally.
+
         Args:
             cid: Compound ID
-            
+            include_synonyms: Whether to include synonyms in the response
+
         Returns:
-            Dictionary with compound information
+            Dictionary with compound properties directly accessible at top level,
+            plus 'success', 'cid', 'synonyms', and 'error' metadata keys
         """
-        try:
-            # Get basic properties
-            properties = [
-                CompoundProperties.MOLECULAR_FORMULA,
-                CompoundProperties.MOLECULAR_WEIGHT,
-                CompoundProperties.SMILES,
-                CompoundProperties.INCHI,
-                CompoundProperties.INCHIKEY,
-                CompoundProperties.IUPAC_NAME
-            ]
-            
-            prop_data = self.get_compound_properties(cid, properties)
-            synonyms_data = self.get_compound_synonyms(cid)
-            
-            return {
-                "success": True,
-                "cid": cid,
-                "properties": prop_data,
-                "synonyms": synonyms_data,
-                "error": None
-            }
-            
-        except Exception as e:
-            return {
-                "success": False,
-                "cid": cid,
-                "properties": None,
-                "synonyms": None,
-                "error": str(e)
-            }
+        # Get basic properties with synonyms
+        properties = [
+            CompoundProperties.MOLECULAR_FORMULA,
+            CompoundProperties.MOLECULAR_WEIGHT,
+            CompoundProperties.SMILES,
+            CompoundProperties.INCHI,
+            CompoundProperties.INCHIKEY,
+            CompoundProperties.IUPAC_NAME
+        ]
+        
+        # Use the new get_compound_properties method which already includes synonyms and metadata
+        return self.get_compound_properties(cid, properties, include_synonyms=include_synonyms)
 
     def get_all_compound_info(self, cid: Union[int, str]) -> Dict[str, Any]:
         """
@@ -750,23 +889,212 @@ class PubChemAPI:
             cid: Compound ID
 
         Returns:
-            Dictionary with compound information
+            Dictionary with compound properties directly accessible at top level,
+            plus 'success', 'cid', and 'error' metadata keys
+        """
+        # Get all property values from CompoundProperties class
+        properties = []
+        for attr_name in dir(CompoundProperties):
+            if not attr_name.startswith("_"):
+                prop_value = getattr(CompoundProperties, attr_name)
+                if isinstance(prop_value, str):
+                    properties.append(prop_value)
+        
+        # Use the new get_compound_properties method which already returns flat data
+        return self.get_compound_properties(cid, properties, include_synonyms=False)
+
+    def extract_identifiers_from_synonyms(self, synonyms: List[str]) -> Dict[str, List[str]]:
+        """
+        Extract chemical identifiers from a list of synonyms
+        
+        Args:
+            synonyms: List of synonym strings
+            
+        Returns:
+            Dictionary with lists of unique identifiers for each type:
+            - casrn: CAS Registry Numbers (format: 2-5 digit-2 digit-single digit)
+            - nsc: NSC numbers (begins with NSC)
+            - dtxsid: DTXSID identifiers (begins with DTXSID)
+            - dtxcid: DTXCID identifiers (begins with DTXCID)
+            - ec_number: EC numbers (format: NNN-NNN-N)
+            - chebi_id: ChEBI IDs (begins with CHEBI)
+            - chembl: ChEMBL numbers (begins with CHEMBL)
+        """
+        identifiers = {
+            'casrn': [],
+            'nsc': [],
+            'dtxsid': [],
+            'dtxcid': [],
+            'ec_number': [],
+            'chebi_id': [],
+            'chembl': []
+        }
+        
+        for synonym in synonyms:
+            if not isinstance(synonym, str):
+                continue
+                
+            synonym_upper = synonym.upper().strip()
+            
+            # CAS Registry Number: 2-5 digits, hyphen, 2 digits, hyphen, 1 digit
+            # May or may not begin with "CAS"
+            cas_patterns = [
+                r'\b(?:CAS\s*[:\-]?\s*)?(\d{2,7}-\d{2}-\d)\b',  # With optional CAS prefix and separators
+            ]
+            for pattern in cas_patterns:
+                matches = re.findall(pattern, synonym_upper)
+                for match in matches:
+                    # Validate CAS number format more strictly
+                    if re.match(r'^\d{2,7}-\d{2}-\d$', match):
+                        if match not in identifiers['casrn']:
+                            identifiers['casrn'].append(match)
+            
+            # NSC Number: begins with NSC
+            nsc_match = re.search(r'\b(NSC\s*\d+)\b', synonym_upper)
+            if nsc_match:
+                nsc = nsc_match.group(1).replace(' ', '')
+                if nsc not in identifiers['nsc']:
+                    identifiers['nsc'].append(nsc)
+            
+            # DTXSID: begins with DTXSID
+            dtxsid_match = re.search(r'\b(DTXSID\d+)\b', synonym_upper)
+            if dtxsid_match:
+                dtxsid = dtxsid_match.group(1)
+                if dtxsid not in identifiers['dtxsid']:
+                    identifiers['dtxsid'].append(dtxsid)
+            
+            # DTXCID: begins with DTXCID
+            dtxcid_match = re.search(r'\b(DTXCID\d+)\b', synonym_upper)
+            if dtxcid_match:
+                dtxcid = dtxcid_match.group(1)
+                if dtxcid not in identifiers['dtxcid']:
+                    identifiers['dtxcid'].append(dtxcid)
+            
+            # EC Number: standard format is N.N.N.N (enzyme classification)
+            # Only accept the standard dot-separated format
+            ec_pattern = r'\b(?:EC\s*[:\-]?\s*)?(\d{1,2}\.\d{1,3}\.\d{1,3}\.(?:\d{1,3}|\-))\b'
+            matches = re.findall(ec_pattern, synonym_upper)
+            for match in matches:
+                if match not in identifiers['ec_number']:
+                    identifiers['ec_number'].append(match)
+            
+            # ChEBI ID: begins with CHEBI
+            chebi_match = re.search(r'\b(CHEBI:?\s*\d+)\b', synonym_upper)
+            if chebi_match:
+                chebi = chebi_match.group(1).replace(' ', '').replace(':', ':')
+                # Standardize format to CHEBI:XXXXX
+                if not chebi.startswith('CHEBI:'):
+                    chebi = chebi.replace('CHEBI', 'CHEBI:')
+                if chebi not in identifiers['chebi_id']:
+                    identifiers['chebi_id'].append(chebi)
+            
+            # ChEMBL: begins with CHEMBL
+            chembl_match = re.search(r'\b(CHEMBL\d+)\b', synonym_upper)
+            if chembl_match:
+                chembl = chembl_match.group(1)
+                if chembl not in identifiers['chembl']:
+                    identifiers['chembl'].append(chembl)
+        
+        return identifiers
+
+    def get_compound_identifiers(self, cid: Union[int, str]) -> Dict[str, Any]:
+        """
+        Get compound identifiers extracted from synonyms
+        
+        Args:
+            cid: Compound ID
+            
+        Returns:
+            Dictionary with 'success', 'cid', 'error' metadata and extracted identifiers
         """
         try:
-            properties = [prop for prop in dir(CompoundProperties) if not prop.startswith("_")]
-            prop_data = self.get_compound_properties(cid, properties)
-
-            return {
-                "success": True,
-                "cid": cid,
-                "properties": prop_data,
-                "error": None
+            # Get synonyms
+            synonyms_list = self.get_compound_synonyms(cid)
+            
+            # Extract identifiers
+            identifiers = self.extract_identifiers_from_synonyms(synonyms_list)
+            
+            # Add metadata
+            result = {
+                'success': True,
+                'cid': cid,
+                'error': None,
+                'total_synonyms': len(synonyms_list)
             }
-
+            result.update(identifiers)
+            
+            return result
+            
         except Exception as e:
             return {
-                "success": False,
-                "cid": cid,
-                "properties": None,
-                "error": str(e)
+                'success': False,
+                'cid': cid,
+                'error': str(e),
+                'casrn': [],
+                'nsc': [],
+                'dtxsid': [],
+                'dtxcid': [],
+                'ec_number': [],
+                'chebi_id': [],
+                'chembl': [],
+                'total_synonyms': 0
             }
+
+    def find_cids_comprehensive(self, name: str, name_type: str = "word") -> Dict[str, Any]:
+        """
+        Search for CIDs in both compound and substance domains
+        
+        This method first searches in the compound domain, and if no results are found,
+        it searches in the substance domain. This is useful for comprehensive searching
+        when you're not sure which domain contains the identifier.
+        
+        Args:
+            name: Compound or substance name (including CAS numbers, trade names, etc.)
+            name_type: Name search type ("word" or "complete")
+            
+        Returns:
+            Dictionary with search results from both domains
+        """
+        results = {
+            "query": name,
+            "name_type": name_type,
+            "compound_domain": {"cids": [], "success": False, "error": None},
+            "substance_domain": {"cids": [], "success": False, "error": None},
+            "total_unique_cids": [],
+            "recommended_domain": None
+        }
+        
+        # Try compound domain first
+        try:
+            compound_cids = self.get_cids_by_name(name, name_type=name_type, domain=Domain.COMPOUND)
+            results["compound_domain"]["cids"] = compound_cids
+            results["compound_domain"]["success"] = True
+            results["total_unique_cids"].extend(compound_cids)
+        except Exception as e:
+            results["compound_domain"]["error"] = str(e)
+        
+        # Try substance domain
+        try:
+            substance_cids = self.get_cids_by_name(name, name_type=name_type, domain=Domain.SUBSTANCE)
+            results["substance_domain"]["cids"] = substance_cids
+            results["substance_domain"]["success"] = True
+            results["total_unique_cids"].extend(substance_cids)
+        except Exception as e:
+            results["substance_domain"]["error"] = str(e)
+        
+        # Remove duplicates and determine recommended domain
+        results["total_unique_cids"] = list(set(results["total_unique_cids"]))
+        
+        if results["compound_domain"]["success"] and results["substance_domain"]["success"]:
+            # Both succeeded - recommend the one with more results
+            compound_count = len(results["compound_domain"]["cids"])
+            substance_count = len(results["substance_domain"]["cids"])
+            results["recommended_domain"] = "compound" if compound_count >= substance_count else "substance"
+        elif results["compound_domain"]["success"]:
+            results["recommended_domain"] = "compound"
+        elif results["substance_domain"]["success"]:
+            results["recommended_domain"] = "substance"
+        else:
+            results["recommended_domain"] = None
+        
+        return results

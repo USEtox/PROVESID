@@ -4,7 +4,7 @@ ChEBI (Chemical Entities of Biological Interest) API interface.
 This module provides a Python interface to the ChEBI REST API for retrieving
 chemical compound information from the ChEBI database.
 
-Author: PROVESID Team
+Author: USEtox team
 Date: August 2025
 """
 

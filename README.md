@@ -42,6 +42,9 @@ which returns a table with the reported values of `logP` for aspirin (including 
 **Chemical Identifier Resolver**
 
 ```python
+from provesid import NCIChemicalIdentifierResolver
+resolver = NCIChemicalIdentifierResolver()
+smiles = resolver.resolve(compound, 'smiles')
 ```
 
 **OPSIN**

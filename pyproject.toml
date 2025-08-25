@@ -44,6 +44,9 @@ dev = [
 test = [
     "pytest>=6.0",
     "pytest-cov>=2.0",
+    "pytest-xdist>=2.0",  # For parallel test execution
+    "pytest-mock>=3.0",   # For mocking
+    "pytest-timeout>=2.0", # For test timeouts
 ]
 docs = [
     "mkdocs>=1.4",
@@ -89,7 +92,23 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short --strict-markers --strict-config"
+markers = [
+    "unit: Unit tests that don't require external resources",
+    "integration: Integration tests that may require external APIs",
+    "api: Tests that require API access",
+    "slow: Tests that take a long time to run",
+    "pubchem: PubChem API specific tests",
+    "cas: CAS Common Chemistry API specific tests",
+    "chebi: ChEBI API specific tests",
+    "classyfire: ClassyFire API specific tests",
+    "opsin: OPSIN API specific tests",
+    "nci: NCI Chemical Identifier Resolver specific tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
 
 [tool.coverage.run]
 source = ["src/provesid"]

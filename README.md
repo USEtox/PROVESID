@@ -47,11 +47,47 @@ which returns a table with the reported values of `logP` for aspirin (including 
 **OPSIN**
 
 ```python
+from provesid import OPSIN
+opsin = OPSIN()
+methane_result = opsin.get_id("methane")
 ```
+
+which returns:
+
+```python
+{'status': 'SUCCESS',
+ 'message': '',
+ 'inchi': 'InChI=1/CH4/h1H4',
+ 'stdinchi': 'InChI=1S/CH4/h1H4',
+ 'stdinchikey': 'VNWKTOKETHGBQD-UHFFFAOYSA-N',
+ 'smiles': 'C'}
+ ```
 
 **CAS Common Chemistry**
 
 ```python
+from provesid import CASCommonChem
+ccc = CASCommonChem()
+water_info = ccc.cas_to_detail("7732-18-5")
+print("Water (7732-18-5):")
+print(f"  Name: {water_info.get('name')}")
+print(f"  Molecular Formula: {water_info.get('molecularFormula')}")
+print(f"  Molecular Mass: {water_info.get('molecularMass')}")
+print(f"  SMILES: {water_info.get('smile')}")
+print(f"  InChI: {water_info.get('inchi')}")
+print(f"  Status: {water_info.get('status')}")
+```
+
+which returns
+
+```
+Water (7732-18-5):
+  Name: Water
+  Molecular Formula: H<sub>2</sub>O
+  Molecular Mass: 18.02
+  SMILES: O
+  InChI: InChI=1S/H2O/h1H2
+  Status: Success
 ```
 
 **ClassyFire**
@@ -65,7 +101,6 @@ Several other Python (and other) packages and sample codes are available. We are
   - [PubChemPy](https://github.com/mcs07/PubChemPy) and [docs](https://docs.pubchempy.org/en/latest/)  
   - [CIRpy](https://github.com/mcs07/CIRpy) and [docs](https://cirpy.readthedocs.io/en/latest/)  
   - [IUPAC cookbook](https://iupac.github.io/WFChemCookbook/intro.html) for a tutorial on using various web APIs.  
-  - [ChEBI]()  
   - more?
 
 # TODO list

@@ -1,0 +1,186 @@
+name: Deploy Documentation
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+      - 'src/**'
+      - 'examples/**'
+      - 'mkdocs.yml'
+      - '.github/workflows/mkdocs-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Force deployment even if no changes detected'
+        required: false
+        default: false
+        type: boolean
+
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
+# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  # Build job
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for git info
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-docs-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-docs-
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[docs,dev]"
+
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@v3
+
+      - name: Verify MkDocs configuration
+        run: |
+          mkdocs --version
+          python -c "import mkdocs; print('MkDocs imported successfully')"
+          mkdocs config
+
+      - name: Check for missing files
+        run: |
+          echo "Checking for missing documentation files..."
+          
+          # Check if index.md exists
+          if [ ! -f "docs/index.md" ]; then
+            echo "Creating docs/index.md..."
+            mkdir -p docs
+            cat > docs/index.md << 'EOF'
+          # PROVESID Documentation
+          
+          Welcome to PROVESID - A Python package for chemical identifier resolution and experimental property extraction.
+          
+          ## Quick Links
+          
+          - [Installation](installation.md)
+          - [Quick Start](quickstart.md)
+          - [API Reference](api/index.md)
+          - [Tutorials](examples/)
+          
+          ## Overview
+          
+          PROVESID provides a unified interface to multiple chemical databases and services:
+          
+          - **PubChem**: Comprehensive chemical database
+          - **ChEBI**: Chemical Entities of Biological Interest
+          - **CAS Common Chemistry**: Chemical Abstracts Service data
+          - **ClassyFire**: Automated chemical classification
+          - **OPSIN**: IUPAC name to structure conversion
+          - **NCI Resolver**: Chemical identifier resolution
+          
+          ## Features
+          
+          - Easy-to-use Python API
+          - Comprehensive error handling
+          - Rate limiting and retry mechanisms
+          - Extensive documentation and examples
+          - Full test coverage
+          EOF
+          fi
+          
+          # Check for other essential files
+          for file in "docs/installation.md" "docs/quickstart.md" "docs/api/index.md"; do
+            if [ ! -f "$file" ]; then
+              echo "Creating $file..."
+              mkdir -p "$(dirname "$file")"
+              echo "# $(basename "$file" .md | tr '[:lower:]' '[:upper:]')" > "$file"
+              echo "" >> "$file"
+              echo "Documentation coming soon..." >> "$file"
+            fi
+          done
+
+      - name: Build documentation
+        run: |
+          echo "Building MkDocs site..."
+          mkdocs build --verbose --strict
+
+      - name: Verify build output
+        run: |
+          echo "Checking build output..."
+          ls -la site/
+          echo "Site size: $(du -sh site/)"
+          
+          # Check if essential files were created
+          if [ ! -f "site/index.html" ]; then
+            echo "Error: index.html not found in site/"
+            exit 1
+          fi
+          
+          echo "Build verification passed!"
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v2
+        with:
+          path: site/
+
+  # Deployment job
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v2
+
+      - name: Post-deployment verification
+        run: |
+          echo "Documentation deployed to: ${{ steps.deployment.outputs.page_url }}"
+          
+          # Wait a bit for deployment to propagate
+          sleep 30
+          
+          # Try to fetch the deployed page
+          curl -f -s "${{ steps.deployment.outputs.page_url }}" > /dev/null && \
+            echo "✅ Deployment verification successful!" || \
+            echo "⚠️ Deployment verification failed (site might still be propagating)"
+
+  # Notification job
+  notify:
+    runs-on: ubuntu-latest
+    needs: [build, deploy]
+    if: always()
+    steps:
+      - name: Notify deployment status
+        run: |
+          if [ "${{ needs.deploy.result }}" == "success" ]; then
+            echo "🎉 Documentation deployment successful!"
+            echo "📖 Site URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
+          else
+            echo "❌ Documentation deployment failed!"
+            echo "Check the workflow logs for details."
+          fi

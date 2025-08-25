@@ -90,11 +90,14 @@ Comprehensive API documentation is available for all modules:
 
 ## Examples
 
-Explore practical examples and use cases:
+Explore comprehensive tutorials for each API:
 
-- [Basic Usage](examples/basic_usage.md) - Getting started with common tasks
-- [Property Extraction](examples/property_extraction.md) - Working with experimental data
-- [Batch Processing](examples/batch_processing.md) - Processing multiple compounds efficiently
+- [PubChem Tutorial](examples/pubchem/pubchem_tutorial.ipynb) - Complete PubChem API guide with enhanced features
+- [CAS Common Chemistry](examples/CCC/CAS_Common_Chemistry_tutorial.ipynb) - Working with CAS Registry data
+- [ChEBI Tutorial](examples/ChEBI/ChEBI_tutorial.ipynb) - Chemical Entities of Biological Interest database
+- [ClassyFire Tutorial](examples/ClassyFire/classyfire_tutorial.ipynb) - Chemical structure classification
+- [OPSIN Tutorial](examples/OPSIN/opsin_tutorial.ipynb) - IUPAC name to structure conversion
+- [Chemical ID Resolver](examples/resolver/chem_id_resolver_tutorial.ipynb) - NCI chemical identifier resolution
 
 ## Development
 

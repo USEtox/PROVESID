@@ -115,7 +115,7 @@ api = PubChemAPI(pause_time=1.0)  # 1 second between requests
 If you encounter issues:
 
 1. Check the [GitHub Issues](https://github.com/provesid/provesid/issues) for known problems
-2. Review the [API documentation](../api/pubchem.md) for usage examples
+2. Review the [API documentation](api/pubchem.md) for usage examples
 3. Create a new issue with detailed error information
 
 ## Next Steps

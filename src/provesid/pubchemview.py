@@ -709,8 +709,8 @@ class PubChemView:
             
             # LogP specific patterns
             elif 'logp' in prop_name_lower:
-                # Pattern: "LogP: -2.3" or "log P = 1.5"
-                logp_colon_match = re.search(r'log\s*p[=:]\s*(-?\d+(?:\.\d+)?)', value_str, re.IGNORECASE)
+                # Pattern: "LogP: -2.3" or "log P = 1.5" or "log Kow = 1.19"
+                logp_colon_match = re.search(r'log\s*(?:p|kow|k[ow]{1,2})\s*[=:]\s*(-?\d+(?:\.\d+)?)', value_str, re.IGNORECASE)
                 if logp_colon_match:
                     temperature, conditions = extract_temperature_and_conditions(value_str)
                     return logp_colon_match.group(1), None, temperature, conditions

@@ -192,8 +192,8 @@ result = api.get_compound_by_cid(2244)
 
 Now that you've learned the basics, explore more advanced features:
 
-- [Property Extraction Examples](examples/property_extraction.md) - Advanced property extraction techniques
-- [Batch Processing Guide](examples/batch_processing.md) - Efficient processing of large datasets
+- [PubChem Tutorial](examples/pubchem/pubchem_tutorial.ipynb) - Complete PubChem guide with enhanced features
+- [CAS Common Chemistry](examples/CCC/CAS_Common_Chemistry_tutorial.ipynb) - Working with CAS Registry data
 - [API Reference](api/pubchem.md) - Complete API documentation
 
 ## Common Patterns

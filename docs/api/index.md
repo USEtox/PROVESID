@@ -6,12 +6,12 @@ This section provides comprehensive documentation for all PROVESID API modules.
 
 PROVESID provides Python interfaces to several major chemical databases and web services:
 
-- **[PubChem PUG View](pubchemview.md)** - Advanced property extraction from PubChem
+- **[PubChem API](pubchem.md)** - Standard PubChem REST API with enhanced data access ✨ *Enhanced*
+- **[PubChem PUG View](pubchemview.md)** - Advanced property extraction from PubChem ✨ *Enhanced*
 - **[NCI Resolver](nci_resolver.md)** - Chemical identifier resolution
 - **[CAS Common Chemistry](cascommonchem.md)** - CAS Registry data access
 - **[OPSIN](opsin.md)** - IUPAC name to structure conversion
 - **[ClassyFire](classyfire.md)** - Chemical structure classification
-- **[ChEBI](chebi.md)** - Chemical Entities of Biological Interest database
 
 ## Quick Reference
 
@@ -21,17 +21,17 @@ All API classes follow a similar pattern:
 
 ```python
 # Import the desired API
-from provesid.pubchemview import PubChemPUGViewAPI
+from provesid import PubChemAPI  # Enhanced standard API
+from provesid.pubchemview import PubChemPUGViewAPI  # Advanced properties
 from provesid.cascommonchem import CASCommonChem
 from provesid.opsin import OPSIN
 from provesid.classyfire import ClassyFireAPI
-from provesid.chebi import ChEBI
 
-# Initialize (where needed)
-api = PubChemPUGViewAPI()
+# Initialize APIs
+pc = PubChemAPI()  # Standard PubChem API
+pug_view = PubChemPUGViewAPI()  # Advanced PubChem properties
 cas_api = CASCommonChem()
 opsin = OPSIN()
-chebi = ChEBI()
 
 # ClassyFireAPI uses static methods
 result = ClassyFireAPI.submit_query("label", "CCO")
@@ -43,11 +43,46 @@ result = ClassyFireAPI.submit_query("label", "CCO")
 # Start with a compound name
 compound_name = "caffeine"
 
-# 1. Convert name to structure
+# 1. Convert name to structure (if needed)
 opsin = OPSIN()
 structure = opsin.get_id(compound_name)
 
 if structure['status'] == 'SUCCESS':
+    smiles = structure['smiles']
+    
+    # 2. Get basic compound info (Enhanced PubChem API)
+    pc = PubChemAPI()
+    cids = pc.get_cids_by_name(compound_name)
+    if cids:
+        basic_info = pc.get_basic_compound_info(cids[0])
+        # Direct access - no wrapper needed!
+        compound = pc.get_compound_by_cid(cids[0])
+    
+    # 3. Get detailed experimental properties
+    pug_view = PubChemPUGViewAPI() 
+    properties = pug_view.get_compound_properties_by_smiles(smiles)
+```
+
+## Recent API Enhancements ✨
+
+### PubChem API Improvements
+
+**Enhanced Data Access**: Removed redundant wrapper structures for cleaner code:
+```python
+# Before: compound["PC_Compounds"][0]
+# Now: compound (direct access!)
+compound = pc.get_compound_by_cid(cid)
+```
+
+**New Search Methods**:
+- `get_cids_by_inchikey()` - Search by InChI Key
+- Improved `get_cids_by_smiles()` - Returns clean lists
+- Multi-domain search capabilities
+
+**Enhanced Pattern Recognition in PubChem View**:
+- Support for "log Kow = 1.19" format
+- Comprehensive solubility pattern matching
+- Improved vapor pressure extraction
     smiles = structure['smiles']
     
     # 2. Get detailed properties
@@ -71,24 +106,25 @@ if structure['status'] == 'SUCCESS':
 
 ## Module Comparison
 
-| Feature | PubChem | CAS Common | OPSIN | ClassyFire | NCI Resolver | ChEBI |
-|---------|---------|------------|-------|------------|--------------|--------|
-| **Primary Use** | Properties | Registry data | Name→Structure | Classification | ID conversion | Bio entities |
-| **Input Types** | CID, Name, SMILES | CAS, Name, SMILES | IUPAC names | SMILES, InChI | Various IDs | ChEBI ID, Name |
-| **Output Format** | JSON, DataFrame | JSON | JSON | JSON, SDF, CSV | JSON | XML, JSON |
-| **Rate Limits** | Yes | Unofficial | Unofficial | Unofficial | Yes | Yes |
-| **Batch Support** | Yes | Manual | Yes | Manual | Yes | Yes |
+| Feature | PubChem API | PubChem View | CAS Common | OPSIN | ClassyFire | NCI Resolver |
+|---------|-------------|--------------|------------|-------|------------|--------------|
+| **Primary Use** | Standard data | Properties | Registry data | Name→Structure | Classification | ID conversion |
+| **Input Types** | CID, Name, SMILES, InChI Key | CID, Name, SMILES | CAS, Name, SMILES | IUPAC names | SMILES, InChI | Various IDs |
+| **Output Format** | JSON ✨ *Clean* | JSON, DataFrame | JSON | JSON | JSON, SDF, CSV | JSON |
+| **Rate Limits** | Yes | Yes | Unofficial | Unofficial | Unofficial | Yes |
+| **Batch Support** | Yes ✨ *Enhanced* | Yes | Manual | Yes | Manual | Yes |
+| **Recent Updates** | ✨ *Major* | ✨ *Enhanced* | - | - | - | - |
 
 ## Authentication Requirements
 
 | Service | Authentication | Notes |
 |---------|---------------|-------|
-| PubChem | None | Rate limits apply |
+| PubChem API | None | Rate limits apply, enhanced data access ✨ |
+| PubChem PUG View | None | Rate limits apply, advanced properties |
 | CAS Common Chemistry | None | Free tier available |
 | OPSIN | None | Cambridge University service |
 | ClassyFire | None | Long processing times |
 | NCI Resolver | None | Rate limits apply |
-| ChEBI | None | EBI service, rate limits apply |
 
 ## Error Handling Best Practices
 

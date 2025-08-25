@@ -359,12 +359,19 @@ class PubChemAPI:
             output_format: Desired output format
             
         Returns:
-            Compound data
+            Compound data (automatically extracts from PC_Compounds wrapper for JSON format)
         """
         url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.CID, cid, 
                              Operation.RECORD, output_format)
         response = self._make_request(url)
-        return self._parse_response(response, output_format)
+        result = self._parse_response(response, output_format)
+        
+        # For JSON format, automatically extract the compound data from the wrapper
+        if output_format == OutputFormat.JSON and isinstance(result, dict):
+            if "PC_Compounds" in result and isinstance(result["PC_Compounds"], list) and len(result["PC_Compounds"]) > 0:
+                return result["PC_Compounds"][0]
+        
+        return result
     
     def get_compounds_by_name(self, name: str, output_format: str = OutputFormat.JSON,
                              name_type: str = "word") -> Any:
@@ -377,12 +384,23 @@ class PubChemAPI:
             name_type: Name search type ("word" or "complete")
             
         Returns:
-            Compound data
+            Compound data (automatically extracts from PC_Compounds wrapper for JSON format)
         """
         url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.NAME, name,
                              Operation.RECORD, output_format, name_type=name_type)
         response = self._make_request(url)
-        return self._parse_response(response, output_format)
+        result = self._parse_response(response, output_format)
+        
+        # For JSON format, automatically extract the compound data from the wrapper
+        if output_format == OutputFormat.JSON and isinstance(result, dict):
+            if "PC_Compounds" in result and isinstance(result["PC_Compounds"], list) and len(result["PC_Compounds"]) > 0:
+                # If there's only one compound, return it directly, otherwise return the list
+                if len(result["PC_Compounds"]) == 1:
+                    return result["PC_Compounds"][0]
+                else:
+                    return result["PC_Compounds"]
+        
+        return result
     
     def get_compounds_by_smiles(self, smiles: str, output_format: str = OutputFormat.JSON) -> Any:
         """
@@ -393,12 +411,23 @@ class PubChemAPI:
             output_format: Desired output format
             
         Returns:
-            Compound data
+            Compound data (automatically extracts from PC_Compounds wrapper for JSON format)
         """
         url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.SMILES, smiles,
                              Operation.RECORD, output_format)
         response = self._make_request(url)
-        return self._parse_response(response, output_format)
+        result = self._parse_response(response, output_format)
+        
+        # For JSON format, automatically extract the compound data from the wrapper
+        if output_format == OutputFormat.JSON and isinstance(result, dict):
+            if "PC_Compounds" in result and isinstance(result["PC_Compounds"], list) and len(result["PC_Compounds"]) > 0:
+                # If there's only one compound, return it directly, otherwise return the list
+                if len(result["PC_Compounds"]) == 1:
+                    return result["PC_Compounds"][0]
+                else:
+                    return result["PC_Compounds"]
+        
+        return result
     
     def get_compounds_by_inchikey(self, inchikey: str, output_format: str = OutputFormat.JSON) -> Any:
         """
@@ -409,12 +438,23 @@ class PubChemAPI:
             output_format: Desired output format
             
         Returns:
-            Compound data
+            Compound data (automatically extracts from PC_Compounds wrapper for JSON format)
         """
         url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.INCHIKEY, inchikey,
                              Operation.RECORD, output_format)
         response = self._make_request(url)
-        return self._parse_response(response, output_format)
+        result = self._parse_response(response, output_format)
+        
+        # For JSON format, automatically extract the compound data from the wrapper
+        if output_format == OutputFormat.JSON and isinstance(result, dict):
+            if "PC_Compounds" in result and isinstance(result["PC_Compounds"], list) and len(result["PC_Compounds"]) > 0:
+                # If there's only one compound, return it directly, otherwise return the list
+                if len(result["PC_Compounds"]) == 1:
+                    return result["PC_Compounds"][0]
+                else:
+                    return result["PC_Compounds"]
+        
+        return result
     
     def get_compound_properties(self, cid: Union[int, str], 
                                properties: List[str], 
@@ -600,12 +640,50 @@ class PubChemAPI:
             output_format: Desired output format
             
         Returns:
-            CID list
+            CID list (extracted from nested response structure)
         """
         url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.SMILES, smiles,
                              Operation.CIDS, output_format)
         response = self._make_request(url)
-        return self._parse_response(response, output_format)
+        parsed_response = self._parse_response(response, output_format)
+        
+        # Extract CID list from nested structure if JSON format
+        if output_format == OutputFormat.JSON and isinstance(parsed_response, dict):
+            if 'IdentifierList' in parsed_response and 'CID' in parsed_response['IdentifierList']:
+                return parsed_response['IdentifierList']['CID']
+            elif 'Fault' in parsed_response:
+                # Handle API fault response
+                raise PubChemNotFoundError(f"No CIDs found for SMILES: {smiles}")
+        
+        # Return original response for non-JSON formats or if structure is different
+        return parsed_response
+    
+    def get_cids_by_inchikey(self, inchikey: str, output_format: str = OutputFormat.JSON) -> Any:
+        """
+        Get CIDs by InChI Key
+        
+        Args:
+            inchikey: InChI Key string
+            output_format: Desired output format
+            
+        Returns:
+            CID list (extracted from nested response structure)
+        """
+        url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.INCHIKEY, inchikey,
+                             Operation.CIDS, output_format)
+        response = self._make_request(url)
+        parsed_response = self._parse_response(response, output_format)
+        
+        # Extract CID list from nested structure if JSON format
+        if output_format == OutputFormat.JSON and isinstance(parsed_response, dict):
+            if 'IdentifierList' in parsed_response and 'CID' in parsed_response['IdentifierList']:
+                return parsed_response['IdentifierList']['CID']
+            elif 'Fault' in parsed_response:
+                # Handle API fault response
+                raise PubChemNotFoundError(f"No CIDs found for InChI Key: {inchikey}")
+        
+        # Return original response for non-JSON formats or if structure is different
+        return parsed_response
     
     def get_cids_by_formula(self, formula: str, output_format: str = OutputFormat.JSON,
                            allow_other_elements: bool = False) -> Any:
@@ -628,7 +706,7 @@ class PubChemAPI:
     
     # Structure search methods
     def substructure_search(self, query: str, query_type: str = "smiles", 
-                           output_format: str = OutputFormat.JSON, **options) -> Any:
+                           output_format: str = OutputFormat.JSON, **options: Any) -> Any:
         """
         Perform substructure search
         
@@ -648,7 +726,7 @@ class PubChemAPI:
         return self._parse_response(response, output_format)
     
     def superstructure_search(self, query: str, query_type: str = "smiles",
-                             output_format: str = OutputFormat.JSON, **options) -> Any:
+                             output_format: str = OutputFormat.JSON, **options: Any) -> Any:
         """
         Perform superstructure search
         
@@ -669,7 +747,7 @@ class PubChemAPI:
     
     def similarity_search(self, query: str, query_type: str = "smiles",
                          threshold: int = 90, output_format: str = OutputFormat.JSON,
-                         **options) -> Any:
+                         **options: Any) -> Any:
         """
         Perform 2D similarity search
         
@@ -692,7 +770,7 @@ class PubChemAPI:
     
     def identity_search(self, query: str, query_type: str = "smiles",
                        identity_type: str = "same_stereo_isotope",
-                       output_format: str = OutputFormat.JSON, **options) -> Any:
+                       output_format: str = OutputFormat.JSON, **options: Any) -> Any:
         """
         Perform identity search
         
@@ -723,12 +801,19 @@ class PubChemAPI:
             output_format: Desired output format
             
         Returns:
-            Substance data
+            Substance data (automatically extracts from PC_Substances wrapper for JSON format)
         """
         url = self._build_url(Domain.SUBSTANCE, SubstanceDomainNamespace.SID, sid,
                              Operation.RECORD, output_format)
         response = self._make_request(url)
-        return self._parse_response(response, output_format)
+        result = self._parse_response(response, output_format)
+        
+        # For JSON format, automatically extract the substance data from the wrapper
+        if output_format == OutputFormat.JSON and isinstance(result, dict):
+            if "PC_Substances" in result and isinstance(result["PC_Substances"], list) and len(result["PC_Substances"]) > 0:
+                return result["PC_Substances"][0]
+        
+        return result
     
     def get_substances_by_name(self, name: str, output_format: str = OutputFormat.JSON) -> Any:
         """
@@ -739,12 +824,23 @@ class PubChemAPI:
             output_format: Desired output format
             
         Returns:
-            Substance data
+            Substance data (automatically extracts from PC_Substances wrapper for JSON format)
         """
         url = self._build_url(Domain.SUBSTANCE, SubstanceDomainNamespace.NAME, name,
                              Operation.RECORD, output_format)
         response = self._make_request(url)
-        return self._parse_response(response, output_format)
+        result = self._parse_response(response, output_format)
+        
+        # For JSON format, automatically extract the substance data from the wrapper
+        if output_format == OutputFormat.JSON and isinstance(result, dict):
+            if "PC_Substances" in result and isinstance(result["PC_Substances"], list) and len(result["PC_Substances"]) > 0:
+                # If there's only one substance, return it directly, otherwise return the list
+                if len(result["PC_Substances"]) == 1:
+                    return result["PC_Substances"][0]
+                else:
+                    return result["PC_Substances"]
+        
+        return result
     
     def get_sids_by_name(self, name: str, output_format: str = OutputFormat.JSON,
                         sourcename: Optional[str] = None) -> Any:

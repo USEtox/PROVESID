@@ -31,8 +31,16 @@ nav:
   - Getting Started:
     - Installation: installation.md
     - Quick Start: quickstart.md
+  - Tutorials:
+    - PubChem Tutorial: examples/pubchem/pubchem_tutorial.ipynb
+    - CAS Common Chemistry: examples/CCC/CAS_Common_Chemistry_tutorial.ipynb
+    - ChEBI Tutorial: examples/ChEBI/ChEBI_tutorial.ipynb
+    - ClassyFire Tutorial: examples/ClassyFire/classyfire_tutorial.ipynb
+    - OPSIN Tutorial: examples/OPSIN/opsin_tutorial.ipynb
+    - Chemical ID Resolver: examples/resolver/chem_id_resolver_tutorial.ipynb
   - API Reference:
     - Overview: api/index.md
+    - PubChem API: api/pubchem.md
     - PubChem View: api/pubchemview.md
     - NCI Resolver: api/nci_resolver.md
     - Common Chemistry: api/cascommonchem.md
@@ -71,6 +79,10 @@ markdown_extensions:
 
 plugins:
   - search
+  - mkdocs-jupyter:
+      execute: false
+      allow_errors: false
+      include_source: true
   - mkdocstrings:
       handlers:
         python:

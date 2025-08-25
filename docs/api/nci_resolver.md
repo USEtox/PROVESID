@@ -385,4 +385,4 @@ smiles2 = cached.resolve('aspirin', 'smiles')  # Second call - cached
 
 - [PubChem API](pubchem.md) - For complementary compound data
 - [PubChem View](pubchemview.md) - For experimental property data
-- [Basic Usage Examples](../examples/basic_usage.md) - Common use cases
+- [Chemical ID Resolver Tutorial](../examples/resolver/chem_id_resolver_tutorial.ipynb) - Complete tutorial with examples

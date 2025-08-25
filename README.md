@@ -1,25 +1,76 @@
 # PROVESID
-Access online services of chemical identifiers from Python. The goal is to have a clean interface to the most important online databases with a clean and simple interface. We offer interfaces to [PubChem](), [NCI chemical identifier resolver](), [CAS Common Chemistry](), and [IUPAC OPSIN]().
+PROVESID is a member of the family of PROVES packages that provides Pythonic access to online services of chemical identifiers and data. The goal is to have a clean interface to the most important online databases with a simple, intuitive (and documented), up-to-date, and extendable interface. We offer interfaces to [PubChem](https://pubchem.ncbi.nlm.nih.gov/), [NCI chemical identifier resolver]https://cactus.nci.nih.gov/chemical/structure), [CAS Common Chemistry](https://commonchemistry.cas.org/), [IUPAC OPSIN](https://www.ebi.ac.uk/opsin/), [ChEBI](https://www.ebi.ac.uk/chebi/beta/), and [ClassyFire](http://classyfire.wishartlab.com/). We highly recommend the new users to jump head-first into [examples folder](./examples/) and get started by playing with the code. We also keep documenting the old and new functionalities [here]().
 
-TODO: explain [this link](https://pubchem.ncbi.nlm.nih.gov/classification/#hid=72)
+# Examples
+
+**PubChem**
+
+```python
+from provesid.pubchem import PubChemAPI
+pc = PubChemAPI()
+cids_aspirin = pc.get_cids_by_name('aspirin')
+res_basic = pc.get_basic_compound_info(cids_aspirin[0])
+```
+
+which returns
+
+```python
+{
+  "CID": 2244,
+  "MolecularFormula": "C9H8O4",
+  "MolecularWeight": "180.16",
+  "SMILES": "CC(=O)OC1=CC=CC=C1C(=O)O",
+  "InChI": "InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)",
+  "InChIKey": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+  "IUPACName": "2-acetyloxybenzoic acid",
+  "success": true,
+  "cid": 2244,
+  "error": null
+}
+```
+
+**PubChem View for data**
+
+```python
+from provesid import PubChemView, get_property_table
+logp_table = get_property_table(cids_aspirin[0], "LogP")
+logp_table
+```
+
+which returns a table with the reported values of `logP` for aspirin (including the references for each data point).
+
+**Chemical Identifier Resolver**
+
+```python
+```
+
+**OPSIN**
+
+```python
+```
+
+**CAS Common Chemistry**
+
+```python
+```
+
+**ClassyFire**
+
+See the [tutorial notebook](./examples/ClassyFire/classyfire_tutorial.ipynb).
 
 # Other tools
 
-  -[PubChemPy]()  
-  -[CIRpy]()  
-  -[IUPAC webbook]()  
-  -[ChEBI]()
-  -more?
+Several other Python (and other) packages and sample codes are available. We are inspired by them and tried to improve upon them based on our personal experiences working with chemical identifiers and data.  
+
+  - [PubChemPy](https://github.com/mcs07/PubChemPy) and [docs](https://docs.pubchempy.org/en/latest/)  
+  - [CIRpy](https://github.com/mcs07/CIRpy) and [docs](https://cirpy.readthedocs.io/en/latest/)  
+  - [IUPAC cookbook](https://iupac.github.io/WFChemCookbook/intro.html) for a tutorial on using various web APIs.  
+  - [ChEBI]()  
+  - more?
 
 # TODO list
+
 We will provide Python interfaces to more online services, including:  
 
-  - [ZeroPM](https://database.zeropm.eu/) even though there is no web API, the data is available on GitHub. I have written an interface that is not shared here since it can make this codebase too large, and I aim to keep it lean. We will find a way to share it.
-  - More? Please open an issue in this repo.
-
-  ## Documentation deployment
-
-  This repository includes a GitHub Actions workflow at `.github/workflows/mkdocs-deploy.yml` which builds the MkDocs documentation and deploys the generated site to the `gh-pages` branch using `peaceiris/actions-gh-pages`.
-
-  - The workflow triggers on pushes to `main` and can be run manually from the Actions tab.
-  - Per your request, tests are disabled in this workflow; it only installs documentation dependencies, builds the site, and publishes the `site/` directory.
+  - [ZeroPM](https://database.zeropm.eu/) even though there is no web API, the data is available on GitHub. I have written an interface that is not shared here since it can make this codebase too large, and I aim to keep it lean. We will find a way to share it.  
+  - More? Please [open an issue](https://github.com/USEtox/PROVESID/issues) and let us know what else you would like to have included.

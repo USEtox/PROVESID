@@ -1,7 +1,7 @@
 site_name: PROVESID Documentation
 site_description: A Python package for chemical identifier resolution and experimental property extraction
 site_author: PROVESID Team
-site_url: https://provesid.github.io/
+site_url: https://usetox.github.io/PROVESID/
 
 theme:
   name: material

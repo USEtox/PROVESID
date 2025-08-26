@@ -6,10 +6,7 @@ on:
   pull_request:
     branches: [ main, develop ]
   workflow_dispatch:
-    inp    - uses: actions/checkout@v4
-
-    - name: Set up Python 3.11
-      uses: actions/setup-python@v5
+    inputs:
       test_type:
         description: 'Type of tests to run'
         required: true

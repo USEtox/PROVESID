@@ -103,9 +103,9 @@ Explore comprehensive tutorials for each API:
 
 PROVESID is actively developed and welcomes contributions:
 
-- [Contributing Guidelines](development/contributing.md)
-- [Testing Documentation](development/testing.md)
-- [API Design Principles](development/api_design.md)
+- [Contributing Guidelines](https://github.com/USEtox/PROVESID/blob/main/CONTRIBUTING.md)
+- [Issues and Bug Reports](https://github.com/USEtox/PROVESID/issues)
+- [Source Code](https://github.com/USEtox/PROVESID)
 
 ## License
 

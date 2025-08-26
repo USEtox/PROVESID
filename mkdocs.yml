@@ -83,6 +83,10 @@ plugins:
       execute: false
       allow_errors: false
       include_source: true
+      ignore_h1_titles: true
+      remove_tag_config:
+        remove_input_tags:
+          - hide_code
   - mkdocstrings:
       handlers:
         python:
@@ -93,6 +97,7 @@ plugins:
             show_root_toc_entry: true
             show_object_full_path: false
             show_category_heading: true
+            members_order: source
 
 extra:
   social:

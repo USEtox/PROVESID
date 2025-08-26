@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -14,9 +14,8 @@ authors = [
 ]
 keywords = ["chemistry", "cheminformatics", "pubchem", "chemical-identifiers", "api"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
@@ -31,6 +30,12 @@ dependencies = [
     "pandas>=1.3.0",
     "numpy>=1.21.0",
 ]
+
+[project.urls]
+"Homepage" = "https://github.com/USEtox/PROVESID"
+"Documentation" = "https://usetox.github.io/PROVESID/"
+"Repository" = "https://github.com/USEtox/PROVESID"
+"Bug Tracker" = "https://github.com/USEtox/PROVESID/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -55,12 +60,6 @@ docs = [
     "mkdocs-jupyter>=0.24.0",
     "mkdocs-autorefs>=0.4.0",
 ]
-
-[project.urls]
-Homepage = "https://github.com/provesid/provesid"
-Documentation = "https://provesid.github.io/"
-Repository = "https://github.com/provesid/provesid.git"
-"Bug Tracker" = "https://github.com/provesid/provesid/issues"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

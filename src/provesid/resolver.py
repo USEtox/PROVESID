@@ -173,6 +173,9 @@ class NCIChemicalIdentifierResolver:
             NCIResolverNotFoundError: If identifier cannot be resolved
             NCIResolverError: For other resolver errors
         """
+        if not identifier or not identifier.strip():
+            raise NCIResolverError("Empty or invalid identifier provided")
+            
         if representation not in self.representations:
             available = ', '.join(self.representations.keys())
             raise ValueError(f"Unsupported representation '{representation}'. "
@@ -180,6 +183,15 @@ class NCIChemicalIdentifierResolver:
         
         url = self._build_url(identifier, representation, xml_format)
         return self._make_request(url)
+    
+    def get_available_representations(self) -> List[str]:
+        """
+        Get list of available representation types
+        
+        Returns:
+            List of available representation keys
+        """
+        return list(self.representations.keys())
     
     def resolve_multiple(self, identifier: str, representations: List[str]) -> Dict[str, str]:
         """

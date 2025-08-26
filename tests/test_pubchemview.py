@@ -355,7 +355,7 @@ class TestEdgeCases:
         for value in test_values:
             result = pugview._extract_experimental_value_and_unit(value)
             assert isinstance(result, tuple)
-            assert len(result) == 2
+            assert len(result) == 4  # Returns (value, unit, temperature, conditions)
     
     def test_rate_limiting(self):
         """Test rate limiting functionality"""

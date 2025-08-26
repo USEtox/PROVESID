@@ -71,7 +71,7 @@ class CASCommonChem:
             return res
         # get the CASRN from the response
         res_call = response.json()
-        if res_call["count"]==0:
+        if "count" not in res_call or res_call["count"]==0:
             res["status"] = "Not found"
             return res 
         if res_call["count"]>1:

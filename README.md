@@ -1,4 +1,10 @@
 # PROVESID
+
+[![Documentation Status](https://github.com/USEtox/PROVESID/actions/workflows/mkdocs-deploy.yml/badge.svg)](https://usetox.github.io/PROVESID/)
+[![Tests](https://github.com/USEtox/PROVESID/actions/workflows/test.yml/badge.svg)](https://github.com/USEtox/PROVESID/actions/workflows/test.yml)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 PROVESID is a member of the family of PROVES packages that provides Pythonic access to online services of chemical identifiers and data. The goal is to have a clean interface to the most important online databases with a simple, intuitive (and documented), up-to-date, and extendable interface. We offer interfaces to [PubChem](https://pubchem.ncbi.nlm.nih.gov/), [NCI chemical identifier resolver](https://cactus.nci.nih.gov/chemical/structure), [CAS Common Chemistry](https://commonchemistry.cas.org/), [IUPAC OPSIN](https://www.ebi.ac.uk/opsin/), [ChEBI](https://www.ebi.ac.uk/chebi/beta/), and [ClassyFire](http://classyfire.wishartlab.com/). We highly recommend the new users to jump head-first into [examples folder](./examples/) and get started by playing with the code. We also keep documenting the old and new functionalities [here]().
 
 # Examples

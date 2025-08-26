@@ -278,7 +278,7 @@ class PubChemView:
         try:
             response = self.get_property(cid, property_name)
             return self._parse_property_response(response)
-        except PubChemViewNotFoundError:
+        except (PubChemViewNotFoundError, PubChemViewError):
             self.logger.warning(f"Property '{property_name}' not found for CID {cid}")
             return []
     

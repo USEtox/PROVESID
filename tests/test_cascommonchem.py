@@ -78,9 +78,10 @@ class TestCASCommonChem:
             assert 'molecularFormula' in result
             assert 'molecularMass' in result
             
-            # Water should have H2O formula
+            # Water should have H2O formula (may be HTML formatted)
             if result['molecularFormula']:
-                assert 'H2O' in result['molecularFormula']
+                formula = result['molecularFormula']
+                assert 'H2O' in formula or 'H<sub>2</sub>O' in formula
         elif result['status'] in ['Invalid Request', 'Error']:
             # API might not be available or rate limited
             pytest.skip("CAS Common Chemistry API not available")
@@ -122,9 +123,11 @@ class TestCASCommonChem:
             assert 'molecularFormula' in result
             assert 'rn' in result  # Should have found a CAS number
             
-            # Ethanol should have C2H6O formula
+            # Ethanol should have C2H6O formula (may be HTML formatted)
             if result['molecularFormula']:
-                assert 'C2H6O' in result['molecularFormula'] or 'C2 H6 O' in result['molecularFormula']
+                formula = result['molecularFormula']
+                assert ('C2H6O' in formula or 'C2 H6 O' in formula or 
+                       'C<sub>2</sub>H<sub>6</sub>O' in formula)
         elif result['status'] in ['Not found', 'Error']:
             # API might not be available
             pytest.skip("CAS Common Chemistry API not available or compound not found")
@@ -221,7 +224,8 @@ class TestCASCommonChemIntegration:
         
         # Water-specific checks
         if result.get('molecularFormula'):
-            assert 'H2O' in result['molecularFormula']
+            formula = result['molecularFormula']
+            assert 'H2O' in formula or 'H<sub>2</sub>O' in formula
         
         if result.get('name'):
             assert 'water' in result['name'].lower()
@@ -241,7 +245,8 @@ class TestCASCommonChemIntegration:
         # Ethanol-specific checks
         if result.get('molecularFormula'):
             formula = result['molecularFormula']
-            assert 'C2H6O' in formula or 'C2 H6 O' in formula
+            assert ('C2H6O' in formula or 'C2 H6 O' in formula or 
+                   'C<sub>2</sub>H<sub>6</sub>O' in formula)
         
         if result.get('name'):
             name = result['name'].lower()
@@ -271,7 +276,9 @@ class TestCASCommonChemIntegration:
         if len(formulas) > 1:
             # All formulas should be similar (allowing for formatting differences)
             for formula in formulas:
-                assert 'C2' in formula and 'H6' in formula and 'O' in formula
+                # Check for C2H6O pattern in various formats
+                assert (('C2' in formula and 'H6' in formula and 'O' in formula) or
+                       'C<sub>2</sub>H<sub>6</sub>O' in formula)
     
     def test_experimental_properties_structure(self, cas_api):
         """Test structure of experimental properties when available"""

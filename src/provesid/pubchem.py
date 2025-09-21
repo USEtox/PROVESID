@@ -6,6 +6,7 @@ import time
 import json
 import logging
 import re
+from functools import lru_cache
 from typing import Dict, List, Union, Optional, Any
 from urllib.parse import quote
 
@@ -196,17 +197,86 @@ class PubChemAPI:
         similar = api.similarity_search('CCO', threshold=90)
     """
     
-    def __init__(self, base_url: str = pugrest_prolog, pause_time: float = pause_between_calls):
+    def __init__(self, base_url: str = pugrest_prolog, pause_time: float = pause_between_calls,
+                 cache_size: int = 512):
         """
         Initialize PubChem API client
         
         Args:
             base_url: Base URL for PubChem REST API
             pause_time: Minimum time between API calls in seconds
+            cache_size: Maximum number of entries to cache for each method (default: 512)
         """
         self.base_url = base_url.rstrip('/')
         self.pause_time = pause_time
         self.last_request_time = 0
+        self.cache_size = cache_size
+        
+    def clear_cache(self):
+        """Clear all cached results"""
+        # Clear all LRU caches for methods that have them
+        cached_methods = [
+            'get_compound_by_cid',
+            'get_compounds_by_name', 
+            'get_compounds_by_smiles',
+            'get_compounds_by_inchikey',
+            'get_compound_synonyms',
+            'get_cids_by_name',
+            'get_cids_by_smiles',
+            'get_cids_by_inchikey',
+            'get_cids_by_formula',
+            '_cached_substructure_search',
+            '_cached_superstructure_search',
+            '_cached_similarity_search',
+            '_cached_identity_search',
+            'get_substance_by_sid',
+            'get_substances_by_name',
+            'get_sids_by_name',
+            'get_assay_by_aid',
+            'get_assay_summary',
+            '_cached_get_compound_properties'
+        ]
+        
+        for method_name in cached_methods:
+            if hasattr(self, method_name):
+                method = getattr(self, method_name)
+                if hasattr(method, 'cache_clear'):
+                    method.cache_clear()
+            
+    def get_cache_info(self):
+        """Get cache statistics for all cached methods"""
+        cache_info = {}
+        
+        # List all methods that have caching
+        cached_methods = [
+            'get_compound_by_cid',
+            'get_compounds_by_name', 
+            'get_compounds_by_smiles',
+            'get_compounds_by_inchikey',
+            'get_compound_synonyms',
+            'get_cids_by_name',
+            'get_cids_by_smiles',
+            'get_cids_by_inchikey',
+            'get_cids_by_formula',
+            '_cached_substructure_search',
+            '_cached_superstructure_search',
+            '_cached_similarity_search',
+            '_cached_identity_search',
+            'get_substance_by_sid',
+            'get_substances_by_name',
+            'get_sids_by_name',
+            'get_assay_by_aid',
+            'get_assay_summary',
+            '_cached_get_compound_properties'
+        ]
+        
+        for method_name in cached_methods:
+            if hasattr(self, method_name):
+                method = getattr(self, method_name)
+                if hasattr(method, 'cache_info'):
+                    cache_info[method_name] = method.cache_info()
+                    
+        return cache_info
         
     def _rate_limit(self):
         """Enforce rate limiting between requests"""
@@ -349,7 +419,8 @@ class PubChemAPI:
         else:
             return response.text
     
-    # Compound methods
+    # Public cached methods
+    @lru_cache(maxsize=512)
     def get_compound_by_cid(self, cid: Union[int, str], output_format: str = OutputFormat.JSON) -> Any:
         """
         Get compound record by CID
@@ -373,6 +444,26 @@ class PubChemAPI:
         
         return result
     
+    def _get_compounds_by_name_impl(self, name: str, output_format: str = OutputFormat.JSON,
+                                   name_type: str = "word") -> Any:
+        """Implementation method for get_compounds_by_name with caching"""
+        url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.NAME, name,
+                             Operation.RECORD, output_format, name_type=name_type)
+        response = self._make_request(url)
+        result = self._parse_response(response, output_format)
+        
+        # For JSON format, automatically extract the compound data from the wrapper
+        if output_format == OutputFormat.JSON and isinstance(result, dict):
+            if "PC_Compounds" in result and isinstance(result["PC_Compounds"], list) and len(result["PC_Compounds"]) > 0:
+                # If there's only one compound, return it directly, otherwise return the list
+                if len(result["PC_Compounds"]) == 1:
+                    return result["PC_Compounds"][0]
+                else:
+                    return result["PC_Compounds"]
+        
+        return result
+
+    @lru_cache(maxsize=512)
     def get_compounds_by_name(self, name: str, output_format: str = OutputFormat.JSON,
                              name_type: str = "word") -> Any:
         """
@@ -402,6 +493,25 @@ class PubChemAPI:
         
         return result
     
+    def _get_compounds_by_smiles_impl(self, smiles: str, output_format: str = OutputFormat.JSON) -> Any:
+        """Implementation method for get_compounds_by_smiles with caching"""
+        url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.SMILES, smiles,
+                             Operation.RECORD, output_format)
+        response = self._make_request(url)
+        result = self._parse_response(response, output_format)
+        
+        # For JSON format, automatically extract the compound data from the wrapper
+        if output_format == OutputFormat.JSON and isinstance(result, dict):
+            if "PC_Compounds" in result and isinstance(result["PC_Compounds"], list) and len(result["PC_Compounds"]) > 0:
+                # If there's only one compound, return it directly, otherwise return the list
+                if len(result["PC_Compounds"]) == 1:
+                    return result["PC_Compounds"][0]
+                else:
+                    return result["PC_Compounds"]
+        
+        return result
+
+    @lru_cache(maxsize=512)
     def get_compounds_by_smiles(self, smiles: str, output_format: str = OutputFormat.JSON) -> Any:
         """
         Get compounds by SMILES
@@ -429,6 +539,25 @@ class PubChemAPI:
         
         return result
     
+    def _get_compounds_by_inchikey_impl(self, inchikey: str, output_format: str = OutputFormat.JSON) -> Any:
+        """Implementation method for get_compounds_by_inchikey with caching"""
+        url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.INCHIKEY, inchikey,
+                             Operation.RECORD, output_format)
+        response = self._make_request(url)
+        result = self._parse_response(response, output_format)
+        
+        # For JSON format, automatically extract the compound data from the wrapper
+        if output_format == OutputFormat.JSON and isinstance(result, dict):
+            if "PC_Compounds" in result and isinstance(result["PC_Compounds"], list) and len(result["PC_Compounds"]) > 0:
+                # If there's only one compound, return it directly, otherwise return the list
+                if len(result["PC_Compounds"]) == 1:
+                    return result["PC_Compounds"][0]
+                else:
+                    return result["PC_Compounds"]
+        
+        return result
+
+    @lru_cache(maxsize=512)
     def get_compounds_by_inchikey(self, inchikey: str, output_format: str = OutputFormat.JSON) -> Any:
         """
         Get compounds by InChIKey
@@ -456,23 +585,13 @@ class PubChemAPI:
         
         return result
     
-    def get_compound_properties(self, cid: Union[int, str], 
-                               properties: List[str], 
-                               include_synonyms: bool = True,
-                               output_format: str = OutputFormat.JSON) -> Dict[str, Any]:
-        """
-        Get compound properties and synonyms by CID with direct property access
-        
-        Args:
-            cid: Single Compound ID
-            properties: List of property names
-            include_synonyms: Whether to include synonyms in the output
-            output_format: Desired output format
-            
-        Returns:
-            Dictionary with properties directly accessible at top level,
-            plus 'success', 'cid', 'synonyms', and 'error' metadata keys
-        """
+    @lru_cache(maxsize=512)
+    def _cached_get_compound_properties(self, cid: Union[int, str], 
+                                       properties_tuple: tuple, 
+                                       include_synonyms: bool = True,
+                                       output_format: str = OutputFormat.JSON) -> Dict[str, Any]:
+        """Cached implementation of get_compound_properties"""
+        properties = list(properties_tuple)
         try:
             props_str = ','.join(properties)
             operation = f"{Operation.PROPERTY}/{props_str}"
@@ -524,6 +643,27 @@ class PubChemAPI:
                 result['synonyms'] = None
             return result
 
+    def get_compound_properties(self, cid: Union[int, str], 
+                               properties: List[str], 
+                               include_synonyms: bool = True,
+                               output_format: str = OutputFormat.JSON) -> Dict[str, Any]:
+        """
+        Get compound properties and synonyms by CID with direct property access
+        
+        Args:
+            cid: Single Compound ID
+            properties: List of property names
+            include_synonyms: Whether to include synonyms in the output
+            output_format: Desired output format
+            
+        Returns:
+            Dictionary with properties directly accessible at top level,
+            plus 'success', 'cid', 'synonyms', and 'error' metadata keys
+        """
+        # Convert list to tuple for caching
+        properties_tuple = tuple(properties)
+        return self._cached_get_compound_properties(cid, properties_tuple, include_synonyms, output_format)
+
     def get_compound_properties_batch(self, cids: List[Union[int, str]], 
                                      properties: List[str], 
                                      output_format: str = OutputFormat.JSON) -> List[Dict[str, Any]]:
@@ -551,6 +691,7 @@ class PubChemAPI:
                 })
         return results
     
+    @lru_cache(maxsize=512)
     def get_compound_synonyms(self, cid: Union[int, str], output_format: str = OutputFormat.JSON) -> List[str]:
         """
         Get compound synonyms by CID
@@ -581,6 +722,7 @@ class PubChemAPI:
             # Return empty list on error to maintain consistent return type
             return []
     
+    @lru_cache(maxsize=512)
     def get_cids_by_name(self, name: str, output_format: str = OutputFormat.JSON,
                         name_type: str = "word", domain: str = Domain.COMPOUND) -> Any:
         """
@@ -631,6 +773,7 @@ class PubChemAPI:
         # Return original response for non-JSON formats or if structure is different
         return parsed_response
     
+    @lru_cache(maxsize=512)
     def get_cids_by_smiles(self, smiles: str, output_format: str = OutputFormat.JSON) -> Any:
         """
         Get CIDs by SMILES
@@ -658,6 +801,7 @@ class PubChemAPI:
         # Return original response for non-JSON formats or if structure is different
         return parsed_response
     
+    @lru_cache(maxsize=512)
     def get_cids_by_inchikey(self, inchikey: str, output_format: str = OutputFormat.JSON) -> Any:
         """
         Get CIDs by InChI Key
@@ -685,6 +829,7 @@ class PubChemAPI:
         # Return original response for non-JSON formats or if structure is different
         return parsed_response
     
+    @lru_cache(maxsize=512)
     def get_cids_by_formula(self, formula: str, output_format: str = OutputFormat.JSON,
                            allow_other_elements: bool = False) -> Any:
         """
@@ -705,6 +850,24 @@ class PubChemAPI:
         return self._parse_response(response, output_format)
     
     # Structure search methods
+    def _make_options_hashable(self, **options: Any) -> tuple:
+        """Convert options dict to a hashable tuple for caching"""
+        if not options:
+            return ()
+        # Sort items to ensure consistent hashing
+        sorted_items = tuple(sorted(options.items()))
+        return sorted_items
+    
+    @lru_cache(maxsize=256)
+    def _cached_substructure_search(self, query: str, query_type: str, output_format: str, options_tuple: tuple) -> Any:
+        """Cached implementation of substructure search"""
+        options = dict(options_tuple) if options_tuple else {}
+        search_type = f"{FastSearch.FASTSUBSTRUCTURE}/{query_type}"
+        url = self._build_url(Domain.COMPOUND, search_type, query,
+                             Operation.CIDS, output_format, **options)
+        response = self._make_request(url)
+        return self._parse_response(response, output_format)
+    
     def substructure_search(self, query: str, query_type: str = "smiles", 
                            output_format: str = OutputFormat.JSON, **options: Any) -> Any:
         """
@@ -719,7 +882,14 @@ class PubChemAPI:
         Returns:
             Search results
         """
-        search_type = f"{FastSearch.FASTSUBSTRUCTURE}/{query_type}"
+        options_tuple = self._make_options_hashable(**options)
+        return self._cached_substructure_search(query, query_type, output_format, options_tuple)
+    
+    @lru_cache(maxsize=256)
+    def _cached_superstructure_search(self, query: str, query_type: str, output_format: str, options_tuple: tuple) -> Any:
+        """Cached implementation of superstructure search"""
+        options = dict(options_tuple) if options_tuple else {}
+        search_type = f"{FastSearch.FASTSUPERSTRUCTURE}/{query_type}"
         url = self._build_url(Domain.COMPOUND, search_type, query,
                              Operation.CIDS, output_format, **options)
         response = self._make_request(url)
@@ -739,9 +909,17 @@ class PubChemAPI:
         Returns:
             Search results
         """
-        search_type = f"{FastSearch.FASTSUPERSTRUCTURE}/{query_type}"
+        options_tuple = self._make_options_hashable(**options)
+        return self._cached_superstructure_search(query, query_type, output_format, options_tuple)
+    
+    @lru_cache(maxsize=256)
+    def _cached_similarity_search(self, query: str, query_type: str, threshold: int, output_format: str, options_tuple: tuple) -> Any:
+        """Cached implementation of similarity search"""
+        options = dict(options_tuple) if options_tuple else {}
+        search_type = f"{FastSearch.FASTSIMILARITY_2D}/{query_type}"
         url = self._build_url(Domain.COMPOUND, search_type, query,
-                             Operation.CIDS, output_format, **options)
+                             Operation.CIDS, output_format, 
+                             Threshold=threshold, **options)
         response = self._make_request(url)
         return self._parse_response(response, output_format)
     
@@ -761,10 +939,17 @@ class PubChemAPI:
         Returns:
             Search results
         """
-        search_type = f"{FastSearch.FASTSIMILARITY_2D}/{query_type}"
+        options_tuple = self._make_options_hashable(**options)
+        return self._cached_similarity_search(query, query_type, threshold, output_format, options_tuple)
+    
+    @lru_cache(maxsize=256)
+    def _cached_identity_search(self, query: str, query_type: str, identity_type: str, output_format: str, options_tuple: tuple) -> Any:
+        """Cached implementation of identity search"""
+        options = dict(options_tuple) if options_tuple else {}
+        search_type = f"{FastSearch.FASTIDENTITY}/{query_type}"
         url = self._build_url(Domain.COMPOUND, search_type, query,
-                             Operation.CIDS, output_format, 
-                             Threshold=threshold, **options)
+                             Operation.CIDS, output_format,
+                             identity_type=identity_type, **options)
         response = self._make_request(url)
         return self._parse_response(response, output_format)
     
@@ -784,14 +969,11 @@ class PubChemAPI:
         Returns:
             Search results
         """
-        search_type = f"{FastSearch.FASTIDENTITY}/{query_type}"
-        url = self._build_url(Domain.COMPOUND, search_type, query,
-                             Operation.CIDS, output_format,
-                             identity_type=identity_type, **options)
-        response = self._make_request(url)
-        return self._parse_response(response, output_format)
+        options_tuple = self._make_options_hashable(**options)
+        return self._cached_identity_search(query, query_type, identity_type, output_format, options_tuple)
     
     # Substance methods
+    @lru_cache(maxsize=512)
     def get_substance_by_sid(self, sid: Union[int, str], output_format: str = OutputFormat.JSON) -> Any:
         """
         Get substance by SID
@@ -815,6 +997,7 @@ class PubChemAPI:
         
         return result
     
+    @lru_cache(maxsize=512)
     def get_substances_by_name(self, name: str, output_format: str = OutputFormat.JSON) -> Any:
         """
         Get substances by name
@@ -842,6 +1025,7 @@ class PubChemAPI:
         
         return result
     
+    @lru_cache(maxsize=512)
     def get_sids_by_name(self, name: str, output_format: str = OutputFormat.JSON,
                         sourcename: Optional[str] = None) -> Any:
         """
@@ -876,6 +1060,7 @@ class PubChemAPI:
         return parsed_response
     
     # Assay methods
+    @lru_cache(maxsize=512)
     def get_assay_by_aid(self, aid: Union[int, str], output_format: str = OutputFormat.JSON) -> Any:
         """
         Get assay by AID
@@ -892,6 +1077,7 @@ class PubChemAPI:
         response = self._make_request(url)
         return self._parse_response(response, output_format)
     
+    @lru_cache(maxsize=512)
     def get_assay_summary(self, cids: Union[int, str, List[Union[int, str]]],
                          output_format: str = OutputFormat.JSON) -> Any:
         """

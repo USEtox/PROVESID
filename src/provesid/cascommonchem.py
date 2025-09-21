@@ -2,6 +2,7 @@ import os
 import json
 import requests
 import logging
+from functools import lru_cache
 CASCommonChem_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 
 class CASCommonChem:
@@ -21,6 +22,7 @@ class CASCommonChem:
         self.query_url = ["/detail", "/export", "/search"]
         self.responses = {200: "Success", 400: "Invalid Request", 404: "Invalid Request", 500: "Internal Server Error"}
     
+    @lru_cache(maxsize=512)
     def cas_to_detail(self, cas_rn: str, timeout=30):
         """
         Returns a dictionary with the data for a given CAS RN, the cas number must be a string with or without hyphens.
@@ -58,6 +60,7 @@ class CASCommonChem:
             res[key] = data[key]
         return res
     
+    @lru_cache(maxsize=512)
     def name_to_detail(self, name: str, timeout=30):
         """
         Returns a dictionary with the data for a given name. It works with SMILES too.
@@ -81,6 +84,18 @@ class CASCommonChem:
     
     def smiles_to_detail(self, smiles: str, timeout=30):
         return self.name_to_detail(smiles, timeout)
+    
+    def clear_cache(self):
+        """Clear all cached results"""
+        self.cas_to_detail.cache_clear()
+        self.name_to_detail.cache_clear()
+    
+    def get_cache_info(self):
+        """Get cache information for all cached methods"""
+        cache_info = {}
+        cache_info['cas_to_detail'] = self.cas_to_detail.cache_info()
+        cache_info['name_to_detail'] = self.name_to_detail.cache_info()
+        return cache_info
     
     @staticmethod
     def _empty_res():

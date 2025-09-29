@@ -21,36 +21,46 @@ To install the latest development version (for developers and enthusiasts), clon
 pip install -e .
 ```
 
-# ✨ New: Advanced Caching
+# ✨ New in v0.2.0: Advanced Unlimited Caching
 
-PROVESID now features **unlimited caching** with persistent storage, automatic size monitoring, and import/export capabilities:
+PROVESID v0.2.0 introduces **unlimited caching** across ALL APIs with persistent storage, automatic size monitoring, and import/export capabilities:
 
 ```python
 import provesid
 
 # ALL APIs now use unlimited caching automatically - no more 512-entry limits!
-pubchem_api = provesid.PubChemAPI()
-nci_resolver = provesid.NCIChemicalIdentifierResolver() 
-cas_api = provesid.CASCommonChem()
+pubchem_api = provesid.PubChemAPI()          # 19 cached methods
+nci_resolver = provesid.NCIChemicalIdentifierResolver()  # 15 cached methods
+cas_api = provesid.CASCommonChem()           # 2 cached methods
+pugview = provesid.PubChemView()             # 15+ cached methods
+classyfire = provesid.ClassyFireAPI()        # 3 cached methods
+opsin = provesid.OPSIN()                     # 2 cached methods
 
 # All API calls cached forever, survive restarts
-result1 = pubchem_api.get_compound_by_cid(2244)  # PubChem - cached
-result2 = nci_resolver.resolve('aspirin', 'smiles')  # NCI - cached  
-result3 = cas_api.cas_to_detail('50-00-0')  # CAS - cached
+result1 = pubchem_api.get_compound_by_cid(2244)     # PubChem - cached
+result2 = nci_resolver.resolve('aspirin', 'smiles') # NCI - cached  
+result3 = cas_api.cas_to_detail('50-00-0')          # CAS - cached
+result4 = pugview.get_melting_point(2244)           # PubChemView - cached
+result5 = opsin.get_id('ethanol')                   # OPSIN - cached
 
 # Unified cache management across all APIs
 provesid.export_cache('my_research_cache.pkl')  # Backup all API cache
 provesid.import_cache('shared_cache.pkl')       # Load shared team cache
-info = provesid.get_cache_info()               # Monitor cache size
+info = provesid.get_cache_info()               # Monitor cache size (296 entries!)
 provesid.clear_cache()                         # Clear all caches
+
+# Individual API cache management
+pubchem_api.clear_cache()                      # Clear only PubChem cache
+cache_stats = pugview.get_cache_info()         # Get detailed cache statistics
 ```
 
 **Key benefits:**
-- 🚀 **Unlimited cache** - No more entry limits for ANY API
-- 💾 **Persistent storage** - Cache survives restarts  
-- 📊 **Size monitoring** - Warns at 5GB (configurable)
-- 🔄 **Import/Export** - Share cache files with team
-- ⚡ **Zero config** - Just import and use!
+- 🚀 **Unlimited cache** - No more entry limits for ANY API (was 512 max)
+- 💾 **Persistent storage** - Cache survives restarts and reinstalls
+- 📊 **Size monitoring** - Warns at 5GB with detailed statistics
+- 🔄 **Import/Export** - Share cache files with team (pickle + JSON)
+- ⚡ **Zero config** - Just import and use - caching is automatic!
+- 🎯 **Complete coverage** - All 6 major APIs fully cached
 
 See [Advanced Caching Guide](./docs/advanced_caching.md) for details.
 

@@ -28,19 +28,25 @@ PROVESID now features **unlimited caching** with persistent storage, automatic s
 ```python
 import provesid
 
-# APIs now use unlimited caching automatically - no more 512-entry limits!
-api = provesid.PubChemAPI()
-result = api.get_compound_by_cid(2244)  # Cached forever, survives restarts
+# ALL APIs now use unlimited caching automatically - no more 512-entry limits!
+pubchem_api = provesid.PubChemAPI()
+nci_resolver = provesid.NCIChemicalIdentifierResolver() 
+cas_api = provesid.CASCommonChem()
 
-# Cache management
-provesid.export_cache('my_research_cache.pkl')  # Backup your valuable cache
+# All API calls cached forever, survive restarts
+result1 = pubchem_api.get_compound_by_cid(2244)  # PubChem - cached
+result2 = nci_resolver.resolve('aspirin', 'smiles')  # NCI - cached  
+result3 = cas_api.cas_to_detail('50-00-0')  # CAS - cached
+
+# Unified cache management across all APIs
+provesid.export_cache('my_research_cache.pkl')  # Backup all API cache
 provesid.import_cache('shared_cache.pkl')       # Load shared team cache
 info = provesid.get_cache_info()               # Monitor cache size
-provesid.clear_cache()                         # Clear when needed
+provesid.clear_cache()                         # Clear all caches
 ```
 
 **Key benefits:**
-- 🚀 **Unlimited cache** - No more entry limits
+- 🚀 **Unlimited cache** - No more entry limits for ANY API
 - 💾 **Persistent storage** - Cache survives restarts  
 - 📊 **Size monitoring** - Warns at 5GB (configurable)
 - 🔄 **Import/Export** - Share cache files with team

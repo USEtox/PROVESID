@@ -3,6 +3,7 @@ import time
 import logging
 from urllib.parse import quote
 from typing import Dict, List, Union, Optional, Any
+from .cache import cached
 
 class NCIResolverError(Exception):
     """Custom exception for NCI Chemical Identifier Resolver errors"""
@@ -90,6 +91,16 @@ class NCIChemicalIdentifierResolver:
             'ringsys_count': 'Ring system count'
         }
     
+    def clear_cache(self):
+        """Clear all cached results"""
+        from .cache import clear_cache
+        clear_cache()
+    
+    def get_cache_info(self):
+        """Get cache statistics for all cached methods"""
+        from .cache import get_cache_info
+        return get_cache_info()
+    
     def _rate_limit(self):
         """Enforce rate limiting between requests"""
         if self.pause_time > 0:
@@ -156,6 +167,7 @@ class NCIChemicalIdentifierResolver:
         
         return '/'.join(url_parts)
     
+    @cached
     def resolve(self, identifier: str, representation: str, xml_format: bool = False) -> str:
         """
         Resolve a chemical identifier to another representation
@@ -193,6 +205,7 @@ class NCIChemicalIdentifierResolver:
         """
         return list(self.representations.keys())
     
+    @cached
     def resolve_multiple(self, identifier: str, representations: List[str]) -> Dict[str, str]:
         """
         Resolve a single identifier to multiple representations
@@ -214,6 +227,7 @@ class NCIChemicalIdentifierResolver:
         
         return results
     
+    @cached
     def get_molecular_data(self, identifier: str) -> Dict[str, Any]:
         """
         Get comprehensive molecular data for a chemical identifier
@@ -351,6 +365,7 @@ class NCIChemicalIdentifierResolver:
             logging.error(f"Failed to download image for {identifier}: {e}")
             return False
     
+    @cached
     def batch_resolve(self, identifiers: List[str], representation: str) -> Dict[str, str]:
         """
         Resolve multiple identifiers to a single representation
@@ -373,6 +388,7 @@ class NCIChemicalIdentifierResolver:
         
         return results
     
+    @cached
     def is_valid_identifier(self, identifier: str) -> bool:
         """
         Check if an identifier can be resolved by the service
@@ -390,6 +406,7 @@ class NCIChemicalIdentifierResolver:
         except NCIResolverError:
             return False
     
+    @cached
     def search_by_partial_name(self, partial_name: str) -> List[str]:
         """
         Search for compounds by partial name match
@@ -410,6 +427,7 @@ class NCIChemicalIdentifierResolver:
 
 # Convenience functions for backwards compatibility and ease of use
 
+@cached
 def nci_cas_to_mol(cas_rn: str) -> Dict[str, Any]:
     """
     Convert a CAS RN to a molecule data structure using the NCI web API
@@ -426,6 +444,7 @@ def nci_cas_to_mol(cas_rn: str) -> Dict[str, Any]:
     resolver = NCIChemicalIdentifierResolver()
     return resolver.get_molecular_data(cas_rn)
 
+@cached
 def nci_id_to_mol(identifier: str) -> Dict[str, Any]:
     """
     Convert any chemical identifier to a molecule data structure
@@ -439,6 +458,7 @@ def nci_id_to_mol(identifier: str) -> Dict[str, Any]:
     resolver = NCIChemicalIdentifierResolver()
     return resolver.get_molecular_data(identifier)
 
+@cached
 def nci_resolver(input_value: str, output_type: str, timeout: int = 30) -> Optional[str]:
     """
     Simple resolver function for converting between identifier types
@@ -459,6 +479,7 @@ def nci_resolver(input_value: str, output_type: str, timeout: int = 30) -> Optio
     except NCIResolverError:
         return None
 
+@cached
 def nci_smiles_to_names(smiles: str) -> List[str]:
     """
     Get chemical names for a SMILES string
@@ -476,6 +497,7 @@ def nci_smiles_to_names(smiles: str) -> List[str]:
     except NCIResolverError:
         return []
 
+@cached
 def nci_name_to_smiles(name: str) -> Optional[str]:
     """
     Convert chemical name to SMILES
@@ -492,6 +514,7 @@ def nci_name_to_smiles(name: str) -> Optional[str]:
     except NCIResolverError:
         return None
 
+@cached
 def nci_inchi_to_smiles(inchi: str) -> Optional[str]:
     """
     Convert InChI to SMILES
@@ -508,6 +531,7 @@ def nci_inchi_to_smiles(inchi: str) -> Optional[str]:
     except NCIResolverError:
         return None
 
+@cached
 def nci_cas_to_inchi(cas_rn: str) -> Optional[str]:
     """
     Convert CAS Registry Number to Standard InChI
@@ -524,6 +548,7 @@ def nci_cas_to_inchi(cas_rn: str) -> Optional[str]:
     except NCIResolverError:
         return None
 
+@cached
 def nci_get_molecular_weight(identifier: str) -> Optional[float]:
     """
     Get molecular weight for any chemical identifier
@@ -541,6 +566,7 @@ def nci_get_molecular_weight(identifier: str) -> Optional[float]:
     except (NCIResolverError, ValueError):
         return None
 
+@cached
 def nci_get_formula(identifier: str) -> Optional[str]:
     """
     Get molecular formula for any chemical identifier

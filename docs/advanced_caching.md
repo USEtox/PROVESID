@@ -31,21 +31,27 @@ PROVESID now features an advanced caching system with unlimited storage, persist
 ```python
 import provesid
 
-# APIs now use unlimited caching automatically
-api = provesid.PubChemAPI()
-result = api.get_compound_by_cid(2244)  # Cached forever
+# All APIs now use unlimited caching automatically
+pubchem_api = provesid.PubChemAPI()
+nci_resolver = provesid.NCIChemicalIdentifierResolver()
+cas_api = provesid.CASCommonChem()
 
-# Cache management
+# All API calls are cached forever
+result1 = pubchem_api.get_compound_by_cid(2244)  # Cached
+result2 = nci_resolver.resolve('aspirin', 'smiles')  # Cached  
+result3 = cas_api.cas_to_detail('50-00-0')  # Cached
+
+# Cache management works across all APIs
 info = provesid.get_cache_info()
 print(f"Cache size: {info['total_size_mb']:.2f} MB")
 
-# Export your valuable cache
+# Export your valuable cache (includes all API data)
 provesid.export_cache('my_research_cache.pkl')
 
-# Import shared cache (e.g., from colleagues)
+# Import shared cache (works for all APIs)
 provesid.import_cache('shared_cache.pkl')
 
-# Clear when needed
+# Clear when needed (clears all API caches)
 provesid.clear_cache()
 ```
 
@@ -156,12 +162,17 @@ provesid.import_cache('research_day1.pkl')
 
 ### 2. Team Collaboration
 ```python
-# Team member 1: Gather data
-api = provesid.PubChemAPI()
-for cid in expensive_compound_list:
-    api.get_compound_by_cid(cid)
+# Team member 1: Gather data from multiple APIs
+pubchem_api = provesid.PubChemAPI()
+nci_resolver = provesid.NCIChemicalIdentifierResolver()
 
-# Share the cache
+for cid in expensive_compound_list:
+    pubchem_api.get_compound_by_cid(cid)
+    
+for cas in cas_number_list:
+    nci_resolver.get_molecular_data(cas)
+
+# Share the cache (includes data from all APIs)
 provesid.export_cache('team_shared_cache.pkl')
 
 # Team member 2: Use shared data

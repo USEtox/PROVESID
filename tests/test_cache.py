@@ -315,6 +315,18 @@ class TestProvesidCacheIntegration:
         # Get cache info
         info = api.get_cache_info()
         # assert info['memory_entries'] > 0
+    
+    def test_nci_resolver_caching(self):
+        """Test that NCI resolver has cache methods."""
+        resolver = provesid.NCIChemicalIdentifierResolver()
+        
+        # Test cache methods are available
+        assert hasattr(resolver, 'clear_cache')
+        assert hasattr(resolver, 'get_cache_info')
+        
+        # Test cache info works
+        info = resolver.get_cache_info()
+        assert 'memory_entries' in info
 
 
 def test_cache_export_import_integration():

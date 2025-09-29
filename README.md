@@ -21,13 +21,40 @@ To install the latest development version (for developers and enthusiasts), clon
 pip install -e .
 ```
 
+# ✨ New: Advanced Caching
+
+PROVESID now features **unlimited caching** with persistent storage, automatic size monitoring, and import/export capabilities:
+
+```python
+import provesid
+
+# APIs now use unlimited caching automatically - no more 512-entry limits!
+api = provesid.PubChemAPI()
+result = api.get_compound_by_cid(2244)  # Cached forever, survives restarts
+
+# Cache management
+provesid.export_cache('my_research_cache.pkl')  # Backup your valuable cache
+provesid.import_cache('shared_cache.pkl')       # Load shared team cache
+info = provesid.get_cache_info()               # Monitor cache size
+provesid.clear_cache()                         # Clear when needed
+```
+
+**Key benefits:**
+- 🚀 **Unlimited cache** - No more entry limits
+- 💾 **Persistent storage** - Cache survives restarts  
+- 📊 **Size monitoring** - Warns at 5GB (configurable)
+- 🔄 **Import/Export** - Share cache files with team
+- ⚡ **Zero config** - Just import and use!
+
+See [Advanced Caching Guide](./docs/advanced_caching.md) for details.
+
 # Examples
 
 **PubChem**
 
 ```python
 from provesid.pubchem import PubChemAPI
-pc = PubChemAPI()
+pc = PubChemAPI()  # Now with unlimited caching!
 cids_aspirin = pc.get_cids_by_name('aspirin')
 res_basic = pc.get_basic_compound_info(cids_aspirin[0])
 ```

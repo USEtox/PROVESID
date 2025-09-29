@@ -14,6 +14,15 @@ from .pubchemview import (
     get_property_values_only,
     get_property_table
 )
+from .cache import (
+    clear_cache,
+    get_cache_info,
+    export_cache,
+    import_cache,
+    get_cache_size,
+    set_cache_warning_threshold,
+    enable_cache_warnings
+)
 from .resolver import (
     NCIChemicalIdentifierResolver, 
     NCIResolverError, 

@@ -3,6 +3,7 @@ import json
 import requests
 import logging
 from functools import lru_cache
+from .cache import cached
 CASCommonChem_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 
 class CASCommonChem:
@@ -22,7 +23,7 @@ class CASCommonChem:
         self.query_url = ["/detail", "/export", "/search"]
         self.responses = {200: "Success", 400: "Invalid Request", 404: "Invalid Request", 500: "Internal Server Error"}
     
-    @lru_cache(maxsize=512)
+    @cached
     def cas_to_detail(self, cas_rn: str, timeout=30):
         """
         Returns a dictionary with the data for a given CAS RN, the cas number must be a string with or without hyphens.
@@ -60,7 +61,7 @@ class CASCommonChem:
             res[key] = data[key]
         return res
     
-    @lru_cache(maxsize=512)
+    @cached
     def name_to_detail(self, name: str, timeout=30):
         """
         Returns a dictionary with the data for a given name. It works with SMILES too.

@@ -1,4 +1,5 @@
 import requests
+from .cache import cached, clear_cache, get_cache_info
 
 class ClassyFireAPI:
     """
@@ -42,6 +43,17 @@ class ClassyFireAPI:
     URL = 'http://classyfire.wishartlab.com'
 
     @staticmethod
+    def clear_cache():
+        """Clear the cache for all ClassyFireAPI methods"""
+        clear_cache()
+    
+    @staticmethod
+    def get_cache_info():
+        """Get information about the current cache state"""
+        return get_cache_info()
+
+    @staticmethod
+    @cached
     def submit_query(label, input, type='STRUCTURE'):
         try:
             response = requests.post(
@@ -57,6 +69,7 @@ class ClassyFireAPI:
         return response
     
     @staticmethod
+    @cached
     def query_status(query_id):
         """
         Retrieves the status of a query.
@@ -74,6 +87,7 @@ class ClassyFireAPI:
             return None
 
     @staticmethod
+    @cached
     def get_query(query_id, format="json"):
         try:
             if format == "json":

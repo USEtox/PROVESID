@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass
 import pandas as pd
 import re
+from .cache import cached
 
 
 @dataclass
@@ -107,6 +108,16 @@ class PubChemView:
             "Viscosity": "Viscosity"
         }
     
+    def clear_cache(self):
+        """Clear all cached results"""
+        from .cache import clear_cache
+        clear_cache()
+    
+    def get_cache_info(self):
+        """Get cache statistics for all cached methods"""
+        from .cache import get_cache_info
+        return get_cache_info()
+    
     def _rate_limit(self):
         """Implement rate limiting to respect PubChem's usage policy"""
         current_time = time.time()
@@ -154,6 +165,7 @@ class PubChemView:
         # This should never be reached due to exceptions above
         raise PubChemViewError("Unexpected error in request handling")
         
+    @cached
     def get_experimental_properties(self, cid: Union[int, str]) -> Dict[str, Any]:
         """
         Get all experimental properties for a compound
@@ -167,6 +179,7 @@ class PubChemView:
         url = f"{self.base_url}/data/compound/{cid}/JSON?heading=Experimental+Properties"
         return self._make_request(url)
     
+    @cached
     def get_property(self, cid: Union[int, str], property_name: str) -> Dict[str, Any]:
         """
         Get a specific property for a compound
@@ -264,6 +277,7 @@ class PubChemView:
         
         return unit, conditions
     
+    @cached
     def extract_property_data(self, cid: Union[int, str], property_name: str) -> List[PropertyData]:
         """
         Extract structured property data for a specific property
@@ -318,6 +332,7 @@ class PubChemView:
             
         return property_data
     
+    @cached
     def extract_all_experimental_properties(self, cid: Union[int, str]) -> Dict[str, List[PropertyData]]:
         """
         Extract all experimental properties for a compound in structured format
@@ -376,6 +391,7 @@ class PubChemView:
             
         return all_properties
     
+    @cached
     def get_available_properties(self, cid: Union[int, str]) -> List[str]:
         """
         Get list of available experimental properties for a compound
@@ -392,6 +408,7 @@ class PubChemView:
         except PubChemViewNotFoundError:
             return []
     
+    @cached
     def get_property_summary(self, cid: Union[int, str], property_name: str) -> Dict[str, Any]:
         """
         Get a summary of a property including all values, units, and references
@@ -420,38 +437,47 @@ class PubChemView:
         return summary
     
     # Convenience methods for common properties
+    @cached
     def get_melting_point(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get melting point data for a compound"""
         return self.extract_property_data(cid, "Melting Point")
     
+    @cached
     def get_boiling_point(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get boiling point data for a compound"""
         return self.extract_property_data(cid, "Boiling Point")
     
+    @cached
     def get_density(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get density data for a compound"""
         return self.extract_property_data(cid, "Density")
     
+    @cached
     def get_solubility(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get solubility data for a compound"""
         return self.extract_property_data(cid, "Solubility")
     
+    @cached
     def get_flash_point(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get flash point data for a compound"""
         return self.extract_property_data(cid, "Flash Point")
     
+    @cached
     def get_vapor_pressure(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get vapor pressure data for a compound"""
         return self.extract_property_data(cid, "Vapor Pressure")
     
+    @cached
     def get_viscosity(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get viscosity data for a compound"""
         return self.extract_property_data(cid, "Viscosity")
     
+    @cached
     def get_logp(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get LogP data for a compound"""
         return self.extract_property_data(cid, "LogP")
     
+    @cached
     def get_refractive_index(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get refractive index data for a compound"""
         return self.extract_property_data(cid, "Refractive Index")
@@ -502,6 +528,7 @@ class PubChemView:
         ]
 
 
+    @cached
     def get_property_table(self, cid: Union[int, str], property_name: str) -> pd.DataFrame:
         """
         Get a comprehensive table of property data with full reference information
@@ -994,6 +1021,7 @@ class PubChemView:
 
 
 # Convenience functions for easy access
+@cached
 def get_experimental_property(cid: Union[int, str], property_name: str) -> List[PropertyData]:
     """
     Convenience function to get experimental property data
@@ -1009,6 +1037,7 @@ def get_experimental_property(cid: Union[int, str], property_name: str) -> List[
     return pugview.extract_property_data(cid, property_name)
 
 
+@cached
 def get_all_experimental_properties(cid: Union[int, str]) -> Dict[str, List[PropertyData]]:
     """
     Convenience function to get all experimental properties
@@ -1023,6 +1052,7 @@ def get_all_experimental_properties(cid: Union[int, str]) -> Dict[str, List[Prop
     return pugview.extract_all_experimental_properties(cid)
 
 
+@cached
 def get_property_values_only(cid: Union[int, str], property_name: str) -> List[str]:
     """
     Convenience function to get just the property values as strings
@@ -1039,6 +1069,7 @@ def get_property_values_only(cid: Union[int, str], property_name: str) -> List[s
     return [data.value for data in property_data if data.value]
 
 
+@cached
 def get_property_table(cid: Union[int, str], property_name: str) -> pd.DataFrame:
     """
     Convenience function to get a comprehensive property table with full references

@@ -1,5 +1,5 @@
 import requests
-from .cache import cached, clear_cache, get_cache_info
+from .cache import cached, clear_classyfire_cache, get_classyfire_cache_info
 
 class ClassyFireAPI:
     """
@@ -45,16 +45,16 @@ class ClassyFireAPI:
     @staticmethod
     def clear_cache():
         """Clear the cache for all ClassyFireAPI methods"""
-        clear_cache()
+        clear_classyfire_cache()
     
     @staticmethod
     def get_cache_info():
         """Get information about the current cache state"""
-        return get_cache_info()
+        return get_classyfire_cache_info()
 
     @staticmethod
-    @cached
-    def submit_query(label, input, type='STRUCTURE'):
+    @cached(service='classyfire')
+    def submit_query(label, input, type='STRUCTURE', use_cache=True):
         try:
             response = requests.post(
                 f"{ClassyFireAPI.URL}/queries",
@@ -69,8 +69,8 @@ class ClassyFireAPI:
         return response
     
     @staticmethod
-    @cached
-    def query_status(query_id):
+    @cached(service='classyfire')
+    def query_status(query_id, use_cache=True):
         """
         Retrieves the status of a query.
         :param query_id: The ID of the query.
@@ -87,8 +87,8 @@ class ClassyFireAPI:
             return None
 
     @staticmethod
-    @cached
-    def get_query(query_id, format="json"):
+    @cached(service='classyfire')
+    def get_query(query_id, format="json", use_cache=True):
         try:
             if format == "json":
                 response = requests.get(

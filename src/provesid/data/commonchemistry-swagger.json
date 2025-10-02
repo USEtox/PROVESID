@@ -1,7 +1,7 @@
 {
   "swagger": "2.0",
   "info": {
-    "version": "1.0",
+    "version": "2.0",
     "title": "Common Chemistry AWS Api Gateway"
   },
   "host": "commonchemistry.cas.org",
@@ -9,9 +9,22 @@
   "schemes": [
     "https"
   ],
+  "securityDefinitions":{
+    "ApiKeyAuth":{
+      "type": "apiKey",
+      "in": "header",
+      "name": "X-API-KEY"
+    }
+  },
+  "security":[
+    {
+      "ApiKeyAuth": []
+    }
+  ],
   "paths": {
     "/detail": {
       "get": {
+        "description": "<b>Sample cURL:</b><br><code>curl -X GET 'https://commonchemistry.cas.org/api/detail?cas_rn=50-00-0' -H 'X-API-KEY: your_api_key'</code>",
         "parameters": [
           {
             "name": "cas_rn",
@@ -41,6 +54,7 @@
       }
     },
     "/export": {
+      "description": "<b>Sample cURL:</b><br><code>curl -X GET 'https://commonchemistry.cas.org/api/export?uri=substance%2Fpt%2F7732185' -H 'X-API-KEY: your_api_key'</code>",
       "get": {
         "parameters": [
           {
@@ -75,6 +89,7 @@
       }
     },
     "/search": {
+      "description": "<b>Sample cURL:</b><br><code>curl -X GET 'https://commonchemistry.cas.org/api/search?q=formaldehyde' -H 'X-API-KEY: your_api_key'</code>",
       "get": {
         "parameters": [
           {

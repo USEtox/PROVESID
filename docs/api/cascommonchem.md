@@ -1,10 +1,10 @@
 # CAS Common Chemistry API
 
-The CASCommonChem class provides an interface to the CAS (Chemical Abstracts Service) Common Chemistry database, which offers free access to chemical substance information.
+The CASCommonChem class provides an interface to the CAS (Chemical Abstracts Service) Common Chemistry database using API v2.0 with authentication.
 
 ## Overview
 
-CAS Common Chemistry provides reliable chemical information for over 500,000 chemical substances from CAS REGISTRY. This class enables searches by CAS Registry Number, chemical name, and SMILES notation.
+CAS Common Chemistry provides reliable chemical information for over 500,000 chemical substances from CAS REGISTRY. This class enables searches by CAS Registry Number, chemical name, and SMILES notation using the authenticated v2.0 API gateway.
 
 ## Class: CASCommonChem
 
@@ -13,13 +13,26 @@ CAS Common Chemistry provides reliable chemical information for over 500,000 che
 ```python
 from provesid.cascommonchem import CASCommonChem
 
-cas_api = CASCommonChem()
+# Initialize with API key directly
+cas_api = CASCommonChem(api_key="your-api-key-here")
+
+# Or initialize with API key from file
+cas_api = CASCommonChem(api_key_file="path/to/api/key/file.txt")
+
+# Default DTU OneDrive location
+cas_api = CASCommonChem()  # Uses default DTU path if no key provided
 ```
 
+**Parameters:**
+- `api_key` (str, optional): CAS API key for authentication
+- `api_key_file` (str, optional): Path to file containing API key
+- `use_cache` (bool, default=True): Enable/disable result caching
+
 The CASCommonChem class initializes with:
-- `base_url`: "https://commonchemistry.cas.org/api"
-- Proper headers for API requests
-- Error handling and retry logic
+- `base_url`: "https://commonchemistry.cas.org/api" (v2.0 gateway)
+- API key authentication using X-API-KEY header
+- Enhanced error handling for authentication failures
+- Service-specific caching system
 
 ### Methods
 
@@ -35,19 +48,20 @@ Retrieve detailed information for a compound using its CAS Registry Number.
 
 **Example:**
 ```python
-cas_api = CASCommonChem()
+cas_api = CASCommonChem(api_key="your-api-key")
 
 # Get details for ethanol (CAS: 64-17-5)
 ethanol_data = cas_api.cas_to_detail("64-17-5")
 
-if ethanol_data:
+if ethanol_data and ethanol_data['found']:
+    print(f"Status: {ethanol_data['status']}")
     print(f"Name: {ethanol_data['name']}")
     print(f"Molecular Formula: {ethanol_data['molecularFormula']}")
     print(f"SMILES: {ethanol_data['smile']}")
     print(f"InChI: {ethanol_data['inchi']}")
     print(f"InChI Key: {ethanol_data['inchiKey']}")
 else:
-    print("Compound not found")
+    print(f"Error: {ethanol_data['status'] if ethanol_data else 'No response'}")
 ```
 
 #### `name_to_detail(name)`
@@ -574,3 +588,65 @@ store_cas_data("64-17-5")
 - Production-grade API with good uptime
 - Data structure may evolve over time
 - Always check for API updates and changes
+
+## Cache Management
+
+The CASCommonChem class includes service-specific caching to improve performance and reduce API calls.
+
+### Cache Control
+
+```python
+# Enable/disable caching during initialization
+cas_api = CASCommonChem(use_cache=True)  # Default
+
+# Force fresh data retrieval (bypasses cache but still stores results)
+cas_api.use_cache = False
+fresh_data = cas_api.cas_to_detail("64-17-5")
+
+# Re-enable caching
+cas_api.use_cache = True
+```
+
+### Cache Management Methods
+
+```python
+# Get cache information
+cache_info = cas_api.get_cache_info()
+print(f"Cache directory: {cache_info['cache_directory']}")
+print(f"Memory entries: {cache_info['memory_entries']}")
+print(f"Disk entries: {cache_info['disk_entries']}")
+print(f"Total size: {cache_info['total_size_mb']:.2f} MB")
+
+# Clear CAS-specific cache only
+cas_api.clear_cache()
+```
+
+## Authentication Requirements
+
+The CAS Common Chemistry API v2.0 requires authentication:
+
+1. **API Key**: Obtain from CAS SciFinder or institutional access
+2. **Header Authentication**: Uses `X-API-KEY` header
+3. **Error Handling**: Comprehensive authentication error management
+
+### API Key Setup
+
+```python
+# Method 1: Direct API key
+cas_api = CASCommonChem(api_key="your-cas-api-key")
+
+# Method 2: File-based key
+cas_api = CASCommonChem(api_key_file="/path/to/api-key.txt")
+
+# Method 3: Default DTU location (if applicable)
+cas_api = CASCommonChem()  # Uses DTU OneDrive path
+```
+
+## Migration from v1.0
+
+If migrating from the previous v1.0 implementation:
+
+1. **Add API Key**: v2.0 requires authentication
+2. **Error Handling**: New authentication error responses
+3. **Status Fields**: Enhanced status reporting with `found` boolean
+4. **Cache System**: Now uses service-specific caching

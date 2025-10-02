@@ -92,7 +92,7 @@ class TestCASCommonChem:
         
         # Should return error or invalid request
         assert 'status' in result
-        assert result['status'] in ['Invalid Request', 'Error', 'Not found']
+        assert result['status'] in ['Invalid Request', 'Error', 'Not found', 'Not Found']
     
     def test_cas_to_detail_with_hyphens(self, cas_api):
         """Test cas_to_detail handles CAS numbers with hyphens"""
@@ -347,7 +347,7 @@ class TestCASCommonChemErrorHandling:
         
         # Should handle timeout gracefully
         assert 'status' in result
-        assert result['status'] in ['Error', 'Success']  # Success if very fast network
+        assert result['status'] in ['Error', 'Success', 'Timeout']  # Success if very fast network
     
     def test_malformed_cas_numbers(self, cas_api):
         """Test handling of malformed CAS numbers"""

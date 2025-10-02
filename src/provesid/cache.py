@@ -31,6 +31,7 @@ class CacheManager:
     
     def __init__(self, 
                  cache_dir: Optional[str] = None,
+                 service_name: Optional[str] = None,
                  max_size_gb: float = 5.0,
                  enable_warnings: bool = True):
         """
@@ -38,9 +39,11 @@ class CacheManager:
         
         Args:
             cache_dir: Directory to store cache files. If None, uses system temp directory.
+            service_name: Name of the service for service-specific caching (e.g., 'pubchem', 'cas')
             max_size_gb: Size threshold in GB for warnings (default: 5.0)
             enable_warnings: Whether to enable size warnings (default: True)
         """
+        self.service_name = service_name
         self.max_size_gb = max_size_gb
         self.enable_warnings = enable_warnings
         self._last_size_check = None
@@ -49,7 +52,11 @@ class CacheManager:
         
         # Set up cache directory
         if cache_dir is None:
-            cache_dir = os.path.join(tempfile.gettempdir(), 'provesid_cache')
+            base_cache_dir = os.path.join(tempfile.gettempdir(), 'provesid_cache')
+            if service_name:
+                cache_dir = os.path.join(base_cache_dir, service_name)
+            else:
+                cache_dir = base_cache_dir
         
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -330,33 +337,71 @@ class CacheManager:
 # Global cache manager instance
 _global_cache = CacheManager()
 
-def cached(func: Callable) -> Callable:
+# Service-specific cache managers
+_service_caches = {
+    'pubchem': CacheManager(service_name='pubchem'),
+    'cas': CacheManager(service_name='cas'), 
+    'nci': CacheManager(service_name='nci'),
+    'pubchemview': CacheManager(service_name='pubchemview'),
+    'classyfire': CacheManager(service_name='classyfire'),
+    'opsin': CacheManager(service_name='opsin')
+}
+
+def cached(func: Callable = None, *, service: Optional[str] = None) -> Callable:
     """
     Decorator for unlimited caching with persistent storage.
     
     This replaces the standard @lru_cache decorator with unlimited caching,
     persistent storage, and size monitoring.
+    
+    Args:
+        func: The function to cache
+        service: Optional service name for service-specific caching 
+                (e.g., 'pubchem', 'cas', 'nci', 'pubchemview', 'classyfire', 'opsin')
     """
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        func_name = f"{func.__module__}.{func.__qualname__}"
+    def decorator(f: Callable) -> Callable:
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            func_name = f"{f.__module__}.{f.__qualname__}"
+            
+            # Choose cache manager based on service parameter
+            cache_manager = _service_caches.get(service, _global_cache) if service else _global_cache
+            
+            # Check if we should use cache
+            use_cache = True
+            
+            # For instance methods, check self.use_cache
+            if args and hasattr(args[0], 'use_cache'):
+                use_cache = getattr(args[0], 'use_cache', True)
+            
+            # For static/class methods with use_cache parameter in kwargs
+            if 'use_cache' in kwargs:
+                use_cache = kwargs.pop('use_cache')  # Remove from kwargs to avoid passing to function
+            
+            # Try to get from cache only if use_cache is True
+            if use_cache:
+                found, value = cache_manager.get(func_name, args, kwargs)
+                if found:
+                    return value
+            
+            # Call function and always cache result (even if use_cache is False)
+            result = f(*args, **kwargs)
+            cache_manager.set(func_name, args, kwargs, result)
+            
+            return result
         
-        # Try to get from cache
-        found, value = _global_cache.get(func_name, args, kwargs)
-        if found:
-            return value
+        # Add cache management methods to the decorated function
+        cache_manager = _service_caches.get(service, _global_cache) if service else _global_cache
+        wrapper.cache_clear = lambda: cache_manager.clear()
+        wrapper.cache_info = lambda: cache_manager.get_cache_info()
         
-        # Call function and cache result
-        result = func(*args, **kwargs)
-        _global_cache.set(func_name, args, kwargs, result)
-        
-        return result
+        return wrapper
     
-    # Add cache management methods to the decorated function
-    wrapper.cache_clear = lambda: _global_cache.clear()
-    wrapper.cache_info = lambda: _global_cache.get_cache_info()
-    
-    return wrapper
+    # Support both @cached and @cached(service='name') syntax
+    if func is None:
+        return decorator
+    else:
+        return decorator(func)
 
 # Convenience functions for global cache management
 def clear_cache():
@@ -386,3 +431,77 @@ def set_cache_warning_threshold(size_gb: float):
 def enable_cache_warnings(enabled: bool = True):
     """Enable or disable cache size warnings."""
     _global_cache.enable_warnings = enabled
+
+# Service-specific cache management functions
+def clear_pubchem_cache():
+    """Clear only PubChem API cached data."""
+    _service_caches['pubchem'].clear()
+
+def clear_cas_cache():
+    """Clear only CAS Common Chemistry cached data."""
+    _service_caches['cas'].clear()
+
+def clear_nci_cache():
+    """Clear only NCI Chemical Identifier Resolver cached data."""
+    _service_caches['nci'].clear()
+
+def clear_pubchemview_cache():
+    """Clear only PubChem View cached data."""
+    _service_caches['pubchemview'].clear()
+
+def clear_classyfire_cache():
+    """Clear only ClassyFire API cached data."""
+    _service_caches['classyfire'].clear()
+
+def clear_opsin_cache():
+    """Clear only OPSIN cached data."""
+    _service_caches['opsin'].clear()
+
+def get_pubchem_cache_info() -> Dict[str, Any]:
+    """Get information about PubChem cache."""
+    return _service_caches['pubchem'].get_cache_info()
+
+def get_cas_cache_info() -> Dict[str, Any]:
+    """Get information about CAS cache."""
+    return _service_caches['cas'].get_cache_info()
+
+def get_nci_cache_info() -> Dict[str, Any]:
+    """Get information about NCI cache."""
+    return _service_caches['nci'].get_cache_info()
+
+def get_pubchemview_cache_info() -> Dict[str, Any]:
+    """Get information about PubChem View cache."""
+    return _service_caches['pubchemview'].get_cache_info()
+
+def get_classyfire_cache_info() -> Dict[str, Any]:
+    """Get information about ClassyFire cache."""
+    return _service_caches['classyfire'].get_cache_info()
+
+def get_opsin_cache_info() -> Dict[str, Any]:
+    """Get information about OPSIN cache."""
+    return _service_caches['opsin'].get_cache_info()
+
+def export_service_cache(service: str, export_path: str, format: str = 'pickle') -> bool:
+    """Export service-specific cache to a file."""
+    if service not in _service_caches:
+        raise ValueError(f"Unknown service: {service}. Available services: {list(_service_caches.keys())}")
+    return _service_caches[service].export_cache(export_path, format)
+
+def import_service_cache(service: str, import_path: str, merge: bool = True) -> bool:
+    """Import cache data for a specific service from a file."""
+    if service not in _service_caches:
+        raise ValueError(f"Unknown service: {service}. Available services: {list(_service_caches.keys())}")
+    return _service_caches[service].import_cache(import_path, merge)
+
+def get_all_service_cache_info() -> Dict[str, Dict[str, Any]]:
+    """Get cache information for all services."""
+    info = {}
+    for service_name, cache_manager in _service_caches.items():
+        info[service_name] = cache_manager.get_cache_info()
+    return info
+
+def clear_all_service_caches():
+    """Clear cached data from all services."""
+    for cache_manager in _service_caches.values():
+        cache_manager.clear()
+    _global_cache.clear()  # Also clear global cache

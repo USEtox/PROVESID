@@ -2,22 +2,23 @@ import requests
 import logging
 import json
 import time
-from .cache import cached, clear_cache, get_cache_info
+from .cache import cached, clear_opsin_cache, get_opsin_cache_info
 
 class OPSIN:
-    def __init__(self):
+    def __init__(self, use_cache: bool = True):
         self.base_url = "https://opsin.ch.cam.ac.uk/opsin/"
         self.responses = {200: "SUCCESS", 404: "FAILURE", 500: "Internal server error"}
+        self.use_cache = use_cache
 
     def clear_cache(self):
         """Clear the cache for all OPSIN methods"""
-        clear_cache()
+        clear_opsin_cache()
     
     def get_cache_info(self):
         """Get information about the current cache state"""
-        return get_cache_info()
+        return get_opsin_cache_info()
 
-    @cached
+    @cached(service='opsin')
     def get_id(self, iupac_name: str, timeout=30):
         """
         Returns the SMILES for a given IUPAC name. The code is adapted from IUPAC WorlFair book:
@@ -59,7 +60,7 @@ class OPSIN:
             "smiles": ""
         }
     
-    @cached
+    @cached(service='opsin')
     def get_id_from_list(self, iupac_names: list, timeout=30, pause_time=0.5):
         """
         Returns a list of dictionaries with the SMILES for a given list of IUPAC names.

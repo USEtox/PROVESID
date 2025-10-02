@@ -198,13 +198,15 @@ class PubChemAPI:
         similar = api.similarity_search('CCO', threshold=90)
     """
     
-    def __init__(self, base_url: str = pugrest_prolog, pause_time: float = pause_between_calls):
+    def __init__(self, base_url: str = pugrest_prolog, pause_time: float = pause_between_calls, use_cache: bool = True):
         """
         Initialize PubChem API client
         
         Args:
             base_url: Base URL for PubChem REST API
             pause_time: Minimum time between API calls in seconds
+            use_cache: Whether to use cache for lookups (default: True). 
+                      When False, skips cache lookup but still stores results.
             
         Note:
             Caching is now unlimited by default with persistent storage.
@@ -213,16 +215,17 @@ class PubChemAPI:
         self.base_url = base_url.rstrip('/')
         self.pause_time = pause_time
         self.last_request_time = 0
+        self.use_cache = use_cache
         
     def clear_cache(self):
-        """Clear all cached results"""
-        from .cache import clear_cache
-        clear_cache()
+        """Clear all cached results for PubChem API"""
+        from .cache import clear_pubchem_cache
+        clear_pubchem_cache()
             
     def get_cache_info(self):
-        """Get cache statistics for all cached methods"""
-        from .cache import get_cache_info
-        return get_cache_info()
+        """Get cache statistics for PubChem API cached methods"""
+        from .cache import get_pubchem_cache_info
+        return get_pubchem_cache_info()
                     
         return cache_info
         
@@ -368,7 +371,7 @@ class PubChemAPI:
             return response.text
     
     # Public cached methods
-    @cached
+    @cached(service='pubchem')
     def get_compound_by_cid(self, cid: Union[int, str], output_format: str = OutputFormat.JSON) -> Any:
         """
         Get compound record by CID
@@ -411,7 +414,7 @@ class PubChemAPI:
         
         return result
 
-    @cached
+    @cached(service='pubchem')
     def get_compounds_by_name(self, name: str, output_format: str = OutputFormat.JSON,
                              name_type: str = "word") -> Any:
         """
@@ -459,7 +462,7 @@ class PubChemAPI:
         
         return result
 
-    @cached
+    @cached(service='pubchem')
     def get_compounds_by_smiles(self, smiles: str, output_format: str = OutputFormat.JSON) -> Any:
         """
         Get compounds by SMILES
@@ -505,7 +508,7 @@ class PubChemAPI:
         
         return result
 
-    @cached
+    @cached(service='pubchem')
     def get_compounds_by_inchikey(self, inchikey: str, output_format: str = OutputFormat.JSON) -> Any:
         """
         Get compounds by InChIKey
@@ -533,7 +536,7 @@ class PubChemAPI:
         
         return result
     
-    @cached
+    @cached(service='pubchem')
     def _cached_get_compound_properties(self, cid: Union[int, str], 
                                        properties_tuple: tuple, 
                                        include_synonyms: bool = True,
@@ -639,7 +642,7 @@ class PubChemAPI:
                 })
         return results
     
-    @cached
+    @cached(service='pubchem')
     def get_compound_synonyms(self, cid: Union[int, str], output_format: str = OutputFormat.JSON) -> List[str]:
         """
         Get compound synonyms by CID
@@ -670,7 +673,7 @@ class PubChemAPI:
             # Return empty list on error to maintain consistent return type
             return []
     
-    @cached
+    @cached(service='pubchem')
     def get_cids_by_name(self, name: str, output_format: str = OutputFormat.JSON,
                         name_type: str = "word", domain: str = Domain.COMPOUND) -> Any:
         """
@@ -721,7 +724,7 @@ class PubChemAPI:
         # Return original response for non-JSON formats or if structure is different
         return parsed_response
     
-    @cached
+    @cached(service='pubchem')
     def get_cids_by_smiles(self, smiles: str, output_format: str = OutputFormat.JSON) -> Any:
         """
         Get CIDs by SMILES
@@ -749,7 +752,7 @@ class PubChemAPI:
         # Return original response for non-JSON formats or if structure is different
         return parsed_response
     
-    @cached
+    @cached(service='pubchem')
     def get_cids_by_inchikey(self, inchikey: str, output_format: str = OutputFormat.JSON) -> Any:
         """
         Get CIDs by InChI Key
@@ -777,7 +780,7 @@ class PubChemAPI:
         # Return original response for non-JSON formats or if structure is different
         return parsed_response
     
-    @cached
+    @cached(service='pubchem')
     def get_cids_by_formula(self, formula: str, output_format: str = OutputFormat.JSON,
                            allow_other_elements: bool = False) -> Any:
         """
@@ -806,7 +809,7 @@ class PubChemAPI:
         sorted_items = tuple(sorted(options.items()))
         return sorted_items
     
-    @cached
+    @cached(service='pubchem')
     def _cached_substructure_search(self, query: str, query_type: str, output_format: str, options_tuple: tuple) -> Any:
         """Cached implementation of substructure search"""
         options = dict(options_tuple) if options_tuple else {}
@@ -833,7 +836,7 @@ class PubChemAPI:
         options_tuple = self._make_options_hashable(**options)
         return self._cached_substructure_search(query, query_type, output_format, options_tuple)
     
-    @cached
+    @cached(service='pubchem')
     def _cached_superstructure_search(self, query: str, query_type: str, output_format: str, options_tuple: tuple) -> Any:
         """Cached implementation of superstructure search"""
         options = dict(options_tuple) if options_tuple else {}
@@ -860,7 +863,7 @@ class PubChemAPI:
         options_tuple = self._make_options_hashable(**options)
         return self._cached_superstructure_search(query, query_type, output_format, options_tuple)
     
-    @cached
+    @cached(service='pubchem')
     def _cached_similarity_search(self, query: str, query_type: str, threshold: int, output_format: str, options_tuple: tuple) -> Any:
         """Cached implementation of similarity search"""
         options = dict(options_tuple) if options_tuple else {}
@@ -890,7 +893,7 @@ class PubChemAPI:
         options_tuple = self._make_options_hashable(**options)
         return self._cached_similarity_search(query, query_type, threshold, output_format, options_tuple)
     
-    @cached
+    @cached(service='pubchem')
     def _cached_identity_search(self, query: str, query_type: str, identity_type: str, output_format: str, options_tuple: tuple) -> Any:
         """Cached implementation of identity search"""
         options = dict(options_tuple) if options_tuple else {}
@@ -921,7 +924,7 @@ class PubChemAPI:
         return self._cached_identity_search(query, query_type, identity_type, output_format, options_tuple)
     
     # Substance methods
-    @cached
+    @cached(service='pubchem')
     def get_substance_by_sid(self, sid: Union[int, str], output_format: str = OutputFormat.JSON) -> Any:
         """
         Get substance by SID
@@ -945,7 +948,7 @@ class PubChemAPI:
         
         return result
     
-    @cached
+    @cached(service='pubchem')
     def get_substances_by_name(self, name: str, output_format: str = OutputFormat.JSON) -> Any:
         """
         Get substances by name
@@ -973,7 +976,7 @@ class PubChemAPI:
         
         return result
     
-    @cached
+    @cached(service='pubchem')
     def get_sids_by_name(self, name: str, output_format: str = OutputFormat.JSON,
                         sourcename: Optional[str] = None) -> Any:
         """
@@ -1008,7 +1011,7 @@ class PubChemAPI:
         return parsed_response
     
     # Assay methods
-    @cached
+    @cached(service='pubchem')
     def get_assay_by_aid(self, aid: Union[int, str], output_format: str = OutputFormat.JSON) -> Any:
         """
         Get assay by AID
@@ -1025,7 +1028,7 @@ class PubChemAPI:
         response = self._make_request(url)
         return self._parse_response(response, output_format)
     
-    @cached
+    @cached(service='pubchem')
     def get_assay_summary(self, cids: Union[int, str, List[Union[int, str]]],
                          output_format: str = OutputFormat.JSON) -> Any:
         """

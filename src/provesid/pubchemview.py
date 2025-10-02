@@ -40,7 +40,7 @@ class PubChemView:
     """
     
     def __init__(self, base_url: str = "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view",
-                 timeout: int = 30, max_retries: int = 3, backoff_factor: float = 1.0):
+                 timeout: int = 30, max_retries: int = 3, backoff_factor: float = 1.0, use_cache: bool = True):
         """
         Initialize PubChemView API client
         
@@ -49,12 +49,15 @@ class PubChemView:
             timeout: Request timeout in seconds
             max_retries: Maximum number of retry attempts
             backoff_factor: Backoff factor for retries
+            use_cache: Whether to use cache for lookups (default: True). 
+                      When False, skips cache lookup but still stores results.
         """
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
         self.logger = logging.getLogger(__name__)
+        self.use_cache = use_cache
         
         # Rate limiting
         self.last_request_time = 0
@@ -109,14 +112,14 @@ class PubChemView:
         }
     
     def clear_cache(self):
-        """Clear all cached results"""
-        from .cache import clear_cache
-        clear_cache()
+        """Clear all cached results for PubChem View"""
+        from .cache import clear_pubchemview_cache
+        clear_pubchemview_cache()
     
     def get_cache_info(self):
-        """Get cache statistics for all cached methods"""
-        from .cache import get_cache_info
-        return get_cache_info()
+        """Get cache statistics for PubChem View cached methods"""
+        from .cache import get_pubchemview_cache_info
+        return get_pubchemview_cache_info()
     
     def _rate_limit(self):
         """Implement rate limiting to respect PubChem's usage policy"""
@@ -165,7 +168,7 @@ class PubChemView:
         # This should never be reached due to exceptions above
         raise PubChemViewError("Unexpected error in request handling")
         
-    @cached
+    @cached(service='pubchemview')
     def get_experimental_properties(self, cid: Union[int, str]) -> Dict[str, Any]:
         """
         Get all experimental properties for a compound
@@ -179,7 +182,7 @@ class PubChemView:
         url = f"{self.base_url}/data/compound/{cid}/JSON?heading=Experimental+Properties"
         return self._make_request(url)
     
-    @cached
+    @cached(service='pubchemview')
     def get_property(self, cid: Union[int, str], property_name: str) -> Dict[str, Any]:
         """
         Get a specific property for a compound
@@ -277,7 +280,7 @@ class PubChemView:
         
         return unit, conditions
     
-    @cached
+    @cached(service='pubchemview')
     def extract_property_data(self, cid: Union[int, str], property_name: str) -> List[PropertyData]:
         """
         Extract structured property data for a specific property
@@ -332,7 +335,7 @@ class PubChemView:
             
         return property_data
     
-    @cached
+    @cached(service='pubchemview')
     def extract_all_experimental_properties(self, cid: Union[int, str]) -> Dict[str, List[PropertyData]]:
         """
         Extract all experimental properties for a compound in structured format
@@ -391,7 +394,7 @@ class PubChemView:
             
         return all_properties
     
-    @cached
+    @cached(service='pubchemview')
     def get_available_properties(self, cid: Union[int, str]) -> List[str]:
         """
         Get list of available experimental properties for a compound
@@ -408,7 +411,7 @@ class PubChemView:
         except PubChemViewNotFoundError:
             return []
     
-    @cached
+    @cached(service='pubchemview')
     def get_property_summary(self, cid: Union[int, str], property_name: str) -> Dict[str, Any]:
         """
         Get a summary of a property including all values, units, and references
@@ -437,47 +440,47 @@ class PubChemView:
         return summary
     
     # Convenience methods for common properties
-    @cached
+    @cached(service='pubchemview')
     def get_melting_point(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get melting point data for a compound"""
         return self.extract_property_data(cid, "Melting Point")
     
-    @cached
+    @cached(service='pubchemview')
     def get_boiling_point(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get boiling point data for a compound"""
         return self.extract_property_data(cid, "Boiling Point")
     
-    @cached
+    @cached(service='pubchemview')
     def get_density(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get density data for a compound"""
         return self.extract_property_data(cid, "Density")
     
-    @cached
+    @cached(service='pubchemview')
     def get_solubility(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get solubility data for a compound"""
         return self.extract_property_data(cid, "Solubility")
     
-    @cached
+    @cached(service='pubchemview')
     def get_flash_point(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get flash point data for a compound"""
         return self.extract_property_data(cid, "Flash Point")
     
-    @cached
+    @cached(service='pubchemview')
     def get_vapor_pressure(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get vapor pressure data for a compound"""
         return self.extract_property_data(cid, "Vapor Pressure")
     
-    @cached
+    @cached(service='pubchemview')
     def get_viscosity(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get viscosity data for a compound"""
         return self.extract_property_data(cid, "Viscosity")
     
-    @cached
+    @cached(service='pubchemview')
     def get_logp(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get LogP data for a compound"""
         return self.extract_property_data(cid, "LogP")
     
-    @cached
+    @cached(service='pubchemview')
     def get_refractive_index(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get refractive index data for a compound"""
         return self.extract_property_data(cid, "Refractive Index")
@@ -528,7 +531,7 @@ class PubChemView:
         ]
 
 
-    @cached
+    @cached(service='pubchemview')
     def get_property_table(self, cid: Union[int, str], property_name: str) -> pd.DataFrame:
         """
         Get a comprehensive table of property data with full reference information
@@ -1021,7 +1024,7 @@ class PubChemView:
 
 
 # Convenience functions for easy access
-@cached
+@cached(service='pubchemview')
 def get_experimental_property(cid: Union[int, str], property_name: str) -> List[PropertyData]:
     """
     Convenience function to get experimental property data
@@ -1037,7 +1040,7 @@ def get_experimental_property(cid: Union[int, str], property_name: str) -> List[
     return pugview.extract_property_data(cid, property_name)
 
 
-@cached
+@cached(service='pubchemview')
 def get_all_experimental_properties(cid: Union[int, str]) -> Dict[str, List[PropertyData]]:
     """
     Convenience function to get all experimental properties
@@ -1052,7 +1055,7 @@ def get_all_experimental_properties(cid: Union[int, str]) -> Dict[str, List[Prop
     return pugview.extract_all_experimental_properties(cid)
 
 
-@cached
+@cached(service='pubchemview')
 def get_property_values_only(cid: Union[int, str], property_name: str) -> List[str]:
     """
     Convenience function to get just the property values as strings
@@ -1069,7 +1072,7 @@ def get_property_values_only(cid: Union[int, str], property_name: str) -> List[s
     return [data.value for data in property_data if data.value]
 
 
-@cached
+@cached(service='pubchemview')
 def get_property_table(cid: Union[int, str], property_name: str) -> pd.DataFrame:
     """
     Convenience function to get a comprehensive property table with full references

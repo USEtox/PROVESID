@@ -1,5 +1,9 @@
 """
 Tests for CAS Common Chemistry API functionality
+
+Note: These tests require a CAS API key to run successfully.
+Set the CAS_API_KEY environment variable or provide an api_key_file parameter.
+In CI/CD, these tests are skipped to avoid authentication failures.
 """
 
 import pytest
@@ -12,14 +16,33 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from provesid.cascommonchem import CASCommonChem
 
+# Check if API key is available for testing
+CCC_API_KEY = os.environ.get('CCC_API_KEY')
+CAS_API_KEY = os.environ.get('CAS_API_KEY')  # Fallback for local testing
+CAS_API_KEY_FILE = os.environ.get('CAS_API_KEY_FILE')
+
+# Skip all tests if no API key is available
+pytestmark = pytest.mark.skipif(
+    not CCC_API_KEY and not CAS_API_KEY and not CAS_API_KEY_FILE,
+    reason="CAS API key not available. Set CCC_API_KEY, CAS_API_KEY environment variable or CAS_API_KEY_FILE path."
+)
+
 
 class TestCASCommonChem:
     """Test suite for CASCommonChem class"""
     
     @pytest.fixture
     def cas_api(self):
-        """Create a CASCommonChem instance for testing"""
-        return CASCommonChem()
+        """Create a CASCommonChem instance for testing with available API key"""
+        if CCC_API_KEY:
+            return CASCommonChem(api_key=CCC_API_KEY)
+        elif CAS_API_KEY:
+            return CASCommonChem(api_key=CAS_API_KEY)
+        elif CAS_API_KEY_FILE:
+            return CASCommonChem(api_key_file=CAS_API_KEY_FILE)
+        else:
+            # This shouldn't happen due to pytestmark skip, but fallback
+            return CASCommonChem()
     
     def test_initialization(self, cas_api):
         """Test CASCommonChem initialization"""

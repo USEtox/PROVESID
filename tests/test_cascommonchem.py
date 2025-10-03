@@ -236,7 +236,16 @@ class TestCASCommonChemIntegration:
     
     @pytest.fixture
     def cas_api(self):
-        return CASCommonChem()
+        """Create a CASCommonChem instance for integration testing with available API key"""
+        if CCC_API_KEY:
+            return CASCommonChem(api_key=CCC_API_KEY)
+        elif CAS_API_KEY:
+            return CASCommonChem(api_key=CAS_API_KEY)
+        elif CAS_API_KEY_FILE:
+            return CASCommonChem(api_key_file=CAS_API_KEY_FILE)
+        else:
+            # This shouldn't happen due to pytestmark skip, but fallback
+            return CASCommonChem()
     
     def test_water_compound_data(self, cas_api):
         """Test comprehensive data extraction for water"""
@@ -361,7 +370,16 @@ class TestCASCommonChemErrorHandling:
     
     @pytest.fixture
     def cas_api(self):
-        return CASCommonChem()
+        """Create a CASCommonChem instance for error handling testing with available API key"""
+        if CCC_API_KEY:
+            return CASCommonChem(api_key=CCC_API_KEY)
+        elif CAS_API_KEY:
+            return CASCommonChem(api_key=CAS_API_KEY)
+        elif CAS_API_KEY_FILE:
+            return CASCommonChem(api_key_file=CAS_API_KEY_FILE)
+        else:
+            # This shouldn't happen due to pytestmark skip, but fallback
+            return CASCommonChem()
     
     def test_network_timeout(self, cas_api):
         """Test handling of network timeouts"""

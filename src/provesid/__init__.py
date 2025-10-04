@@ -16,6 +16,12 @@ from .pubchemview import (
     get_property_values_only,
     get_property_table
 )
+from .config import (
+    set_cas_api_key,
+    get_cas_api_key,
+    remove_cas_api_key,
+    show_config
+)
 from .cache import (
     clear_cache,
     get_cache_info,

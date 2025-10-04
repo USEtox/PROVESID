@@ -4,6 +4,7 @@ import requests
 import logging
 from functools import lru_cache
 from .cache import cached
+from .config import get_cas_api_key
 CASCommonChem_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 
 class CASCommonChem:
@@ -38,31 +39,58 @@ class CASCommonChem:
         self.responses = {200: "Success", 400: "Invalid Request", 404: "Invalid Request", 500: "Internal Server Error"}
         self.use_cache = use_cache
         
-        # Handle API key
+        # Handle API key - check multiple sources in priority order
         self.api_key = self._load_api_key(api_key, api_key_file)
         if not self.api_key:
-            raise ValueError("API key is required for CAS Common Chemistry API v2.0. "
-                           "Provide api_key parameter or ensure api_key_file exists.")
+            raise ValueError(
+                "API key is required for CAS Common Chemistry API v2.0.\n"
+                "Options:\n"
+                "1. Provide api_key parameter: CASCommonChem(api_key='your-key')\n"
+                "2. Provide api_key_file parameter: CASCommonChem(api_key_file='path/to/key.txt')\n"
+                "3. Set persistent API key: from provesid.config import set_cas_api_key; set_cas_api_key('your-key')\n"
+                "4. Set environment variable: CCC_API_KEY or CAS_API_KEY"
+            )
     
     def _load_api_key(self, api_key: str = None, api_key_file: str = None) -> str:
-        """Load API key from parameter or file"""
+        """
+        Load API key from multiple sources in priority order:
+        1. Direct api_key parameter
+        2. API key file (api_key_file parameter)
+        3. Persistent configuration (set via set_cas_api_key())
+        4. Environment variables (CCC_API_KEY, CAS_API_KEY)
+        """
+        # Priority 1: Direct parameter
         if api_key:
             return api_key.strip()
         
+        # Priority 2: API key file
+        if api_key_file:
+            try:
+                with open(api_key_file, 'r', encoding='utf-8') as f:
+                    key = f.read().strip()
+                    if key:
+                        return key
+                    else:
+                        logging.warning(f"API key file {api_key_file} is empty")
+            except FileNotFoundError:
+                logging.warning(f"API key file not found: {api_key_file}")
+            except Exception as e:
+                logging.warning(f"Error reading API key file {api_key_file}: {e}")
+        
+        # Priority 3: Persistent configuration
         try:
-            with open(api_key_file, 'r', encoding='utf-8') as f:
-                key = f.read().strip()
-                if key:
-                    return key
-                else:
-                    logging.warning(f"API key file {api_key_file} is empty")
-                    return None
-        except FileNotFoundError:
-            logging.warning(f"API key file not found: {api_key_file}")
-            return None
+            config_key = get_cas_api_key()
+            if config_key:
+                return config_key.strip()
         except Exception as e:
-            logging.warning(f"Error reading API key file {api_key_file}: {e}")
-            return None
+            logging.debug(f"Could not load API key from config: {e}")
+        
+        # Priority 4: Environment variables
+        env_key = os.environ.get('CCC_API_KEY') or os.environ.get('CAS_API_KEY')
+        if env_key:
+            return env_key.strip()
+        
+        return None
     
     def _get_headers(self) -> dict:
         """Get headers with API key for authentication"""

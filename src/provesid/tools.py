@@ -41,7 +41,7 @@ def smiles_to_canonical(smiles: str) -> Optional[str]:
         logging.warning(f"Failed to canonicalize SMILES '{smiles}': {e}")
         return None
 
-def casrn_to_compounds(cas_rn: Union[str, List[str]], 
+def casrn_to_compounds(cas_rn: Union[str, List[str]], ccc_api_key: Optional[str] = None,
                       show_progress: bool = True) -> pd.DataFrame:
     """
     Process a list of CAS RN and return a merged DataFrame with compound IDs and properties.
@@ -58,7 +58,7 @@ def casrn_to_compounds(cas_rn: Union[str, List[str]],
         InChIKey, molecular_formula, molecular_mass, foundby, source
     """
     # Initialize APIs
-    ccc_api = CASCommonChem()
+    ccc_api = CASCommonChem(api_key=ccc_api_key)
     pubchem_api = PubChemAPI()
     
     # Convert input to list

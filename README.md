@@ -89,8 +89,13 @@ which returns:
 **CAS Common Chemistry**
 
 ```python
+# One-time API key setup
+from provesid import set_cas_api_key
+set_cas_api_key("your-cas-api-key")  # Configure once
+
+# Then use anywhere without specifying API key
 from provesid import CASCommonChem
-ccc = CASCommonChem()
+ccc = CASCommonChem()  # Automatically uses stored API key
 water_info = ccc.cas_to_detail("7732-18-5")
 print("Water (7732-18-5):")
 print(f"  Name: {water_info.get('name')}")

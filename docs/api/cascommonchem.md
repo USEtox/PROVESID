@@ -11,16 +11,17 @@ CAS Common Chemistry provides reliable chemical information for over 500,000 che
 ### Initialization
 
 ```python
-from provesid.cascommonchem import CASCommonChem
+from provesid import CASCommonChem, set_cas_api_key
 
-# Initialize with API key directly
+# Recommended: Set API key once for persistent storage
+set_cas_api_key("your-api-key-here")
+cas_api = CASCommonChem()  # Automatically uses stored API key
+
+# Alternative: Initialize with API key directly  
 cas_api = CASCommonChem(api_key="your-api-key-here")
 
 # Or initialize with API key from file
 cas_api = CASCommonChem(api_key_file="path/to/api/key/file.txt")
-
-# Default DTU OneDrive location
-cas_api = CASCommonChem()  # Uses default DTU path if no key provided
 ```
 
 **Parameters:**
@@ -28,11 +29,50 @@ cas_api = CASCommonChem()  # Uses default DTU path if no key provided
 - `api_key_file` (str, optional): Path to file containing API key
 - `use_cache` (bool, default=True): Enable/disable result caching
 
+**API Key Priority Order:**
+1. Direct `api_key` parameter
+2. `api_key_file` parameter  
+3. Persistent configuration (via `set_cas_api_key()`)
+4. Environment variables (`CCC_API_KEY`, `CAS_API_KEY`)
+
 The CASCommonChem class initializes with:
 - `base_url`: "https://commonchemistry.cas.org/api" (v2.0 gateway)
 - API key authentication using X-API-KEY header
 - Enhanced error handling for authentication failures
 - Service-specific caching system
+
+## Persistent API Key Configuration
+
+The recommended approach is to configure your API key once using the persistent configuration system:
+
+```python
+# One-time setup
+from provesid import set_cas_api_key, show_config
+
+# Set your API key (stored securely in user config directory)
+set_cas_api_key("your-cas-api-key")
+
+# Verify configuration
+show_config()
+
+# Now use anywhere without specifying API key
+from provesid import CASCommonChem
+cas_api = CASCommonChem()  # Automatically loads stored API key
+```
+
+**Configuration Management:**
+```python
+from provesid import get_cas_api_key, remove_cas_api_key, show_config
+
+# Check current configuration
+show_config()
+
+# Get stored API key
+api_key = get_cas_api_key()
+
+# Remove stored API key
+remove_cas_api_key()
+```
 
 ### Methods
 

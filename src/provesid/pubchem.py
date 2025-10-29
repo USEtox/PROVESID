@@ -594,6 +594,7 @@ class PubChemAPI:
                 result['synonyms'] = None
             return result
 
+    @cached(service='pubchem')
     def get_compound_properties(self, cid: Union[int, str], 
                                properties: List[str], 
                                include_synonyms: bool = True,
@@ -874,6 +875,7 @@ class PubChemAPI:
         response = self._make_request(url)
         return self._parse_response(response, output_format)
     
+    @cached(service='pubchem')
     def similarity_search(self, query: str, query_type: str = "smiles",
                          threshold: int = 90, output_format: str = OutputFormat.JSON,
                          **options: Any) -> Any:
@@ -904,6 +906,7 @@ class PubChemAPI:
         response = self._make_request(url)
         return self._parse_response(response, output_format)
     
+    @cached(service='pubchem')
     def identity_search(self, query: str, query_type: str = "smiles",
                        identity_type: str = "same_stereo_isotope",
                        output_format: str = OutputFormat.JSON, **options: Any) -> Any:
@@ -1047,6 +1050,7 @@ class PubChemAPI:
         return self._parse_response(response, output_format)
     
     # Convenience methods for common use cases
+    @cached(service='pubchem')
     def search_compound(self, query: str, search_type: str = "name") -> Dict[str, Any]:
         """
         Search for compound with automatic format detection
@@ -1087,6 +1091,7 @@ class PubChemAPI:
                 "error": str(e)
             }
 
+    @cached(service='pubchem')
     def get_basic_compound_info(self, cid: Union[int, str], 
                                 include_synonyms: bool = False) -> Dict[str, Any]:
         """
@@ -1114,6 +1119,7 @@ class PubChemAPI:
         # Use the new get_compound_properties method which already includes synonyms and metadata
         return self.get_compound_properties(cid, properties, include_synonyms=include_synonyms)
 
+    @cached(service='pubchem')
     def get_all_compound_info(self, cid: Union[int, str]) -> Dict[str, Any]:
         """
         Get all compound properties as listed in CompoundProperties

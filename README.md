@@ -122,17 +122,6 @@ Water (7732-18-5):
 
 See the [tutorial notebook](./examples/ClassyFire/classyfire_tutorial.ipynb).
 
-# For Developers
-
-If you're interested in contributing to PROVESID or need to understand the release workflow, please see our comprehensive [Development Guide](./DEVELOPMENT.md) which includes:
-
-- 🛠️ Development setup and environment configuration
-- 🚀 Step-by-step release workflow and version management
-- 🧪 Testing procedures and guidelines
-- 📚 Documentation building and contribution guidelines
-- 🔍 Code quality standards and tools
-- 🤝 Contribution workflow and pull request guidelines
-
 # Other tools
 
 Several other Python (and other) packages and sample codes are available. We are inspired by them and tried to improve upon them based on our personal experiences working with chemical identifiers and data.  

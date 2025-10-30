@@ -1091,6 +1091,169 @@ class PubChemAPI:
                 "error": str(e)
             }
 
+    def format_search_compound_result(self, search_result: Dict[str, Any], 
+                                      index: Optional[int] = None) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+        """
+        Convert search_compound output to a nicely formatted dictionary with flat structure
+        
+        Extracts properties from the nested props structure in search_compound results
+        and creates a dictionary similar to get_all_compound_info output.
+        
+        Args:
+            search_result: The result dictionary from search_compound()
+            index: If search returns multiple results, specify which one to format (0-based).
+                   If None and multiple results exist, returns a list of all formatted results.
+            
+        Returns:
+            Dictionary with formatted properties, or list of dictionaries if multiple results.
+            If search was unsuccessful or data is missing, returns a dictionary with 
+            success=False and error message.
+            
+        Examples:
+            >>> pch = PubChemAPI()
+            >>> # Single result (e.g., CAS number)
+            >>> res = pch.search_compound("50-00-0")
+            >>> formatted = pch.format_search_compound_result(res)
+            >>> print(formatted.get("MolecularFormula"))
+            'CH2O'
+            
+            >>> # Multiple results (e.g., common name)
+            >>> res = pch.search_compound("aspirin")
+            >>> formatted = pch.format_search_compound_result(res, index=0)  # Get first result
+            >>> # Or get all results
+            >>> all_formatted = pch.format_search_compound_result(res)  # Returns list
+        """
+        # Check if search was successful
+        if not search_result.get("success"):
+            return {
+                "success": False,
+                "error": search_result.get("error", "Search was not successful"),
+                "query": search_result.get("query"),
+                "search_type": search_result.get("search_type")
+            }
+        
+        # Check if data exists
+        data = search_result.get("data")
+        if not data:
+            return {
+                "success": False,
+                "error": "No data found in search result",
+                "query": search_result.get("query"),
+                "search_type": search_result.get("search_type")
+            }
+        
+        # Handle multiple results (list of compounds)
+        if isinstance(data, list):
+            if index is not None:
+                # Format specific index
+                if 0 <= index < len(data):
+                    return self._format_single_compound(data[index], search_result)
+                else:
+                    return {
+                        "success": False,
+                        "error": f"Index {index} out of range (0-{len(data)-1})",
+                        "query": search_result.get("query"),
+                        "search_type": search_result.get("search_type")
+                    }
+            else:
+                # Format all results
+                return [self._format_single_compound(compound, search_result) 
+                        for compound in data]
+        
+        # Handle single result (dict)
+        if "props" not in data:
+            return {
+                "success": False,
+                "error": "No properties data found in search result",
+                "query": search_result.get("query"),
+                "search_type": search_result.get("search_type")
+            }
+        
+        return self._format_single_compound(data, search_result)
+    
+    def _format_single_compound(self, data: Dict[str, Any], 
+                                search_result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Internal helper to format a single compound's data
+        
+        Args:
+            data: Single compound data dictionary with 'props' key
+            search_result: Original search result for metadata
+            
+        Returns:
+            Formatted dictionary with flat structure
+        """
+        # Initialize result dictionary with metadata
+        formatted = {
+            "success": True,
+            "query": search_result.get("query"),
+            "search_type": search_result.get("search_type"),
+            "error": None
+        }
+        
+        # Add CID if available
+        if "id" in data and "id" in data["id"] and "cid" in data["id"]["id"]:
+            formatted["CID"] = data["id"]["id"]["cid"]
+        
+        # Map of property labels/names to standardized keys
+        # This maps the PubChem record format to property table format
+        property_mapping = {
+            ("Molecular Formula", ""): "MolecularFormula",
+            ("Molecular Weight", ""): "MolecularWeight",
+            ("SMILES", "Absolute"): "SMILES",
+            ("SMILES", "Connectivity"): "ConnectivitySMILES",
+            ("InChI", "Standard"): "InChI",
+            ("InChIKey", "Standard"): "InChIKey",
+            ("IUPAC Name", "Preferred"): "IUPACName",
+            ("Log P", "XLogP3-AA"): "XLogP",
+            ("Mass", "Exact"): "ExactMass",
+            ("Weight", "MonoIsotopic"): "MonoisotopicMass",
+            ("Topological", "Polar Surface Area"): "TPSA",
+            ("Compound Complexity", ""): "Complexity",
+            ("Count", "Hydrogen Bond Donor"): "HBondDonorCount",
+            ("Count", "Hydrogen Bond Acceptor"): "HBondAcceptorCount",
+            ("Count", "Rotatable Bond"): "RotatableBondCount",
+            ("Fingerprint", "SubStructure Keys"): "Fingerprint2D",
+            ("IUPAC Name", "Allowed"): "IUPACName_Allowed",
+            ("IUPAC Name", "CAS-like Style"): "IUPACName_CASStyle",
+            ("IUPAC Name", "Markup"): "IUPACName_Markup",
+            ("IUPAC Name", "Systematic"): "IUPACName_Systematic",
+            ("IUPAC Name", "Traditional"): "IUPACName_Traditional",
+        }
+        
+        # Process each property
+        for prop in data["props"]:
+            urn = prop.get("urn", {})
+            label = urn.get("label", "")
+            name = urn.get("name", "")
+            
+            # Get value based on type
+            value_obj = prop.get("value", {})
+            if "sval" in value_obj:
+                value = value_obj["sval"]
+            elif "ival" in value_obj:
+                value = value_obj["ival"]
+            elif "fval" in value_obj:
+                value = value_obj["fval"]
+            elif "binary" in value_obj:
+                value = value_obj["binary"]
+            else:
+                continue  # Skip if no recognized value type
+            
+            # Check if we have a mapping for this property
+            key_tuple = (label, name)
+            if key_tuple in property_mapping:
+                formatted[property_mapping[key_tuple]] = value
+            else:
+                # For unmapped properties, create a key from label and name
+                if name:
+                    key = f"{label}_{name}".replace(" ", "").replace("-", "")
+                else:
+                    key = label.replace(" ", "").replace("-", "")
+                formatted[key] = value
+        
+        return formatted
+
     @cached(service='pubchem')
     def get_basic_compound_info(self, cid: Union[int, str], 
                                 include_synonyms: bool = False) -> Dict[str, Any]:

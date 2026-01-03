@@ -46,3 +46,4 @@ from .resolver import (
     nci_get_formula
 )
 from .utils import check_CASRN
+from .zeropm import ZeroPM

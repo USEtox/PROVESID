@@ -1,4 +1,7 @@
 
+import os
+
+
 def _has_casrn_format(s: str):
     return len(s.split("-")) == 3 and all([i.isdigit() for i in s.split("-")])
 
@@ -26,3 +29,9 @@ def check_CASRN(cas_rn: str):
 
     # Validate the check digit
     return calculated_check_digit % 10 == check_digit
+
+def data_path():
+    """
+    Get the path to the data directory
+    """
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")

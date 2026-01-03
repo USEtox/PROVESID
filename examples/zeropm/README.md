@@ -1,0 +1,2 @@
+# ZeroPM data example
+The notebook describes the use of ZeroPM data that can be accessed [online](https://database.zeropm.eu/) too. Here, we use the latest version of the [lates released global chemical inventory data](https://github.com/ZeroPM-H2020/global-chemical-inventory-database) and look through it locally.

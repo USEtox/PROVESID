@@ -118,6 +118,52 @@ Water (7732-18-5):
   Status: Success
 ```
 
+**ChEBI**
+
+Access to the European Bioinformatics Institute ChEBI (Chemical Entities of Biological Interest) database. See the [tutorial notebook](./examples/ChEBI/ChEBI_tutorial.ipynb).
+
+**ZeroPM Global Chemical Inventory**
+
+PROVESID now includes access to the [ZeroPM](https://database.zeropm.eu/) global chemical inventory database, which provides information about chemicals listed in regulatory inventories worldwide. The database is automatically downloaded on first use:
+
+```python
+from provesid.zeropm import ZeroPM
+
+# Initialize - database downloads automatically if not present
+zpm = ZeroPM()
+
+# Query by CAS number
+query_id = zpm.query_cas("50-00-0")  # Formaldehyde
+
+# Get SMILES from CAS
+smiles = zpm.get_smiles_from_cas("50-00-0")
+
+# Search by chemical name
+results = zpm.query_similar_name("formaldehyde", threshold=80)
+
+# Query by regulatory inventory
+eu_chemicals = zpm.query_by_inventory(inventory_name="REACH")
+
+# Query by country
+us_chemicals = zpm.query_by_country(country_name="United States")
+
+# Get all available inventories
+inventories = zpm.get_all_inventories()
+
+# Get database statistics
+stats = zpm.get_database_stats()
+```
+
+The database file (~400MB) is downloaded automatically from [GitHub](https://github.com/ZeroPM-H2020/global-chemical-inventory-database) on first use and cached locally. You can also manually download it:
+
+```python
+# Manual download (only needed if auto-download fails)
+zpm = ZeroPM(auto_download=False)  # Skip auto-download
+zpm.download_database()  # Manually trigger download
+```
+
+See the [ZeroPM tutorial notebook](./examples/zeropm/zeropm-example.ipynb) for more examples.
+
 **ClassyFire**
 
 See the [tutorial notebook](./examples/ClassyFire/classyfire_tutorial.ipynb).
@@ -133,7 +179,4 @@ Several other Python (and other) packages and sample codes are available. We are
 
 # TODO list
 
-We will provide Python interfaces to more online services, including:  
-
-  - [ZeroPM](https://database.zeropm.eu/) even though there is no web API, the data is available on GitHub. I have written an interface that is not shared here since it can make this codebase too large, and I aim to keep it lean. We will find a way to share it.  
-  - More? Please [open an issue](https://github.com/USEtox/PROVESID/issues) and let us know what else you would like to have included.
+We will provide Python interfaces to more online services. Please [open an issue](https://github.com/USEtox/PROVESID/issues) and let us know what else you would like to have included.

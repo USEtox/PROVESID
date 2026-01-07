@@ -6,6 +6,8 @@ import time
 import json
 import logging
 import re
+import os
+import pandas as pd
 from functools import lru_cache
 from typing import Dict, List, Union, Optional, Any
 from urllib.parse import quote
@@ -1500,3 +1502,638 @@ class PubChemAPI:
             results["recommended_domain"] = None
         
         return results
+
+
+class PubChemID:
+    """
+    Interface to PubChem ID SQLite database for fast identifier lookup and conversion.
+    
+    This class provides access to a local SQLite database containing ~1.6M PubChem compounds
+    with their identifiers (CID, CAS, InChI, InChIKey, SMILES) and chemical properties
+    (molecular formula, molecular weight, LogP, complexity, etc.).
+    
+    The database is built from PubChem_CAS_202601.csv using the build_pubchem_id_db.py script.
+    
+    Attributes:
+        db_path (str): Path to the SQLite database file
+        conn (sqlite3.Connection): Database connection
+    
+    Example:
+        >>> from provesid import PubChemID
+        >>> db = PubChemID()
+        >>> 
+        >>> # Lookup by CAS
+        >>> result = db.get_by_cas("50-78-2")  # Aspirin
+        >>> print(result['inchi'])
+        >>> 
+        >>> # Lookup by InChIKey
+        >>> result = db.get_by_inchikey("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")
+        >>> print(result['cid'])
+        >>> 
+        >>> # Convert CAS to InChI
+        >>> inchi = db.cas_to_inchi("50-78-2")
+        >>> 
+        >>> # Batch conversion
+        >>> results = db.batch_cas_to_cid(["50-78-2", "50-00-0"])
+    """
+    
+    def __init__(self, db_path: Optional[str] = None, auto_download: bool = True):
+        """
+        Initialize PubChemID database connection.
+        
+        Args:
+            db_path (str, optional): Path to SQLite database. If None, uses default
+                                    location in data directory.
+            auto_download (bool): If True, automatically download database if not found.
+                                 Default is True.
+        
+        Raises:
+            FileNotFoundError: If database file doesn't exist and auto_download is False
+        """
+        import sqlite3
+        from .utils import data_path
+        
+        if db_path is None:
+            db_path = os.path.join(data_path(), 'pubchem_id.db')
+        
+        self.db_path = db_path
+        
+        if not os.path.exists(db_path):
+            if auto_download:
+                print(f"Database not found at {db_path}")
+                print("Attempting to download from Zenodo...")
+                self.download_database()
+            else:
+                raise FileNotFoundError(
+                    f"PubChem ID database not found at {db_path}. "
+                    "Set auto_download=True or run scripts/build_pubchem_id_db.py to create it."
+                )
+        
+        self.conn = sqlite3.connect(db_path)
+        self.conn.row_factory = sqlite3.Row  # Access columns by name
+    
+    def __del__(self):
+        """Close database connection on deletion."""
+        if hasattr(self, 'conn'):
+            self.conn.close()
+    
+    @staticmethod
+    def download_database(db_path: Optional[str] = None, zenodo_url: Optional[str] = None) -> str:
+        """
+        Download PubChem ID database from Zenodo.
+        
+        Args:
+            db_path (str, optional): Path where to save the database. If None, uses default
+                                    location in data directory.
+            zenodo_url (str, optional): URL to download from. If None, uses default Zenodo URL.
+                                       Format: https://zenodo.org/record/XXXXXX/files/pubchem_id.db
+        
+        Returns:
+            str: Path to the downloaded database file
+        
+        Example:
+            >>> from provesid import PubChemID
+            >>> # Download to default location
+            >>> PubChemID.download_database()
+            >>> 
+            >>> # Or specify custom location
+            >>> PubChemID.download_database(db_path='/path/to/pubchem_id.db')
+        
+        Note:
+            After uploading to Zenodo, update the zenodo_url parameter with the actual URL.
+            The database file is ~2.2 GB, so download may take several minutes.
+        """
+        import requests
+        from .utils import data_path
+        from tqdm import tqdm
+        
+        if db_path is None:
+            db_path = os.path.join(data_path(), 'pubchem_id.db')
+        
+        if zenodo_url is None:
+            zenodo_url = "https://zenodo.org/records/18173204/files/pubchem_id.db"
+        
+        print(f"Downloading PubChem ID database from Zenodo...")
+        print(f"URL: {zenodo_url}")
+        print(f"Destination: {db_path}")
+        print("This is a large file (~2.2 GB), please be patient...")
+        
+        # Create temporary file path
+        temp_path = db_path + '.tmp'
+        
+        try:
+            # Download with progress bar
+            response = requests.get(zenodo_url, stream=True)
+            response.raise_for_status()
+            
+            total_size = int(response.headers.get('content-length', 0))
+            
+            with open(temp_path, 'wb') as f:
+                with tqdm(total=total_size, unit='B', unit_scale=True, desc="Downloading") as pbar:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            pbar.update(len(chunk))
+            
+            print("Download complete. Verifying...")
+            
+            # Verify it's a valid SQLite database
+            import sqlite3
+            try:
+                conn = sqlite3.connect(temp_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM compounds")
+                count = cursor.fetchone()[0]
+                conn.close()
+                print(f"✓ Database verified: {count:,} compounds")
+            except Exception as e:
+                raise RuntimeError(f"Downloaded file is not a valid database: {e}")
+            
+            # Move to final location
+            if os.path.exists(db_path):
+                os.remove(db_path)
+            os.rename(temp_path, db_path)
+            
+            print(f"✓ Database ready at {db_path}")
+            return db_path
+            
+        except requests.exceptions.RequestException as e:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise RuntimeError(f"Failed to download database: {e}")
+        except Exception as e:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise RuntimeError(f"Error during download: {e}")
+    
+    def get_by_cid(self, cid: int) -> Optional[Dict[str, Any]]:
+        """
+        Get compound information by PubChem CID.
+        
+        Args:
+            cid (int): PubChem Compound ID
+        
+        Returns:
+            dict: Compound information including identifiers and properties, or None if not found
+        
+        Example:
+            >>> db = PubChemID()
+            >>> result = db.get_by_cid(2244)  # Aspirin
+            >>> print(result['cmpdname'])
+            'Aspirin'
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM compounds WHERE cid = ?
+        """, (cid,))
+        
+        row = cursor.fetchone()
+        if not row:
+            return None
+        
+        result = dict(row)
+        
+        # Add CAS numbers
+        cursor.execute("""
+            SELECT cas FROM cas_numbers WHERE cid = ?
+        """, (cid,))
+        result['cas_numbers'] = [r[0] for r in cursor.fetchall()]
+        
+        # Add synonyms
+        cursor.execute("""
+            SELECT synonym FROM synonyms WHERE cid = ? LIMIT 100
+        """, (cid,))
+        result['synonyms'] = [r[0] for r in cursor.fetchall()]
+        
+        return result
+    
+    def get_by_cas(self, cas: str) -> Optional[Dict[str, Any]]:
+        """
+        Get compound information by CAS Registry Number.
+        
+        Args:
+            cas (str): CAS Registry Number (e.g., "50-78-2")
+        
+        Returns:
+            dict: Compound information, or None if not found
+        
+        Example:
+            >>> db = PubChemID()
+            >>> result = db.get_by_cas("50-78-2")  # Aspirin
+            >>> print(result['inchi'])
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT cid FROM cas_numbers WHERE cas = ? LIMIT 1
+        """, (cas,))
+        
+        row = cursor.fetchone()
+        if not row:
+            return None
+        
+        return self.get_by_cid(row[0])
+    
+    def get_by_inchikey(self, inchikey: str) -> Optional[Dict[str, Any]]:
+        """
+        Get compound information by InChIKey.
+        
+        Args:
+            inchikey (str): Standard InChIKey (27 characters)
+        
+        Returns:
+            dict: Compound information, or None if not found
+        
+        Example:
+            >>> db = PubChemID()
+            >>> result = db.get_by_inchikey("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")
+            >>> print(result['cmpdname'])
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM compounds WHERE inchikey = ?
+        """, (inchikey,))
+        
+        row = cursor.fetchone()
+        if not row:
+            return None
+        
+        cid = row['cid']
+        return self.get_by_cid(cid)
+    
+    def get_by_inchi(self, inchi: str) -> Optional[Dict[str, Any]]:
+        """
+        Get compound information by InChI string.
+        
+        Args:
+            inchi (str): Standard InChI string
+        
+        Returns:
+            dict: Compound information, or None if not found
+        
+        Example:
+            >>> db = PubChemID()
+            >>> result = db.get_by_inchi("InChI=1S/C9H8O4/c1-6(10)...")
+            >>> print(result['cmpdname'])
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM compounds WHERE inchi = ?
+        """, (inchi,))
+        
+        row = cursor.fetchone()
+        if not row:
+            return None
+        
+        cid = row['cid']
+        return self.get_by_cid(cid)
+    
+    def search_by_name(self, name: str, exact: bool = False, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Search compounds by name or synonym.
+        
+        Args:
+            name (str): Compound name or synonym to search for
+            exact (bool): If True, exact match only. If False, partial match (case-insensitive)
+            limit (int): Maximum number of results to return
+        
+        Returns:
+            list: List of matching compounds
+        
+        Example:
+            >>> db = PubChemID()
+            >>> results = db.search_by_name("aspirin", exact=False)
+            >>> for r in results:
+            ...     print(r['cid'], r['cmpdname'])
+        """
+        cursor = self.conn.cursor()
+        
+        results = []
+        
+        if exact:
+            # Search in main compound name
+            cursor.execute("""
+                SELECT cid FROM compounds WHERE cmpdname = ? LIMIT ?
+            """, (name, limit))
+            
+            cids = [r[0] for r in cursor.fetchall()]
+            
+            # Also search in synonyms
+            if len(cids) < limit:
+                cursor.execute("""
+                    SELECT DISTINCT cid FROM synonyms WHERE synonym = ? LIMIT ?
+                """, (name, limit - len(cids)))
+                cids.extend([r[0] for r in cursor.fetchall()])
+        else:
+            # Partial match with LIKE
+            search_term = f"%{name}%"
+            
+            # Search in main compound name
+            cursor.execute("""
+                SELECT cid FROM compounds WHERE cmpdname LIKE ? LIMIT ?
+            """, (search_term, limit))
+            
+            cids = [r[0] for r in cursor.fetchall()]
+            
+            # Also search in synonyms
+            if len(cids) < limit:
+                cursor.execute("""
+                    SELECT DISTINCT cid FROM synonyms WHERE synonym LIKE ? LIMIT ?
+                """, (search_term, limit - len(cids)))
+                cids.extend([r[0] for r in cursor.fetchall()])
+        
+        # Get full compound info for each CID
+        for cid in cids[:limit]:
+            compound = self.get_by_cid(cid)
+            if compound:
+                results.append(compound)
+        
+        return results
+    
+    def search_by_formula(self, formula: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Search compounds by molecular formula.
+        
+        Args:
+            formula (str): Molecular formula (e.g., "C9H8O4")
+            limit (int): Maximum number of results to return
+        
+        Returns:
+            list: List of matching compounds
+        
+        Example:
+            >>> db = PubChemID()
+            >>> results = db.search_by_formula("C9H8O4")
+            >>> print(f"Found {len(results)} compounds with formula C9H8O4")
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT cid FROM compounds WHERE mf = ? LIMIT ?
+        """, (formula, limit))
+        
+        results = []
+        for row in cursor.fetchall():
+            compound = self.get_by_cid(row[0])
+            if compound:
+                results.append(compound)
+        
+        return results
+    
+    # Conversion methods
+    
+    def cas_to_cid(self, cas: str) -> Optional[int]:
+        """Convert CAS number to PubChem CID."""
+        result = self.get_by_cas(cas)
+        return result['cid'] if result else None
+    
+    def cas_to_inchi(self, cas: str) -> Optional[str]:
+        """Convert CAS number to InChI."""
+        result = self.get_by_cas(cas)
+        return result['inchi'] if result else None
+    
+    def cas_to_inchikey(self, cas: str) -> Optional[str]:
+        """Convert CAS number to InChIKey."""
+        result = self.get_by_cas(cas)
+        return result['inchikey'] if result else None
+    
+    def cas_to_smiles(self, cas: str) -> Optional[str]:
+        """Convert CAS number to SMILES."""
+        result = self.get_by_cas(cas)
+        return result['smiles'] if result else None
+    
+    def inchikey_to_cid(self, inchikey: str) -> Optional[int]:
+        """Convert InChIKey to PubChem CID."""
+        result = self.get_by_inchikey(inchikey)
+        return result['cid'] if result else None
+    
+    def inchikey_to_cas(self, inchikey: str) -> Optional[List[str]]:
+        """Convert InChIKey to CAS number(s)."""
+        result = self.get_by_inchikey(inchikey)
+        return result['cas_numbers'] if result else None
+    
+    def inchi_to_cid(self, inchi: str) -> Optional[int]:
+        """Convert InChI to PubChem CID."""
+        result = self.get_by_inchi(inchi)
+        return result['cid'] if result else None
+    
+    def inchi_to_cas(self, inchi: str) -> Optional[List[str]]:
+        """Convert InChI to CAS number(s)."""
+        result = self.get_by_inchi(inchi)
+        return result['cas_numbers'] if result else None
+    
+    def cid_to_cas(self, cid: int) -> Optional[List[str]]:
+        """Convert PubChem CID to CAS number(s)."""
+        result = self.get_by_cid(cid)
+        return result['cas_numbers'] if result else None
+    
+    def cid_to_inchikey(self, cid: int) -> Optional[str]:
+        """Convert PubChem CID to InChIKey."""
+        result = self.get_by_cid(cid)
+        return result['inchikey'] if result else None
+    
+    def cid_to_inchi(self, cid: int) -> Optional[str]:
+        """Convert PubChem CID to InChI."""
+        result = self.get_by_cid(cid)
+        return result['inchi'] if result else None
+    
+    # Batch conversion methods
+    
+    def batch_cas_to_cid(self, cas_list: List[str]) -> Dict[str, Optional[int]]:
+        """
+        Convert multiple CAS numbers to CIDs.
+        
+        Args:
+            cas_list (list): List of CAS numbers
+        
+        Returns:
+            dict: Mapping of CAS -> CID (None if not found)
+        
+        Example:
+            >>> db = PubChemID()
+            >>> results = db.batch_cas_to_cid(["50-78-2", "50-00-0"])
+            >>> print(results)
+            {'50-78-2': 2244, '50-00-0': 712}
+        """
+        results = {}
+        for cas in cas_list:
+            results[cas] = self.cas_to_cid(cas)
+        return results
+    
+    def batch_cas_to_inchikey(self, cas_list: List[str]) -> Dict[str, Optional[str]]:
+        """Convert multiple CAS numbers to InChIKeys."""
+        results = {}
+        for cas in cas_list:
+            results[cas] = self.cas_to_inchikey(cas)
+        return results
+    
+    def batch_cid_to_cas(self, cid_list: List[int]) -> Dict[int, Optional[List[str]]]:
+        """Convert multiple CIDs to CAS numbers."""
+        results = {}
+        for cid in cid_list:
+            results[cid] = self.cid_to_cas(cid)
+        return results
+    
+    def get_by_cas_batch(self, cas_list: List[str]) -> 'pd.DataFrame':
+        """
+        Get complete compound information for multiple CAS numbers as a DataFrame.
+        
+        This method returns all available data including identifiers, chemical properties,
+        and physical properties for each CAS number.
+        
+        Args:
+            cas_list (list): List of CAS Registry Numbers
+        
+        Returns:
+            pandas.DataFrame: DataFrame with columns for all compound properties including:
+                             cid, cas, inchi, inchikey, smiles, cmpdname, iupacname, mf, mw,
+                             polararea, complexity, xlogp, heavycnt, hbonddonor, hbondacc,
+                             rotbonds, exactmass, charge, cidcdate
+        
+        Example:
+            >>> db = PubChemID()
+            >>> cas_list = ["50-78-2", "50-00-0", "64-17-5"]
+            >>> df = db.get_by_cas_batch(cas_list)
+            >>> print(df[['cas', 'cmpdname', 'mf', 'mw']])
+        """
+        
+        rows = []
+        for cas in cas_list:
+            result = self.get_by_cas(cas)
+            if result:
+                # Create row with all properties
+                row = {
+                    'cid': result.get('cid'),
+                    'cas': cas,
+                    'inchi': result.get('inchi', ''),
+                    'inchikey': result.get('inchikey', ''),
+                    'smiles': result.get('smiles', ''),
+                    'cmpdname': result.get('cmpdname', ''),
+                    'iupacname': result.get('iupacname', ''),
+                    'mf': result.get('mf', ''),
+                    'mw': result.get('mw'),
+                    'polararea': result.get('polararea'),
+                    'complexity': result.get('complexity'),
+                    'xlogp': result.get('xlogp'),
+                    'heavycnt': result.get('heavycnt'),
+                    'hbonddonor': result.get('hbonddonor'),
+                    'hbondacc': result.get('hbondacc'),
+                    'rotbonds': result.get('rotbonds'),
+                    'exactmass': result.get('exactmass'),
+                    'charge': result.get('charge'),
+                    'cidcdate': result.get('cidcdate', '')
+                }
+                rows.append(row)
+        
+        if not rows:
+            # Return empty DataFrame with correct columns
+            return pd.DataFrame(columns=[
+                'cid', 'cas', 'inchi', 'inchikey', 'smiles', 'cmpdname', 'iupacname',
+                'mf', 'mw', 'polararea', 'complexity', 'xlogp', 'heavycnt',
+                'hbonddonor', 'hbondacc', 'rotbonds', 'exactmass', 'charge', 'cidcdate'
+            ])
+        
+        return pd.DataFrame(rows)
+    
+    def get_id_table_from_cas(self, cas: str) -> Optional['pd.DataFrame']:
+        """
+        Get identifier table for a CAS number (similar to ZeroPM format).
+        
+        Args:
+            cas (str): CAS Registry Number
+        
+        Returns:
+            pandas.DataFrame: Table with columns [cid, cas, inchi, inchikey, smiles, 
+                             cmpdname, mf, mw] or None if not found
+        
+        Example:
+            >>> db = PubChemID()
+            >>> df = db.get_id_table_from_cas("50-78-2")
+            >>> print(df)
+        """
+        import pandas as pd
+        
+        result = self.get_by_cas(cas)
+        if not result:
+            return None
+        
+        # Create DataFrame with main identifiers and properties
+        df = pd.DataFrame([{
+            'cid': result['cid'],
+            'cas': cas,
+            'inchi': result.get('inchi', ''),
+            'inchikey': result.get('inchikey', ''),
+            'smiles': result.get('smiles', ''),
+            'cmpdname': result.get('cmpdname', ''),
+            'mf': result.get('mf', ''),
+            'mw': result.get('mw', None)
+        }])
+        
+        return df
+    
+    def batch_get_id_table_from_cas(self, cas_list: List[str]) -> 'pd.DataFrame':
+        """
+        Get identifier tables for multiple CAS numbers.
+        
+        Args:
+            cas_list (list): List of CAS Registry Numbers
+        
+        Returns:
+            pandas.DataFrame: Combined table for all CAS numbers
+        
+        Example:
+            >>> db = PubChemID()
+            >>> df = db.batch_get_id_table_from_cas(["50-78-2", "50-00-0"])
+            >>> print(df)
+        """
+        import pandas as pd
+        
+        tables = []
+        for cas in cas_list:
+            df = self.get_id_table_from_cas(cas)
+            if df is not None:
+                tables.append(df)
+        
+        if not tables:
+            # Return empty DataFrame with correct columns
+            return pd.DataFrame(columns=['cid', 'cas', 'inchi', 'inchikey', 
+                                        'smiles', 'cmpdname', 'mf', 'mw'])
+        
+        return pd.concat(tables, ignore_index=True)
+    
+    def get_stats(self) -> Dict[str, int]:
+        """
+        Get database statistics.
+        
+        Returns:
+            dict: Statistics about the database
+        
+        Example:
+            >>> db = PubChemID()
+            >>> stats = db.get_stats()
+            >>> print(f"Total compounds: {stats['total_compounds']:,}")
+        """
+        cursor = self.conn.cursor()
+        
+        cursor.execute("SELECT COUNT(*) FROM compounds")
+        total_compounds = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM cas_numbers")
+        total_cas = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(DISTINCT cid) FROM cas_numbers")
+        compounds_with_cas = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM synonyms")
+        total_synonyms = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM compounds WHERE inchikey IS NOT NULL AND inchikey != ''")
+        compounds_with_inchikey = cursor.fetchone()[0]
+        
+        return {
+            'total_compounds': total_compounds,
+            'total_cas_numbers': total_cas,
+            'compounds_with_cas': compounds_with_cas,
+            'total_synonyms': total_synonyms,
+            'compounds_with_inchikey': compounds_with_inchikey,
+            'database_path': self.db_path,
+            'database_size_mb': os.path.getsize(self.db_path) / (1024**2)
+        }

@@ -209,3 +209,13 @@ __marimo__/
 # ZeroPM database files (downloaded on demand)
 src/provesid/data/*.sqlite
 src/provesid/data/*.sqlite.tmp
+
+# chebi sdf files
+src/provesid/data/*.sdf
+src/provesid/data/*.sdf.gz
+src/provesid/data/*.sdf.tmp
+src/provesid/data/*.sdf.index.pkl
+
+# pubchem database files
+src/provesid/data/pubchem_id.db
+src/provesid/data/PubChem_CAS_*.csv

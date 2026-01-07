@@ -5,6 +5,7 @@ import logging
 from rapidfuzz import process, fuzz, utils
 import requests
 from tqdm import tqdm
+import pandas as pd
 
 # Try relative import first, fall back to direct import for testing
 from .utils import data_path as ZeroPM_path
@@ -555,6 +556,130 @@ class ZeroPM:
             return None
         
         return self.get_cas_from_inchi(inchi)
+    
+    def get_id_table_from_cas(self, cas):
+        """
+        Returns a pandas DataFrame containing all identifiers for a given CAS number.
+        
+        This method retrieves all query_ids associated with the CAS number, then for each query_id,
+        it retrieves all associated inchi_ids and their corresponding InChI and InChIKey values.
+        Synonyms (chemical names) are also included.
+        
+        Parameters
+        ----------
+        cas : str
+            CAS Registry Number
+            
+        Returns
+        -------
+        pandas.DataFrame
+            DataFrame with columns: 'cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'synonyms'
+            Returns None if the CAS number is not found in the database.
+            
+        Examples
+        --------
+        >>> zpm = ZeroPM()
+        >>> df = zpm.get_id_table_from_cas("50-00-0")
+        >>> print(df)
+        """
+        # Get all query_ids for this CAS (using fetchall in case there are multiple)
+        self.cursor.execute("""
+            SELECT query_id 
+            FROM api_ready_query 
+            WHERE query = ? AND type = 'CAS Registry Number'
+        """, (cas,))
+        query_ids = [row[0] for row in self.cursor.fetchall()]
+        
+        if not query_ids:
+            logging.warning(f"CAS number {cas} not found in database")
+            return None
+        
+        # Get synonyms for this CAS
+        synonyms = self.get_names(cas)
+        synonyms_str = "; ".join(synonyms) if synonyms else ""
+        
+        # Collect all data
+        rows = []
+        for query_id in query_ids:
+            # Get all inchi_ids for this query_id
+            inchi_ids, ranks = self.get_inchi_id(query_id)
+            
+            if not inchi_ids:
+                # If no inchi_ids found, still add a row with the query_id
+                rows.append({
+                    'cas': cas,
+                    'query_id': query_id,
+                    'inchi_id': None,
+                    'rank': None,
+                    'inchi': None,
+                    'inchikey': None,
+                    'synonyms': synonyms_str
+                })
+            else:
+                # For each inchi_id, get the inchi and inchikey
+                for inchi_id, rank in zip(inchi_ids, ranks):
+                    inchi, inchikey = self.get_inchi(inchi_id)
+                    rows.append({
+                        'cas': cas,
+                        'query_id': query_id,
+                        'inchi_id': inchi_id,
+                        'rank': rank,
+                        'inchi': inchi,
+                        'inchikey': inchikey,
+                        'synonyms': synonyms_str
+                    })
+        
+        # Create DataFrame
+        df = pd.DataFrame(rows)
+        return df
+    
+    def batch_get_id_table_from_cas(self, cas_list):
+        """
+        Returns a pandas DataFrame containing all identifiers for a list of CAS numbers.
+        
+        This method calls get_id_table_from_cas for each CAS number in the list and
+        combines the results into a single DataFrame. CAS numbers not found in the
+        database are logged but skipped in the output.
+        
+        Parameters
+        ----------
+        cas_list : list of str
+            List of CAS Registry Numbers
+            
+        Returns
+        -------
+        pandas.DataFrame
+            Combined DataFrame with columns: 'cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'synonyms'
+            Returns an empty DataFrame if no CAS numbers are found in the database.
+            
+        Examples
+        --------
+        >>> zpm = ZeroPM()
+        >>> cas_numbers = ["50-00-0", "50-78-2", "64-17-5"]  # formaldehyde, aspirin, ethanol
+        >>> df = zpm.batch_get_id_table_from_cas(cas_numbers)
+        >>> print(df)
+        >>> # Group by CAS to see counts
+        >>> print(df.groupby('cas').size())
+        """
+        if not cas_list:
+            logging.warning("Empty CAS list provided")
+            return pd.DataFrame(columns=['cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'synonyms'])
+        
+        # Collect DataFrames for each CAS
+        dataframes = []
+        for cas in cas_list:
+            df = self.get_id_table_from_cas(cas)
+            if df is not None:
+                dataframes.append(df)
+        
+        # Combine all DataFrames
+        if not dataframes:
+            logging.warning("None of the provided CAS numbers were found in the database")
+            return pd.DataFrame(columns=['cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'synonyms'])
+        
+        # Concatenate all DataFrames and reset index
+        combined_df = pd.concat(dataframes, ignore_index=True)
+        return combined_df
     
     # ==================== Performance Enhancement Methods ====================
     

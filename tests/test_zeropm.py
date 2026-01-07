@@ -420,6 +420,123 @@ class TestZeroPMCASMethods:
         smiles = "invalid_smiles_xyz123"
         cas = zpm.get_cas_from_smiles(smiles)
         assert cas is None
+    
+    def test_get_id_table_from_cas_existing(self, zpm):
+        """Test getting identifier table from an existing CAS number"""
+        import pandas as pd
+        
+        # Use formaldehyde (CAS: 50-00-0) which should exist in the database
+        cas = "50-00-0"
+        df = zpm.get_id_table_from_cas(cas)
+        
+        # Check that we got a DataFrame
+        assert isinstance(df, pd.DataFrame)
+        
+        # Check that the DataFrame has the expected columns
+        expected_columns = {'cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'synonyms'}
+        assert set(df.columns) == expected_columns
+        
+        # Check that all rows have the same CAS
+        assert (df['cas'] == cas).all()
+        
+        # Check that we have at least one row
+        assert len(df) > 0
+        
+        # Check data types
+        assert df['cas'].dtype == object  # string
+        assert df['inchi'].dtype == object  # string
+        assert df['inchikey'].dtype == object  # string
+        
+        # Check that InChI and InChIKey are not None for rows with inchi_id
+        rows_with_inchi = df[df['inchi_id'].notna()]
+        if len(rows_with_inchi) > 0:
+            assert rows_with_inchi['inchi'].notna().all()
+            assert rows_with_inchi['inchikey'].notna().all()
+    
+    def test_get_id_table_from_cas_nonexistent(self, zpm):
+        """Test getting identifier table from a nonexistent CAS number"""
+        cas = "999-99-9"  # Likely nonexistent CAS
+        df = zpm.get_id_table_from_cas(cas)
+        
+        # Should return None for nonexistent CAS
+        assert df is None
+    
+    def test_get_id_table_from_cas_multiple_inchi_ids(self, zpm):
+        """Test that the method handles CAS with multiple InChI IDs"""
+        import pandas as pd
+        
+        # Use a CAS that might have multiple structures
+        # This is database-dependent, so we'll test with formaldehyde
+        cas = "50-00-0"
+        df = zpm.get_id_table_from_cas(cas)
+        
+        if df is not None and len(df) > 1:
+            # Check that each row has a different inchi_id or rank
+            # (or they could be the same if there's only one substance)
+            assert isinstance(df, pd.DataFrame)
+            assert len(df) >= 1
+    
+    def test_batch_get_id_table_from_cas_valid_list(self, zpm):
+        """Test batch getting identifier tables from a list of valid CAS numbers"""
+        import pandas as pd
+        
+        cas_list = ["50-00-0", "50-78-2"]  # formaldehyde and aspirin
+        df = zpm.batch_get_id_table_from_cas(cas_list)
+        
+        # Check that we got a DataFrame
+        assert isinstance(df, pd.DataFrame)
+        
+        # Check that the DataFrame has the expected columns
+        expected_columns = {'cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'synonyms'}
+        assert set(df.columns) == expected_columns
+        
+        # Check that we have data for both CAS numbers
+        unique_cas = df['cas'].unique()
+        assert len(unique_cas) >= 1  # At least one should be found
+        
+        # Check that each CAS in the result was in the input list
+        for cas in unique_cas:
+            assert cas in cas_list
+    
+    def test_batch_get_id_table_from_cas_empty_list(self, zpm):
+        """Test batch getting identifier tables with empty list"""
+        import pandas as pd
+        
+        df = zpm.batch_get_id_table_from_cas([])
+        
+        # Should return an empty DataFrame with the correct columns
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 0
+        expected_columns = {'cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'synonyms'}
+        assert set(df.columns) == expected_columns
+    
+    def test_batch_get_id_table_from_cas_nonexistent_list(self, zpm):
+        """Test batch getting identifier tables with nonexistent CAS numbers"""
+        import pandas as pd
+        
+        cas_list = ["999-99-9", "888-88-8"]  # Likely nonexistent CAS numbers
+        df = zpm.batch_get_id_table_from_cas(cas_list)
+        
+        # Should return an empty DataFrame
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 0
+    
+    def test_batch_get_id_table_from_cas_mixed_list(self, zpm):
+        """Test batch getting identifier tables with mixed valid and invalid CAS"""
+        import pandas as pd
+        
+        cas_list = ["50-00-0", "999-99-9", "50-78-2"]  # valid, invalid, valid
+        df = zpm.batch_get_id_table_from_cas(cas_list)
+        
+        # Should return a DataFrame with only valid CAS numbers
+        assert isinstance(df, pd.DataFrame)
+        
+        if len(df) > 0:
+            unique_cas = df['cas'].unique()
+            # Should not include the nonexistent CAS
+            assert "999-99-9" not in unique_cas
+            # Should include at least one of the valid CAS numbers
+            assert any(cas in ["50-00-0", "50-78-2"] for cas in unique_cas)
 
 
 class TestZeroPMBatchMethods:

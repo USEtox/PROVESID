@@ -287,3 +287,158 @@ class TestPubChemIDBatchOperations:
         assert "50-78-2" in df['cas'].tolist()
         assert "50-00-0" in df['cas'].tolist()
         assert "99999-99-9" not in df['cas'].tolist()
+
+
+class TestPubChemIDCASConversionMethods:
+    """Test new CAS conversion methods (smiles_to_cas, name_to_cas, formula_to_cas)."""
+    
+    def test_smiles_to_cas(self, pubchem_id):
+        """Test converting SMILES to CAS."""
+        # Test with simple molecules
+        # Methane
+        cas_list = pubchem_id.smiles_to_cas("C")
+        if cas_list:
+            assert isinstance(cas_list, list)
+            assert len(cas_list) > 0
+            assert all(isinstance(cas, str) for cas in cas_list)
+    
+    def test_smiles_to_cas_aspirin(self, pubchem_id):
+        """Test converting aspirin SMILES to CAS."""
+        # Aspirin SMILES
+        cas_list = pubchem_id.smiles_to_cas("CC(=O)OC1=CC=CC=C1C(=O)O")
+        if cas_list:
+            assert isinstance(cas_list, list)
+            # Should include aspirin CAS
+            assert "50-78-2" in cas_list
+    
+    def test_smiles_to_cas_invalid(self, pubchem_id):
+        """Test converting invalid SMILES."""
+        cas_list = pubchem_id.smiles_to_cas("INVALID_SMILES_123")
+        assert cas_list is None
+    
+    def test_name_to_cas_exact(self, pubchem_id):
+        """Test converting chemical name to CAS (exact match)."""
+        # Search for aspirin (case sensitive exact match may not work)
+        # Try with proper capitalization
+        cas_list = pubchem_id.name_to_cas("Aspirin", exact=False)
+        if cas_list:
+            assert isinstance(cas_list, list)
+            assert len(cas_list) > 0
+            # Should include aspirin CAS
+            assert "50-78-2" in cas_list
+    
+    def test_name_to_cas_nonexistent(self, pubchem_id):
+        """Test converting non-existent name to CAS."""
+        cas_list = pubchem_id.name_to_cas("NonexistentChemical12345XYZ")
+        assert cas_list is None
+    
+    def test_formula_to_cas(self, pubchem_id):
+        """Test converting molecular formula to CAS."""
+        # Water
+        cas_list = pubchem_id.formula_to_cas("H2O")
+        if cas_list:
+            assert isinstance(cas_list, list)
+            assert len(cas_list) > 0
+            # Should be sorted
+            assert cas_list == sorted(cas_list)
+    
+    def test_formula_to_cas_common_formula(self, pubchem_id):
+        """Test converting common formula (should return multiple)."""
+        # Aspirin formula
+        cas_list = pubchem_id.formula_to_cas("C9H8O4")
+        if cas_list:
+            assert isinstance(cas_list, list)
+            assert len(cas_list) > 0
+            # Should include aspirin
+            assert "50-78-2" in cas_list
+    
+    def test_formula_to_cas_nonexistent(self, pubchem_id):
+        """Test converting non-existent formula."""
+        cas_list = pubchem_id.formula_to_cas("Zr999Xe999")
+        assert cas_list is None
+    
+    def test_formula_to_cas_limit(self, pubchem_id):
+        """Test formula conversion with limit parameter."""
+        # Use a common formula
+        cas_list = pubchem_id.formula_to_cas("CH4O", limit=5)
+        if cas_list:
+            # Due to aggregation, may have more than 5 CAS numbers
+            # but we requested at most 5 compounds
+            assert isinstance(cas_list, list)
+    
+    def test_batch_smiles_to_cas(self, pubchem_id):
+        """Test batch SMILES to CAS conversion."""
+        smiles_list = ["C", "CO", "CCO"]
+        results = pubchem_id.batch_smiles_to_cas(smiles_list)
+        
+        assert isinstance(results, dict)
+        assert len(results) == 3
+        
+        # Check all SMILES are in results
+        for smiles in smiles_list:
+            assert smiles in results
+            # Results can be None or list
+            assert results[smiles] is None or isinstance(results[smiles], list)
+    
+    def test_batch_smiles_to_cas_empty(self, pubchem_id):
+        """Test batch SMILES conversion with empty list."""
+        results = pubchem_id.batch_smiles_to_cas([])
+        assert isinstance(results, dict)
+        assert len(results) == 0
+    
+    def test_batch_name_to_cas(self, pubchem_id):
+        """Test batch name to CAS conversion."""
+        names = ["aspirin", "caffeine", "glucose"]
+        results = pubchem_id.batch_name_to_cas(names, exact=False)
+        
+        assert isinstance(results, dict)
+        assert len(results) == 3
+        
+        # Check all names are in results
+        for name in names:
+            assert name in results
+            # Results can be None or list
+            assert results[name] is None or isinstance(results[name], list)
+    
+    def test_batch_name_to_cas_empty(self, pubchem_id):
+        """Test batch name conversion with empty list."""
+        results = pubchem_id.batch_name_to_cas([])
+        assert isinstance(results, dict)
+        assert len(results) == 0
+    
+    def test_batch_formula_to_cas(self, pubchem_id):
+        """Test batch formula to CAS conversion."""
+        formulas = ["H2O", "CH4", "C9H8O4"]
+        results = pubchem_id.batch_formula_to_cas(formulas)
+        
+        assert isinstance(results, dict)
+        assert len(results) == 3
+        
+        # Check all formulas are in results
+        for formula in formulas:
+            assert formula in results
+            # Results can be None or list
+            assert results[formula] is None or isinstance(results[formula], list)
+    
+    def test_batch_formula_to_cas_empty(self, pubchem_id):
+        """Test batch formula conversion with empty list."""
+        results = pubchem_id.batch_formula_to_cas([])
+        assert isinstance(results, dict)
+        assert len(results) == 0
+    
+    def test_smiles_to_cas_integration(self, pubchem_id):
+        """Integration test: SMILES -> CAS -> back to SMILES."""
+        # Start with a SMILES
+        original_smiles = "CCO"  # Ethanol
+        
+        # Convert to CAS
+        cas_list = pubchem_id.smiles_to_cas(original_smiles)
+        if cas_list:
+            # Convert first CAS back to SMILES
+            smiles_result = pubchem_id.cas_to_smiles(cas_list[0])
+            
+            # SMILES might not be identical due to canonicalization
+            # but should be valid
+            if smiles_result:
+                assert isinstance(smiles_result, str)
+                assert len(smiles_result) > 0

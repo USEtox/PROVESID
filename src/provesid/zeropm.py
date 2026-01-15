@@ -21,9 +21,9 @@ class ZeroPM:
     """
     
     # Default download URL for the ZeroPM database
-    DEFAULT_DB_URL = "https://github.com/ZeroPM-H2020/global-chemical-inventory-database/raw/refs/heads/main/zeropm-v0-0-3.sqlite"
+    DEFAULT_DB_URL = "https://github.com/ZeroPM-H2020/global-chemical-inventory-database/raw/refs/heads/main/zeropm-v0-0-4.sqlite"
     
-    def __init__(self, db_name='zeropm-v0-0-3.sqlite', auto_download=True, db_url=None):
+    def __init__(self, db_name='zeropm-v0-0-4.sqlite', auto_download=True, db_url=None):
         """
         Initialize connection to the ZeroPM SQLite database.
         
@@ -557,13 +557,209 @@ class ZeroPM:
         
         return self.get_cas_from_inchi(inchi)
     
+    def get_cas_from_name(self, name):
+        """
+        Returns the CAS number(s) associated with a chemical name.
+        
+        This method performs an exact match search for the chemical name in the database.
+        For fuzzy matching, use query_similar_name() first to get query_ids.
+        
+        Parameters
+        ----------
+        name : str
+            Chemical name (exact match)
+            
+        Returns
+        -------
+        str, list, or None
+            CAS number, list of CAS numbers, or None if not found
+            
+        Examples
+        --------
+        >>> zpm = ZeroPM()
+        >>> cas = zpm.get_cas_from_name("formaldehyde")
+        >>> print(cas)
+        """
+        # Get query_id for this name
+        query_id = self.query_name(name)
+        if query_id is None:
+            return None
+        
+        # Get inchi_ids for this query_id
+        inchi_ids, _ = self.get_inchi_id(query_id)
+        if not inchi_ids:
+            return None
+        
+        # Collect all CAS numbers for all inchi_ids
+        all_cas = set()
+        for inchi_id in inchi_ids:
+            # Get InChI for this inchi_id
+            inchi, _ = self.get_inchi(inchi_id)
+            if inchi:
+                cas_result = self.get_cas_from_inchi(inchi)
+                if cas_result:
+                    if isinstance(cas_result, list):
+                        all_cas.update(cas_result)
+                    else:
+                        all_cas.add(cas_result)
+        
+        if not all_cas:
+            return None
+        elif len(all_cas) == 1:
+            return list(all_cas)[0]
+        else:
+            return sorted(list(all_cas))
+    
+    def get_cas_from_formula(self, formula):
+        """
+        Returns CAS numbers for chemicals matching a molecular formula.
+        
+        Note: Molecular formulas are not unique identifiers - many different chemicals
+        can have the same formula (isomers). This method returns all CAS numbers
+        for chemicals matching the given formula.
+        
+        Parameters
+        ----------
+        formula : str
+            Molecular formula (e.g., "H2O", "C6H12O6", "CH2O")
+            
+        Returns
+        -------
+        list or None
+            List of CAS numbers matching the formula, or None if not found
+            
+        Warning
+        -------
+        This method can be slow as it needs to parse all InChI strings to extract
+        molecular formulas. Consider caching results for frequently used formulas.
+        
+        Examples
+        --------
+        >>> zpm = ZeroPM()
+        >>> cas_list = zpm.get_cas_from_formula("CH2O")  # Formaldehyde
+        >>> print(f"Found {len(cas_list)} chemicals with formula CH2O")
+        """
+        # Normalize formula (basic normalization - can be improved)
+        formula = formula.replace(" ", "")
+        
+        # Query all substances and check their formulas
+        # InChI format: InChI=1S/CH2O/c1-2/h1H2
+        # Formula is between the first two slashes
+        self.cursor.execute("""
+            SELECT DISTINCT s.inchi_id, s.inchi
+            FROM substances s
+            WHERE s.inchi IS NOT NULL
+        """)
+        
+        matching_inchi_ids = []
+        for inchi_id, inchi in self.cursor.fetchall():
+            try:
+                # Extract formula from InChI
+                # Format: InChI=1S/FORMULA/...
+                parts = inchi.split('/')
+                if len(parts) >= 2:
+                    inchi_formula = parts[1]
+                    if inchi_formula == formula:
+                        matching_inchi_ids.append(inchi_id)
+            except Exception:
+                continue
+        
+        if not matching_inchi_ids:
+            return None
+        
+        # Get all CAS numbers for matching inchi_ids
+        all_cas = set()
+        for inchi_id in matching_inchi_ids:
+            self.cursor.execute("""
+                SELECT DISTINCT aq.query
+                FROM api_results ar
+                JOIN api_ready_query aq ON ar.query_id = aq.query_id
+                WHERE ar.inchi_id = ? AND aq.type = 'CAS Registry Number'
+            """, (inchi_id,))
+            cas_results = [row[0] for row in self.cursor.fetchall()]
+            all_cas.update(cas_results)
+        
+        return sorted(list(all_cas)) if all_cas else None
+    
+    def batch_get_cas_from_smiles(self, smiles_list):
+        """
+        Get CAS numbers for multiple SMILES strings at once.
+        
+        Parameters
+        ----------
+        smiles_list : list of str
+            List of SMILES strings
+            
+        Returns
+        -------
+        dict
+            Dictionary mapping SMILES strings to CAS numbers (or None if not found)
+            
+        Examples
+        --------
+        >>> zpm = ZeroPM()
+        >>> smiles = ["C", "CC", "CCO"]  # methane, ethane, ethanol
+        >>> results = zpm.batch_get_cas_from_smiles(smiles)
+        >>> for smi, cas in results.items():
+        ...     print(f"{smi}: {cas}")
+        """
+        return {smiles: self.get_cas_from_smiles(smiles) for smiles in smiles_list}
+    
+    def batch_get_cas_from_name(self, name_list):
+        """
+        Get CAS numbers for multiple chemical names at once.
+        
+        Parameters
+        ----------
+        name_list : list of str
+            List of chemical names (exact match)
+            
+        Returns
+        -------
+        dict
+            Dictionary mapping chemical names to CAS numbers (or None if not found)
+            
+        Examples
+        --------
+        >>> zpm = ZeroPM()
+        >>> names = ["formaldehyde", "methanol", "ethanol"]
+        >>> results = zpm.batch_get_cas_from_name(names)
+        >>> for name, cas in results.items():
+        ...     print(f"{name}: {cas}")
+        """
+        return {name: self.get_cas_from_name(name) for name in name_list}
+    
+    def batch_get_cas_from_formula(self, formula_list):
+        """
+        Get CAS numbers for multiple molecular formulas at once.
+        
+        Parameters
+        ----------
+        formula_list : list of str
+            List of molecular formulas
+            
+        Returns
+        -------
+        dict
+            Dictionary mapping formulas to lists of CAS numbers
+            
+        Examples
+        --------
+        >>> zpm = ZeroPM()
+        >>> formulas = ["CH2O", "CH4O", "C2H6O"]
+        >>> results = zpm.batch_get_cas_from_formula(formulas)
+        >>> for formula, cas_list in results.items():
+        ...     print(f"{formula}: {len(cas_list) if cas_list else 0} chemicals")
+        """
+        return {formula: self.get_cas_from_formula(formula) for formula in formula_list}
+    
     def get_id_table_from_cas(self, cas):
         """
         Returns a pandas DataFrame containing all identifiers for a given CAS number.
         
         This method retrieves all query_ids associated with the CAS number, then for each query_id,
         it retrieves all associated inchi_ids and their corresponding InChI and InChIKey values.
-        Synonyms (chemical names) are also included.
+        Synonyms (chemical names) and data sources are also included.
         
         Parameters
         ----------
@@ -573,7 +769,7 @@ class ZeroPM:
         Returns
         -------
         pandas.DataFrame
-            DataFrame with columns: 'cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'synonyms'
+            DataFrame with columns: 'cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'zeropm_id', 'synonyms', 'sources'
             Returns None if the CAS number is not found in the database.
             
         Examples
@@ -598,6 +794,17 @@ class ZeroPM:
         synonyms = self.get_names(cas)
         synonyms_str = "; ".join(synonyms) if synonyms else ""
         
+        # Get sources for this CAS
+        self.cursor.execute("""
+            SELECT DISTINCT s.source_name
+            FROM inventory_summary issum
+            JOIN inventories inv ON issum.inventory_id = inv.inventory_id
+            JOIN sources s ON inv.source_id = s.source_id
+            WHERE issum.query_id IN ({})
+        """.format(','.join('?' * len(query_ids))), query_ids)
+        sources = [row[0] for row in self.cursor.fetchall()]
+        sources_str = "; ".join(sources) if sources else ""
+        
         # Collect all data
         rows = []
         for query_id in query_ids:
@@ -613,12 +820,23 @@ class ZeroPM:
                     'rank': None,
                     'inchi': None,
                     'inchikey': None,
-                    'synonyms': synonyms_str
+                    'zeropm_id': None,
+                    'synonyms': synonyms_str,
+                    'sources': sources_str
                 })
             else:
                 # For each inchi_id, get the inchi and inchikey
                 for inchi_id, rank in zip(inchi_ids, ranks):
                     inchi, inchikey = self.get_inchi(inchi_id)
+                    # Get zeropm_id for this inchi_id
+                    self.cursor.execute("""
+                        SELECT zeropm_id 
+                        FROM zeropm_chemicals 
+                        WHERE inchi_id = ?
+                    """, (inchi_id,))
+                    zeropm_result = self.cursor.fetchone()
+                    zeropm_id = zeropm_result[0] if zeropm_result else None
+                    
                     rows.append({
                         'cas': cas,
                         'query_id': query_id,
@@ -626,11 +844,108 @@ class ZeroPM:
                         'rank': rank,
                         'inchi': inchi,
                         'inchikey': inchikey,
-                        'synonyms': synonyms_str
+                        'zeropm_id': zeropm_id,
+                        'synonyms': synonyms_str,
+                        'sources': sources_str
                     })
         
         # Create DataFrame
         df = pd.DataFrame(rows)
+        # Convert zeropm_id to nullable integer type
+        if not df.empty and 'zeropm_id' in df.columns:
+            df['zeropm_id'] = df['zeropm_id'].astype('Int64')
+        return df
+    
+    def get_id_table_from_zeropm_id(self, zeropm_id):
+        """
+        Returns a pandas DataFrame containing all identifiers for a given zeropm_id.
+        
+        This method retrieves the inchi_id associated with the zeropm_id, then finds all
+        query_ids (CAS numbers) linked to that inchi_id and builds a comprehensive table
+        with InChI, InChIKey, synonyms, and data sources.
+        
+        Parameters
+        ----------
+        zeropm_id : int
+            ZeroPM identifier
+            
+        Returns
+        -------
+        pandas.DataFrame
+            DataFrame with columns: 'cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'zeropm_id', 'synonyms', 'sources'
+            Returns None if the zeropm_id is not found in the database.
+            
+        Examples
+        --------
+        >>> zpm = ZeroPM()
+        >>> df = zpm.get_id_table_from_zeropm_id(12345)
+        >>> print(df)
+        """
+        # Get inchi_id for this zeropm_id
+        self.cursor.execute("""
+            SELECT inchi_id 
+            FROM zeropm_chemicals 
+            WHERE zeropm_id = ?
+        """, (zeropm_id,))
+        result = self.cursor.fetchone()
+        
+        if not result:
+            logging.warning(f"zeropm_id {zeropm_id} not found in database")
+            return None
+        
+        inchi_id = result[0]
+        
+        # Get InChI and InChIKey
+        inchi, inchikey = self.get_inchi(inchi_id)
+        
+        # Get all query_ids (CAS numbers) associated with this inchi_id
+        self.cursor.execute("""
+            SELECT ar.query_id, ar.rank, aq.query
+            FROM api_results ar
+            JOIN api_ready_query aq ON ar.query_id = aq.query_id
+            WHERE ar.inchi_id = ? AND aq.type = 'CAS Registry Number'
+        """, (inchi_id,))
+        query_results = self.cursor.fetchall()
+        
+        if not query_results:
+            logging.warning(f"No CAS numbers found for zeropm_id {zeropm_id}")
+            return None
+        
+        # Collect all data
+        rows = []
+        for query_id, rank, cas in query_results:
+            # Get synonyms for this CAS
+            synonyms = self.get_names(cas)
+            synonyms_str = "; ".join(synonyms) if synonyms else ""
+            
+            # Get sources for this query_id
+            self.cursor.execute("""
+                SELECT DISTINCT s.source_name
+                FROM inventory_summary issum
+                JOIN inventories inv ON issum.inventory_id = inv.inventory_id
+                JOIN sources s ON inv.source_id = s.source_id
+                WHERE issum.query_id = ?
+            """, (query_id,))
+            sources = [row[0] for row in self.cursor.fetchall()]
+            sources_str = "; ".join(sources) if sources else ""
+            
+            rows.append({
+                'cas': cas,
+                'query_id': query_id,
+                'inchi_id': inchi_id,
+                'rank': rank,
+                'inchi': inchi,
+                'inchikey': inchikey,
+                'zeropm_id': zeropm_id,
+                'synonyms': synonyms_str,
+                'sources': sources_str
+            })
+        
+        # Create DataFrame
+        df = pd.DataFrame(rows)
+        # Convert zeropm_id to nullable integer type
+        if not df.empty and 'zeropm_id' in df.columns:
+            df['zeropm_id'] = df['zeropm_id'].astype('Int64')
         return df
     
     def batch_get_id_table_from_cas(self, cas_list):
@@ -649,7 +964,7 @@ class ZeroPM:
         Returns
         -------
         pandas.DataFrame
-            Combined DataFrame with columns: 'cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'synonyms'
+            Combined DataFrame with columns: 'cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'zeropm_id', 'synonyms', 'sources'
             Returns an empty DataFrame if no CAS numbers are found in the database.
             
         Examples
@@ -663,7 +978,7 @@ class ZeroPM:
         """
         if not cas_list:
             logging.warning("Empty CAS list provided")
-            return pd.DataFrame(columns=['cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'synonyms'])
+            return pd.DataFrame(columns=['cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'zeropm_id', 'synonyms', 'sources'])
         
         # Collect DataFrames for each CAS
         dataframes = []
@@ -675,9 +990,497 @@ class ZeroPM:
         # Combine all DataFrames
         if not dataframes:
             logging.warning("None of the provided CAS numbers were found in the database")
-            return pd.DataFrame(columns=['cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'synonyms'])
+            return pd.DataFrame(columns=['cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'zeropm_id', 'synonyms', 'sources'])
         
         # Concatenate all DataFrames and reset index
+        combined_df = pd.concat(dataframes, ignore_index=True)
+        return combined_df
+    
+    def batch_get_id_table_from_cas_filtered(self, cas_list, rank=None, have_zeropm_id=None):
+        """
+        Returns a filtered pandas DataFrame containing identifiers for a list of CAS numbers.
+        
+        This method calls batch_get_id_table_from_cas and applies optional filters to the results.
+        
+        Parameters
+        ----------
+        cas_list : list of str
+            List of CAS Registry Numbers
+        rank : int, optional
+            If specified, only include rows with this rank value (e.g., rank=1 for top results)
+            If None, no rank filtering is applied (default: None)
+        have_zeropm_id : bool, optional
+            If True, only include rows where zeropm_id is not None
+            If False, only include rows where zeropm_id is None
+            If None, no zeropm_id filtering is applied (default: None)
+            
+        Returns
+        -------
+        pandas.DataFrame
+            Filtered DataFrame with columns: 'cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'zeropm_id', 'synonyms', 'sources'
+            Returns an empty DataFrame if no CAS numbers match the filters.
+            
+        Examples
+        --------
+        >>> zpm = ZeroPM()
+        >>> cas_numbers = ["50-00-0", "50-78-2", "64-17-5"]
+        >>> # Get only rank=1 results with zeropm_id
+        >>> df = zpm.batch_get_id_table_from_cas_filtered(cas_numbers, rank=1, have_zeropm_id=True)
+        >>> print(df)
+        
+        See Also
+        --------
+        batch_get_id_table_from_cas : Returns all results without filtering
+        """
+        # Get the full id table
+        df = self.batch_get_id_table_from_cas(cas_list)
+        
+        # Return empty if no results
+        if df.empty:
+            return df
+        
+        # Apply rank filter if specified
+        if rank is not None:
+            df = df[df['rank'] == rank]
+        
+        # Apply zeropm_id filter if specified
+        if have_zeropm_id is not None:
+            if have_zeropm_id:
+                df = df[df['zeropm_id'].notna()]
+            else:
+                df = df[df['zeropm_id'].isna()]
+        
+        # Reset index
+        df = df.reset_index(drop=True)
+        
+        return df
+    
+    def get_id_table_from_inchi(self, inchi):
+        """
+        Returns a pandas DataFrame containing all identifiers for a given InChI.
+        
+        This method retrieves the inchi_id for the InChI, then finds all associated
+        query_ids and their CAS numbers. It also includes synonyms and sources.
+        
+        Parameters
+        ----------
+        inchi : str
+            InChI string
+            
+        Returns
+        -------
+        pandas.DataFrame
+            DataFrame with columns: 'inchi', 'inchikey', 'inchi_id', 'query_id', 'rank', 'cas', 'synonyms', 'sources'
+            Returns None if the InChI is not found in the database.
+            
+        Examples
+        --------
+        >>> zpm = ZeroPM()
+        >>> df = zpm.get_id_table_from_inchi("InChI=1S/CH2O/c1-2/h1H2")
+        >>> print(df)
+        """
+        # Get inchi_id and inchikey from InChI
+        self.cursor.execute("""
+            SELECT inchi_id, inchikey
+            FROM substances 
+            WHERE inchi = ?
+        """, (inchi,))
+        result = self.cursor.fetchone()
+        
+        if not result:
+            logging.warning(f"InChI {inchi} not found in database")
+            return None
+        
+        inchi_id, inchikey = result
+        
+        # Get all query_ids and ranks for this inchi_id
+        self.cursor.execute("""
+            SELECT DISTINCT ar.query_id, ar.rank
+            FROM api_results ar
+            WHERE ar.inchi_id = ?
+            ORDER BY ar.rank
+        """, (inchi_id,))
+        query_results = self.cursor.fetchall()
+        
+        if not query_results:
+            # If no query_ids found, still return basic info
+            return pd.DataFrame([{
+                'inchi': inchi,
+                'inchikey': inchikey,
+                'inchi_id': inchi_id,
+                'query_id': None,
+                'rank': None,
+                'cas': None,
+                'synonyms': '',
+                'sources': ''
+            }])
+        
+        # Get CAS numbers for these query_ids
+        rows = []
+        primary_cas = None
+        query_ids_list = [q[0] for q in query_results]
+        
+        # Get sources for all query_ids at once
+        if query_ids_list:
+            placeholders = ','.join('?' * len(query_ids_list))
+            self.cursor.execute(f"""
+                SELECT DISTINCT s.source_name
+                FROM inventory_summary issum
+                JOIN inventories inv ON issum.inventory_id = inv.inventory_id
+                JOIN sources s ON inv.source_id = s.source_id
+                WHERE issum.query_id IN ({placeholders})
+            """, query_ids_list)
+            sources = [row[0] for row in self.cursor.fetchall()]
+            sources_str = "; ".join(sources) if sources else ""
+        else:
+            sources_str = ""
+        
+        for query_id, rank in query_results:
+            # Get CAS number for this query_id
+            self.cursor.execute("""
+                SELECT query
+                FROM api_ready_query
+                WHERE query_id = ? AND type = 'CAS Registry Number'
+            """, (query_id,))
+            cas_result = self.cursor.fetchone()
+            cas = cas_result[0] if cas_result else None
+            
+            # Use first CAS as primary for synonyms
+            if cas and primary_cas is None:
+                primary_cas = cas
+            
+            rows.append({
+                'inchi': inchi,
+                'inchikey': inchikey,
+                'inchi_id': inchi_id,
+                'query_id': query_id,
+                'rank': rank,
+                'cas': cas,
+                'sources': sources_str
+            })
+        
+        # Get synonyms from primary CAS
+        synonyms_str = ''
+        if primary_cas:
+            synonyms = self.get_names(primary_cas)
+            synonyms_str = "; ".join(synonyms) if synonyms else ""
+        
+        # Add synonyms to all rows
+        for row in rows:
+            row['synonyms'] = synonyms_str
+        
+        return pd.DataFrame(rows)
+    
+    def batch_get_id_table_from_inchi(self, inchi_list):
+        """
+        Returns a pandas DataFrame containing all identifiers for a list of InChI strings.
+        
+        Parameters
+        ----------
+        inchi_list : list of str
+            List of InChI strings
+            
+        Returns
+        -------
+        pandas.DataFrame
+            Combined DataFrame with columns: 'inchi', 'inchikey', 'inchi_id', 'query_id', 'rank', 'cas', 'synonyms', 'sources'
+            Returns an empty DataFrame if no InChIs are found in the database.
+        """
+        if not inchi_list:
+            logging.warning("Empty InChI list provided")
+            return pd.DataFrame(columns=['inchi', 'inchikey', 'inchi_id', 'query_id', 'rank', 'cas', 'synonyms', 'sources'])
+        
+        dataframes = []
+        for inchi in inchi_list:
+            df = self.get_id_table_from_inchi(inchi)
+            if df is not None:
+                dataframes.append(df)
+        
+        if not dataframes:
+            logging.warning("None of the provided InChIs were found in the database")
+            return pd.DataFrame(columns=['inchi', 'inchikey', 'inchi_id', 'query_id', 'rank', 'cas', 'synonyms', 'sources'])
+        
+        combined_df = pd.concat(dataframes, ignore_index=True)
+        return combined_df
+    
+    def get_id_table_from_inchikey(self, inchikey):
+        """
+        Returns a pandas DataFrame containing all identifiers for a given InChIKey.
+        
+        This method retrieves the inchi_id for the InChIKey, then finds all associated
+        query_ids and their CAS numbers. It also includes synonyms and sources.
+        
+        Parameters
+        ----------
+        inchikey : str
+            InChIKey string
+            
+        Returns
+        -------
+        pandas.DataFrame
+            DataFrame with columns: 'inchikey', 'inchi', 'inchi_id', 'query_id', 'rank', 'cas', 'synonyms', 'sources'
+            Returns None if the InChIKey is not found in the database.
+            
+        Examples
+        --------
+        >>> zpm = ZeroPM()
+        >>> df = zpm.get_id_table_from_inchikey("WSFSSNUMVMOOMR-UHFFFAOYSA-N")
+        >>> print(df)
+        """
+        # Get inchi_id and inchi from InChIKey
+        self.cursor.execute("""
+            SELECT inchi_id, inchi
+            FROM substances 
+            WHERE inchikey = ?
+        """, (inchikey,))
+        result = self.cursor.fetchone()
+        
+        if not result:
+            logging.warning(f"InChIKey {inchikey} not found in database")
+            return None
+        
+        inchi_id, inchi = result
+        
+        # Get all query_ids and ranks for this inchi_id
+        self.cursor.execute("""
+            SELECT DISTINCT ar.query_id, ar.rank
+            FROM api_results ar
+            WHERE ar.inchi_id = ?
+            ORDER BY ar.rank
+        """, (inchi_id,))
+        query_results = self.cursor.fetchall()
+        
+        if not query_results:
+            # If no query_ids found, still return basic info
+            return pd.DataFrame([{
+                'inchikey': inchikey,
+                'inchi': inchi,
+                'inchi_id': inchi_id,
+                'query_id': None,
+                'rank': None,
+                'cas': None,
+                'synonyms': '',
+                'sources': ''
+            }])
+        
+        # Get CAS numbers for these query_ids
+        rows = []
+        primary_cas = None
+        query_ids_list = [q[0] for q in query_results]
+        
+        # Get sources for all query_ids at once
+        if query_ids_list:
+            placeholders = ','.join('?' * len(query_ids_list))
+            self.cursor.execute(f"""
+                SELECT DISTINCT s.source_name
+                FROM inventory_summary issum
+                JOIN inventories inv ON issum.inventory_id = inv.inventory_id
+                JOIN sources s ON inv.source_id = s.source_id
+                WHERE issum.query_id IN ({placeholders})
+            """, query_ids_list)
+            sources = [row[0] for row in self.cursor.fetchall()]
+            sources_str = "; ".join(sources) if sources else ""
+        else:
+            sources_str = ""
+        
+        for query_id, rank in query_results:
+            # Get CAS number for this query_id
+            self.cursor.execute("""
+                SELECT query
+                FROM api_ready_query
+                WHERE query_id = ? AND type = 'CAS Registry Number'
+            """, (query_id,))
+            cas_result = self.cursor.fetchone()
+            cas = cas_result[0] if cas_result else None
+            
+            # Use first CAS as primary for synonyms
+            if cas and primary_cas is None:
+                primary_cas = cas
+            
+            rows.append({
+                'inchikey': inchikey,
+                'inchi': inchi,
+                'inchi_id': inchi_id,
+                'query_id': query_id,
+                'rank': rank,
+                'cas': cas,
+                'sources': sources_str
+            })
+        
+        # Get synonyms from primary CAS
+        synonyms_str = ''
+        if primary_cas:
+            synonyms = self.get_names(primary_cas)
+            synonyms_str = "; ".join(synonyms) if synonyms else ""
+        
+        # Add synonyms to all rows
+        for row in rows:
+            row['synonyms'] = synonyms_str
+        
+        return pd.DataFrame(rows)
+    
+    def batch_get_id_table_from_inchikey(self, inchikey_list):
+        """
+        Returns a pandas DataFrame containing all identifiers for a list of InChIKey strings.
+        
+        Parameters
+        ----------
+        inchikey_list : list of str
+            List of InChIKey strings
+            
+        Returns
+        -------
+        pandas.DataFrame
+            Combined DataFrame with columns: 'inchikey', 'inchi', 'inchi_id', 'query_id', 'rank', 'cas', 'synonyms', 'sources'
+            Returns an empty DataFrame if no InChIKeys are found in the database.
+        """
+        if not inchikey_list:
+            logging.warning("Empty InChIKey list provided")
+            return pd.DataFrame(columns=['inchikey', 'inchi', 'inchi_id', 'query_id', 'rank', 'cas', 'synonyms', 'sources'])
+        
+        dataframes = []
+        for inchikey in inchikey_list:
+            df = self.get_id_table_from_inchikey(inchikey)
+            if df is not None:
+                dataframes.append(df)
+        
+        if not dataframes:
+            logging.warning("None of the provided InChIKeys were found in the database")
+            return pd.DataFrame(columns=['inchikey', 'inchi', 'inchi_id', 'query_id', 'rank', 'cas', 'synonyms', 'sources'])
+        
+        combined_df = pd.concat(dataframes, ignore_index=True)
+        return combined_df
+    
+    def get_id_table_from_name(self, name):
+        """
+        Returns a pandas DataFrame containing all identifiers for a given chemical name.
+        
+        This method searches for an exact match of the chemical name, then retrieves all
+        associated inchi_ids and their corresponding InChI, InChIKey, CAS numbers, and sources.
+        
+        Parameters
+        ----------
+        name : str
+            Chemical name (exact match)
+            
+        Returns
+        -------
+        pandas.DataFrame
+            DataFrame with columns: 'name', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'cas', 'sources'
+            Returns None if the name is not found in the database.
+            
+        Examples
+        --------
+        >>> zpm = ZeroPM()
+        >>> df = zpm.get_id_table_from_name("formaldehyde")
+        >>> print(df)
+        """
+        # Get query_id for this name
+        query_id = self.query_name(name)
+        
+        if query_id is None:
+            logging.warning(f"Chemical name '{name}' not found in database")
+            return None
+        
+        # Get sources for this query_id
+        self.cursor.execute("""
+            SELECT DISTINCT s.source_name
+            FROM inventory_summary issum
+            JOIN inventories inv ON issum.inventory_id = inv.inventory_id
+            JOIN sources s ON inv.source_id = s.source_id
+            WHERE issum.query_id = ?
+        """, (query_id,))
+        sources = [row[0] for row in self.cursor.fetchall()]
+        sources_str = "; ".join(sources) if sources else ""
+        
+        # Get all inchi_ids and ranks for this query_id
+        inchi_ids, ranks = self.get_inchi_id(query_id)
+        
+        if not inchi_ids:
+            # If no inchi_ids found, still return basic info
+            return pd.DataFrame([{
+                'name': name,
+                'query_id': query_id,
+                'inchi_id': None,
+                'rank': None,
+                'inchi': None,
+                'inchikey': None,
+                'cas': None,
+                'sources': sources_str
+            }])
+        
+        # Collect all data
+        rows = []
+        for inchi_id, rank in zip(inchi_ids, ranks):
+            # Get InChI and InChIKey
+            inchi, inchikey = self.get_inchi(inchi_id)
+            
+            # Get CAS number(s) for this inchi_id
+            self.cursor.execute("""
+                SELECT DISTINCT aq.query
+                FROM api_results ar
+                JOIN api_ready_query aq ON ar.query_id = aq.query_id
+                WHERE ar.inchi_id = ? AND aq.type = 'CAS Registry Number'
+            """, (inchi_id,))
+            cas_results = [row[0] for row in self.cursor.fetchall()]
+            
+            # If multiple CAS numbers, create a row for each
+            if cas_results:
+                for cas in cas_results:
+                    rows.append({
+                        'name': name,
+                        'query_id': query_id,
+                        'inchi_id': inchi_id,
+                        'rank': rank,
+                        'inchi': inchi,
+                        'inchikey': inchikey,
+                        'cas': cas,
+                        'sources': sources_str
+                    })
+            else:
+                # No CAS found, still add the row
+                rows.append({
+                    'name': name,
+                    'query_id': query_id,
+                    'inchi_id': inchi_id,
+                    'rank': rank,
+                    'inchi': inchi,
+                    'inchikey': inchikey,
+                    'cas': None,
+                    'sources': sources_str
+                })
+        
+        return pd.DataFrame(rows)
+    
+    def batch_get_id_table_from_name(self, name_list):
+        """
+        Returns a pandas DataFrame containing all identifiers for a list of chemical names.
+        
+        Parameters
+        ----------
+        name_list : list of str
+            List of chemical names (exact match)
+            
+        Returns
+        -------
+        pandas.DataFrame
+            Combined DataFrame with columns: 'name', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'cas', 'sources'
+            Returns an empty DataFrame if no names are found in the database.
+        """
+        if not name_list:
+            logging.warning("Empty name list provided")
+            return pd.DataFrame(columns=['name', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'cas', 'sources'])
+        
+        dataframes = []
+        for name in name_list:
+            df = self.get_id_table_from_name(name)
+            if df is not None:
+                dataframes.append(df)
+        
+        if not dataframes:
+            logging.warning("None of the provided names were found in the database")
+            return pd.DataFrame(columns=['name', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'cas', 'sources'])
+        
         combined_df = pd.concat(dataframes, ignore_index=True)
         return combined_df
     
@@ -1591,3 +2394,496 @@ class ZeroPM:
         """, (region_id,))
         
         return self.cursor.fetchone()[0]
+    
+    # ==================== ZeroPM Specific Methods (v0-0-4) ====================
+    
+    def get_zeropm_id(self, cas=None, inchi_id=None):
+        """
+        Get the zeropm_id for a chemical from CAS number or inchi_id.
+        
+        Parameters
+        ----------
+        cas : str, optional
+            CAS Registry Number
+        inchi_id : int, optional
+            InChI identifier
+            
+        Returns
+        -------
+        int or None
+            zeropm_id if found, None otherwise
+            
+        Note
+        ----
+        Either cas or inchi_id must be provided.
+        """
+        if cas is None and inchi_id is None:
+            raise ValueError("Either cas or inchi_id must be provided")
+        
+        if inchi_id is None:
+            # Get inchi_id from CAS
+            query_id = self.query_cas(cas)
+            if query_id is None:
+                return None
+            inchi_ids, _ = self.get_inchi_id(query_id)
+            if not inchi_ids:
+                return None
+            inchi_id = inchi_ids[0]
+        
+        # Get zeropm_id from inchi_id
+        self.cursor.execute("""
+            SELECT zeropm_id 
+            FROM zeropm_chemicals 
+            WHERE inchi_id = ?
+        """, (inchi_id,))
+        result = self.cursor.fetchone()
+        return result[0] if result else None
+    
+    def get_pm_probabilities(self, cas=None, inchi_id=None, zeropm_id=None):
+        """
+        Get P/M (Persistent/Mobile) probability data for a chemical.
+        
+        Parameters
+        ----------
+        cas : str, optional
+            CAS Registry Number
+        inchi_id : int, optional
+            InChI identifier
+        zeropm_id : int, optional
+            ZeroPM identifier
+            
+        Returns
+        -------
+        dict or None
+            Dictionary with probability data:
+            - probability_of_not_p: Probability of NOT persistent
+            - probability_of_p_or_vp: Probability of persistent OR very persistent
+            - probability_of_p: Probability of persistent
+            - probability_of_vp: Probability of very persistent
+            - probability_of_not_m: Probability of NOT mobile
+            - probability_of_m_or_vm: Probability of mobile OR very mobile
+            - probability_of_m: Probability of mobile
+            - probability_of_vm: Probability of very mobile
+            - n: Sample size
+            Returns None if not found.
+        """
+        if zeropm_id is None:
+            zeropm_id = self.get_zeropm_id(cas=cas, inchi_id=inchi_id)
+            if zeropm_id is None:
+                return None
+        
+        self.cursor.execute("""
+            SELECT probability_of_not_p, probability_of_p_or_vp, probability_of_p, probability_of_vp,
+                   probability_of_not_m, probability_of_m_or_vm, probability_of_m, probability_of_vm, n
+            FROM pm_probabilities
+            WHERE zeropm_id = ?
+        """, (zeropm_id,))
+        result = self.cursor.fetchone()
+        
+        if not result:
+            return None
+        
+        return {
+            'probability_of_not_p': result[0],
+            'probability_of_p_or_vp': result[1],
+            'probability_of_p': result[2],
+            'probability_of_vp': result[3],
+            'probability_of_not_m': result[4],
+            'probability_of_m_or_vm': result[5],
+            'probability_of_m': result[6],
+            'probability_of_vm': result[7],
+            'n': result[8]
+        }
+    
+    def is_in_zeropm(self, cas=None, inchi_id=None):
+        """
+        Check if a chemical is in the ZeroPM database.
+        
+        Parameters
+        ----------
+        cas : str, optional
+            CAS Registry Number
+        inchi_id : int, optional
+            InChI identifier
+            
+        Returns
+        -------
+        bool
+            True if chemical is in ZeroPM database, False otherwise
+        """
+        return self.get_zeropm_id(cas=cas, inchi_id=inchi_id) is not None
+    
+    def is_multicomponent(self, inchi_id):
+        """
+        Check if a substance is a multi-component substance.
+        
+        Parameters
+        ----------
+        inchi_id : int
+            InChI identifier
+            
+        Returns
+        -------
+        bool
+            True if substance is multi-component, False otherwise
+        """
+        self.cursor.execute("""
+            SELECT mc_id 
+            FROM multi_components 
+            WHERE inchi_id = ?
+        """, (inchi_id,))
+        return self.cursor.fetchone() is not None
+    
+    def get_multicomponent_id(self, inchi_id):
+        """
+        Get the multi-component ID for a substance.
+        
+        Parameters
+        ----------
+        inchi_id : int
+            InChI identifier
+            
+        Returns
+        -------
+        int or None
+            mc_id if found, None otherwise
+        """
+        self.cursor.execute("""
+            SELECT mc_id 
+            FROM multi_components 
+            WHERE inchi_id = ?
+        """, (inchi_id,))
+        result = self.cursor.fetchone()
+        return result[0] if result else None
+    
+    def get_components(self, mc_id):
+        """
+        Get all components of a multi-component substance.
+        
+        Parameters
+        ----------
+        mc_id : int
+            Multi-component identifier
+            
+        Returns
+        -------
+        list of dict
+            List of component information with keys:
+            - component_id: Component identifier
+            - component_frequency: How often the component appears
+            - inchi_id: InChI identifier of the component
+            - inchi: InChI string of the component
+            - inchikey: InChIKey of the component
+        """
+        self.cursor.execute("""
+            SELECT ci.component_id, ci.component_frequency, c.inchi_id, s.inchi, s.inchikey
+            FROM component_index ci
+            JOIN components c ON ci.component_id = c.component_id
+            JOIN substances s ON c.inchi_id = s.inchi_id
+            WHERE ci.mc_id = ?
+            ORDER BY ci.component_frequency DESC
+        """, (mc_id,))
+        
+        components = []
+        for row in self.cursor.fetchall():
+            components.append({
+                'component_id': row[0],
+                'component_frequency': row[1],
+                'inchi_id': row[2],
+                'inchi': row[3],
+                'inchikey': row[4]
+            })
+        
+        return components
+    
+    def get_multicomponent_info(self, cas=None, inchi_id=None):
+        """
+        Get complete multi-component information for a substance.
+        
+        Parameters
+        ----------
+        cas : str, optional
+            CAS Registry Number
+        inchi_id : int, optional
+            InChI identifier
+            
+        Returns
+        -------
+        dict or None
+            Dictionary with:
+            - mc_id: Multi-component identifier
+            - inchi_id: InChI identifier of the multi-component
+            - inchi: InChI of the multi-component
+            - inchikey: InChIKey of the multi-component
+            - components: List of component dictionaries
+            Returns None if not a multi-component substance.
+        """
+        if inchi_id is None:
+            if cas is None:
+                raise ValueError("Either cas or inchi_id must be provided")
+            query_id = self.query_cas(cas)
+            if query_id is None:
+                return None
+            inchi_ids, _ = self.get_inchi_id(query_id)
+            if not inchi_ids:
+                return None
+            inchi_id = inchi_ids[0]
+        
+        # Check if it's a multi-component
+        mc_id = self.get_multicomponent_id(inchi_id)
+        if mc_id is None:
+            return None
+        
+        # Get multi-component info
+        self.cursor.execute("""
+            SELECT mc.inchi_id, s.inchi, s.inchikey
+            FROM multi_components mc
+            JOIN substances s ON mc.inchi_id = s.inchi_id
+            WHERE mc.mc_id = ?
+        """, (mc_id,))
+        result = self.cursor.fetchone()
+        
+        if not result:
+            return None
+        
+        # Get components
+        components = self.get_components(mc_id)
+        
+        return {
+            'mc_id': mc_id,
+            'inchi_id': result[0],
+            'inchi': result[1],
+            'inchikey': result[2],
+            'components': components
+        }
+    
+    def is_in_cleanventory(self, cas=None, inchi_id=None):
+        """
+        Check if a chemical is in the Cleanventory database.
+        
+        Parameters
+        ----------
+        cas : str, optional
+            CAS Registry Number
+        inchi_id : int, optional
+            InChI identifier
+            
+        Returns
+        -------
+        bool
+            True if chemical is in Cleanventory, False otherwise
+        """
+        if inchi_id is None:
+            if cas is None:
+                raise ValueError("Either cas or inchi_id must be provided")
+            query_id = self.query_cas(cas)
+            if query_id is None:
+                return False
+            inchi_ids, _ = self.get_inchi_id(query_id)
+            if not inchi_ids:
+                return False
+            inchi_id = inchi_ids[0]
+        
+        self.cursor.execute("""
+            SELECT cleanventory_id 
+            FROM cleanventory_chemicals 
+            WHERE inchi_id = ?
+        """, (inchi_id,))
+        return self.cursor.fetchone() is not None
+    
+    def get_consensus_score(self, cas=None, inchi_id=None):
+        """
+        Get consensus scoring information for a chemical.
+        
+        Parameters
+        ----------
+        cas : str, optional
+            CAS Registry Number
+        inchi_id : int, optional
+            InChI identifier
+            
+        Returns
+        -------
+        list of dict or None
+            List of consensus scores from different inventories, each with:
+            - inventory_id: Inventory identifier
+            - consensus_score: Consensus score value
+            - consensus_count: Count of consensus
+            Returns None if not found.
+        """
+        if inchi_id is None:
+            if cas is None:
+                raise ValueError("Either cas or inchi_id must be provided")
+            query_id = self.query_cas(cas)
+            if query_id is None:
+                return None
+            inchi_ids, _ = self.get_inchi_id(query_id)
+            if not inchi_ids:
+                return None
+            inchi_id = inchi_ids[0]
+        
+        self.cursor.execute("""
+            SELECT inventory_id, consensus_score, consensus_count
+            FROM consensus_index
+            WHERE inchi_id = ?
+        """, (inchi_id,))
+        
+        results = self.cursor.fetchall()
+        if not results:
+            return None
+        
+        consensus_data = []
+        for row in results:
+            consensus_data.append({
+                'inventory_id': row[0],
+                'consensus_score': row[1],
+                'consensus_count': row[2]
+            })
+        
+        return consensus_data
+    
+    def get_all_zeropm_chemicals(self, limit=None, include_pm_probs=False):
+        """
+        Get all chemicals in the ZeroPM database.
+        
+        Parameters
+        ----------
+        limit : int, optional
+            Maximum number of results to return
+        include_pm_probs : bool, optional
+            If True, include P/M probability data (default: False)
+            
+        Returns
+        -------
+        pandas.DataFrame
+            DataFrame with zeropm_id, inchi_id, inchi, inchikey
+            If include_pm_probs=True, also includes all probability columns
+        """
+        if include_pm_probs:
+            query = """
+                SELECT zc.zeropm_id, zc.inchi_id, s.inchi, s.inchikey,
+                       pm.probability_of_not_p, pm.probability_of_p_or_vp, 
+                       pm.probability_of_p, pm.probability_of_vp,
+                       pm.probability_of_not_m, pm.probability_of_m_or_vm,
+                       pm.probability_of_m, pm.probability_of_vm, pm.n
+                FROM zeropm_chemicals zc
+                JOIN substances s ON zc.inchi_id = s.inchi_id
+                LEFT JOIN pm_probabilities pm ON zc.zeropm_id = pm.zeropm_id
+            """
+            columns = ['zeropm_id', 'inchi_id', 'inchi', 'inchikey',
+                      'probability_of_not_p', 'probability_of_p_or_vp',
+                      'probability_of_p', 'probability_of_vp',
+                      'probability_of_not_m', 'probability_of_m_or_vm',
+                      'probability_of_m', 'probability_of_vm', 'n']
+        else:
+            query = """
+                SELECT zc.zeropm_id, zc.inchi_id, s.inchi, s.inchikey
+                FROM zeropm_chemicals zc
+                JOIN substances s ON zc.inchi_id = s.inchi_id
+            """
+            columns = ['zeropm_id', 'inchi_id', 'inchi', 'inchikey']
+        
+        if limit:
+            query += f" LIMIT {limit}"
+        
+        self.cursor.execute(query)
+        results = self.cursor.fetchall()
+        
+        return pd.DataFrame(results, columns=columns)
+    
+    def get_all_multicomponent_substances(self, limit=None):
+        """
+        Get all multi-component substances.
+        
+        Parameters
+        ----------
+        limit : int, optional
+            Maximum number of results to return
+            
+        Returns
+        -------
+        pandas.DataFrame
+            DataFrame with mc_id, inchi_id, inchi, inchikey, component_count
+        """
+        query = """
+            SELECT mc.mc_id, mc.inchi_id, s.inchi, s.inchikey,
+                   COUNT(ci.component_id) as component_count
+            FROM multi_components mc
+            JOIN substances s ON mc.inchi_id = s.inchi_id
+            LEFT JOIN component_index ci ON mc.mc_id = ci.mc_id
+            GROUP BY mc.mc_id, mc.inchi_id, s.inchi, s.inchikey
+        """
+        
+        if limit:
+            query += f" LIMIT {limit}"
+        
+        self.cursor.execute(query)
+        results = self.cursor.fetchall()
+        
+        return pd.DataFrame(results, columns=['mc_id', 'inchi_id', 'inchi', 'inchikey', 'component_count'])
+    
+    def batch_get_pm_probabilities(self, cas_list=None, inchi_id_list=None):
+        """
+        Get P/M probabilities for multiple chemicals at once.
+        
+        Parameters
+        ----------
+        cas_list : list of str, optional
+            List of CAS Registry Numbers
+        inchi_id_list : list of int, optional
+            List of InChI identifiers
+            
+        Returns
+        -------
+        pandas.DataFrame
+            DataFrame with columns for identifiers and all probability values
+        """
+        if cas_list is not None:
+            # Convert CAS to inchi_ids
+            inchi_id_list = []
+            cas_to_inchi_id = {}
+            for cas in cas_list:
+                query_id = self.query_cas(cas)
+                if query_id:
+                    inchi_ids, _ = self.get_inchi_id(query_id)
+                    if inchi_ids:
+                        inchi_id = inchi_ids[0]
+                        inchi_id_list.append(inchi_id)
+                        cas_to_inchi_id[inchi_id] = cas
+        
+        if not inchi_id_list:
+            return pd.DataFrame()
+        
+        # Query all at once
+        placeholders = ','.join('?' * len(inchi_id_list))
+        query = f"""
+            SELECT zc.inchi_id, s.inchi, s.inchikey,
+                   pm.probability_of_not_p, pm.probability_of_p_or_vp,
+                   pm.probability_of_p, pm.probability_of_vp,
+                   pm.probability_of_not_m, pm.probability_of_m_or_vm,
+                   pm.probability_of_m, pm.probability_of_vm, pm.n
+            FROM zeropm_chemicals zc
+            JOIN substances s ON zc.inchi_id = s.inchi_id
+            LEFT JOIN pm_probabilities pm ON zc.zeropm_id = pm.zeropm_id
+            WHERE zc.inchi_id IN ({placeholders})
+        """
+        
+        self.cursor.execute(query, inchi_id_list)
+        results = self.cursor.fetchall()
+        
+        df = pd.DataFrame(results, columns=[
+            'inchi_id', 'inchi', 'inchikey',
+            'probability_of_not_p', 'probability_of_p_or_vp',
+            'probability_of_p', 'probability_of_vp',
+            'probability_of_not_m', 'probability_of_m_or_vm',
+            'probability_of_m', 'probability_of_vm', 'n'
+        ])
+        
+        # Add CAS if available
+        if cas_list is not None:
+            df['cas'] = df['inchi_id'].map(cas_to_inchi_id)
+            # Reorder columns to put cas first
+            cols = ['cas'] + [col for col in df.columns if col != 'cas']
+            df = df[cols]
+        
+        return df

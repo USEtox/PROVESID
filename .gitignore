@@ -219,3 +219,4 @@ src/provesid/data/*.sdf.index.pkl
 # pubchem database files
 src/provesid/data/pubchem_id.db
 src/provesid/data/PubChem_CAS_*.csv
+src/provesid/data/recreate_tables.sql

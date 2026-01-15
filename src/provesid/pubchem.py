@@ -1786,6 +1786,33 @@ class PubChemID:
         
         cid = row['cid']
         return self.get_by_cid(cid)
+
+    def get_by_smiles(self, smiles: str) -> Optional[Dict[str, Any]]:
+        """
+        Get compound information by SMILES string.
+        
+        Args:
+            smiles (str): SMILES string
+        
+        Returns:
+            dict: Compound information, or None if not found
+        
+        Example:
+            >>> db = PubChemID()
+            >>> result = db.get_by_smiles("CC(=O)OC1=CC=CC=C1C(=O)O")  # Aspirin
+            >>> print(result['cmpdname'])
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM compounds WHERE smiles = ?
+        """, (smiles,))
+        
+        row = cursor.fetchone()
+        if not row:
+            return None
+        
+        cid = row['cid']
+        return self.get_by_cid(cid)
     
     def search_by_name(self, name: str, exact: bool = False, limit: int = 10) -> List[Dict[str, Any]]:
         """
@@ -1935,6 +1962,16 @@ class PubChemID:
         result = self.get_by_cid(cid)
         return result['inchi'] if result else None
     
+    def cid_to_smiles(self, cid: int) -> Optional[str]:
+        """Convert PubChem CID to SMILES."""
+        result = self.get_by_cid(cid)
+        return result['smiles'] if result else None
+    
+    def smiles_to_cid(self, smiles: str) -> Optional[int]:
+        """Convert SMILES string to PubChem CID."""
+        result = self.get_by_smiles(smiles)
+        return result['cid'] if result else None
+    
     # Batch conversion methods
     
     def batch_cas_to_cid(self, cas_list: List[str]) -> Dict[str, Optional[int]]:
@@ -1970,6 +2007,26 @@ class PubChemID:
         results = {}
         for cid in cid_list:
             results[cid] = self.cid_to_cas(cid)
+        return results
+    
+    def batch_smiles_to_cid(self, smiles_list: List[str]) -> Dict[str, Optional[int]]:
+        """
+        Convert multiple SMILES strings to CIDs.
+        
+        Args:
+            smiles_list (list): List of SMILES strings
+        
+        Returns:
+            dict: Mapping of SMILES -> CID (None if not found)
+        
+        Example:
+            >>> db = PubChemID()
+            >>> results = db.batch_smiles_to_cid(["CC(=O)OC1=CC=CC=C1C(=O)O", "C"])
+            >>> print(results)
+        """
+        results = {}
+        for smiles in smiles_list:
+            results[smiles] = self.smiles_to_cid(smiles)
         return results
     
     def get_by_cas_batch(self, cas_list: List[str]) -> 'pd.DataFrame':
@@ -2098,6 +2155,220 @@ class PubChemID:
                                         'smiles', 'cmpdname', 'mf', 'mw'])
         
         return pd.concat(tables, ignore_index=True)
+    
+    def get_by_smiles_batch(self, smiles_list: List[str]) -> 'pd.DataFrame':
+        """
+        Get complete compound information for multiple SMILES strings as a DataFrame.
+        
+        This method returns all available data including identifiers, chemical properties,
+        and physical properties for each SMILES string.
+        
+        Args:
+            smiles_list (list): List of SMILES strings
+        
+        Returns:
+            pandas.DataFrame: DataFrame with columns for all compound properties including:
+                             cid, cas, inchi, inchikey, smiles, cmpdname, iupacname, mf, mw,
+                             polararea, complexity, xlogp, heavycnt, hbonddonor, hbondacc,
+                             rotbonds, exactmass, charge, cidcdate
+        
+        Example:
+            >>> db = PubChemID()
+            >>> smiles_list = ["CC(=O)OC1=CC=CC=C1C(=O)O", "C", "CCO"]
+            >>> df = db.get_by_smiles_batch(smiles_list)
+            >>> print(df[['smiles', 'cmpdname', 'mf', 'mw']])
+        """
+        import pandas as pd
+        
+        rows = []
+        for smiles in smiles_list:
+            result = self.get_by_smiles(smiles)
+            if result:
+                # Create row with all properties
+                row = {
+                    'cid': result.get('cid'),
+                    'cas': result.get('cas_numbers', [])[0] if result.get('cas_numbers') else None,
+                    'inchi': result.get('inchi', ''),
+                    'inchikey': result.get('inchikey', ''),
+                    'smiles': smiles,
+                    'cmpdname': result.get('cmpdname', ''),
+                    'iupacname': result.get('iupacname', ''),
+                    'mf': result.get('mf', ''),
+                    'mw': result.get('mw'),
+                    'polararea': result.get('polararea'),
+                    'complexity': result.get('complexity'),
+                    'xlogp': result.get('xlogp'),
+                    'heavycnt': result.get('heavycnt'),
+                    'hbonddonor': result.get('hbonddonor'),
+                    'hbondacc': result.get('hbondacc'),
+                    'rotbonds': result.get('rotbonds'),
+                    'exactmass': result.get('exactmass'),
+                    'charge': result.get('charge'),
+                    'cidcdate': result.get('cidcdate', '')
+                }
+                rows.append(row)
+        
+        if not rows:
+            # Return empty DataFrame with correct columns
+            return pd.DataFrame(columns=[
+                'cid', 'cas', 'inchi', 'inchikey', 'smiles', 'cmpdname', 'iupacname',
+                'mf', 'mw', 'polararea', 'complexity', 'xlogp', 'heavycnt',
+                'hbonddonor', 'hbondacc', 'rotbonds', 'exactmass', 'charge', 'cidcdate'
+            ])
+        
+        return pd.DataFrame(rows)
+    
+    # Additional CAS conversion methods
+    
+    def smiles_to_cas(self, smiles: str) -> Optional[List[str]]:
+        """
+        Convert SMILES string to CAS number(s).
+        
+        Args:
+            smiles (str): SMILES string
+        
+        Returns:
+            list: List of CAS numbers, or None if not found
+        
+        Example:
+            >>> db = PubChemID()
+            >>> cas_list = db.smiles_to_cas("CC(=O)OC1=CC=CC=C1C(=O)O")  # Aspirin
+            >>> print(cas_list)
+        """
+        # First convert SMILES to InChI using RDKit
+        try:
+            from rdkit import Chem
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is None:
+                return None
+            inchi = Chem.MolToInchi(mol)
+        except Exception:
+            return None
+        
+        # Then look up by InChI
+        return self.inchi_to_cas(inchi)
+    
+    def name_to_cas(self, name: str, exact: bool = True) -> Optional[List[str]]:
+        """
+        Convert chemical name to CAS number(s).
+        
+        Args:
+            name (str): Chemical name or synonym
+            exact (bool): If True, exact match only. If False, returns first match from search.
+        
+        Returns:
+            list: List of CAS numbers, or None if not found
+        
+        Example:
+            >>> db = PubChemID()
+            >>> cas_list = db.name_to_cas("aspirin")
+            >>> print(cas_list)
+        
+        Note:
+            For exact=False, only the first match from the search is returned.
+            Use search_by_name() for more control over multiple matches.
+        """
+        results = self.search_by_name(name, exact=exact, limit=1)
+        if not results:
+            return None
+        return results[0].get('cas_numbers')
+    
+    def formula_to_cas(self, formula: str, limit: int = 100) -> Optional[List[str]]:
+        """
+        Convert molecular formula to CAS numbers.
+        
+        Note: Molecular formulas are not unique - many isomers can share the same formula.
+        This method returns CAS numbers for all compounds matching the formula.
+        
+        Args:
+            formula (str): Molecular formula (e.g., "C9H8O4", "CH2O")
+            limit (int): Maximum number of compounds to retrieve
+        
+        Returns:
+            list: List of CAS numbers for all compounds with this formula, or None if not found
+        
+        Example:
+            >>> db = PubChemID()
+            >>> cas_list = db.formula_to_cas("C9H8O4")
+            >>> print(f"Found {len(cas_list)} CAS numbers for C9H8O4")
+        
+        Warning:
+            Can return many results for common formulas. Use limit parameter to control.
+        """
+        results = self.search_by_formula(formula, limit=limit)
+        if not results:
+            return None
+        
+        # Collect all unique CAS numbers from all matching compounds
+        all_cas = []
+        for compound in results:
+            cas_numbers = compound.get('cas_numbers', [])
+            if cas_numbers:
+                all_cas.extend(cas_numbers)
+        
+        # Remove duplicates and sort
+        unique_cas = sorted(set(all_cas))
+        return unique_cas if unique_cas else None
+    
+    def batch_smiles_to_cas(self, smiles_list: List[str]) -> Dict[str, Optional[List[str]]]:
+        """
+        Convert multiple SMILES strings to CAS numbers.
+        
+        Args:
+            smiles_list (list): List of SMILES strings
+        
+        Returns:
+            dict: Mapping of SMILES -> list of CAS numbers (None if not found)
+        
+        Example:
+            >>> db = PubChemID()
+            >>> smiles = ["C", "CO", "CCO"]
+            >>> results = db.batch_smiles_to_cas(smiles)
+            >>> for smi, cas in results.items():
+            ...     print(f"{smi}: {cas}")
+        """
+        return {smiles: self.smiles_to_cas(smiles) for smiles in smiles_list}
+    
+    def batch_name_to_cas(self, name_list: List[str], exact: bool = True) -> Dict[str, Optional[List[str]]]:
+        """
+        Convert multiple chemical names to CAS numbers.
+        
+        Args:
+            name_list (list): List of chemical names
+            exact (bool): If True, exact match only
+        
+        Returns:
+            dict: Mapping of name -> list of CAS numbers (None if not found)
+        
+        Example:
+            >>> db = PubChemID()
+            >>> names = ["aspirin", "caffeine", "glucose"]
+            >>> results = db.batch_name_to_cas(names)
+            >>> for name, cas in results.items():
+            ...     print(f"{name}: {cas}")
+        """
+        return {name: self.name_to_cas(name, exact=exact) for name in name_list}
+    
+    def batch_formula_to_cas(self, formula_list: List[str], limit: int = 100) -> Dict[str, Optional[List[str]]]:
+        """
+        Convert multiple molecular formulas to CAS numbers.
+        
+        Args:
+            formula_list (list): List of molecular formulas
+            limit (int): Maximum number of compounds per formula
+        
+        Returns:
+            dict: Mapping of formula -> list of CAS numbers (None if not found)
+        
+        Example:
+            >>> db = PubChemID()
+            >>> formulas = ["H2O", "CH4", "C9H8O4"]
+            >>> results = db.batch_formula_to_cas(formulas)
+            >>> for formula, cas_list in results.items():
+            ...     if cas_list:
+            ...         print(f"{formula}: {len(cas_list)} compounds")
+        """
+        return {formula: self.formula_to_cas(formula, limit=limit) for formula in formula_list}
     
     def get_stats(self) -> Dict[str, int]:
         """

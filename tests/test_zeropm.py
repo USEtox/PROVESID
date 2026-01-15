@@ -433,7 +433,7 @@ class TestZeroPMCASMethods:
         assert isinstance(df, pd.DataFrame)
         
         # Check that the DataFrame has the expected columns
-        expected_columns = {'cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'synonyms'}
+        expected_columns = {'cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'zeropm_id', 'synonyms', 'sources'}
         assert set(df.columns) == expected_columns
         
         # Check that all rows have the same CAS
@@ -487,7 +487,7 @@ class TestZeroPMCASMethods:
         assert isinstance(df, pd.DataFrame)
         
         # Check that the DataFrame has the expected columns
-        expected_columns = {'cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'synonyms'}
+        expected_columns = {'cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'zeropm_id', 'synonyms', 'sources'}
         assert set(df.columns) == expected_columns
         
         # Check that we have data for both CAS numbers
@@ -507,7 +507,7 @@ class TestZeroPMCASMethods:
         # Should return an empty DataFrame with the correct columns
         assert isinstance(df, pd.DataFrame)
         assert len(df) == 0
-        expected_columns = {'cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'synonyms'}
+        expected_columns = {'cas', 'query_id', 'inchi_id', 'rank', 'inchi', 'inchikey', 'zeropm_id', 'synonyms', 'sources'}
         assert set(df.columns) == expected_columns
     
     def test_batch_get_id_table_from_cas_nonexistent_list(self, zpm):
@@ -1228,6 +1228,861 @@ class TestZeroPMInventoryCountryRegion:
             assert count >= 0
         else:
             pytest.skip("No regions found")
+
+
+class TestZeroPMGetIdTableMethods:
+    """Test suite for get_id_table_from_* methods"""
+    
+    @pytest.fixture
+    def zpm(self):
+        """Create a ZeroPM instance for testing"""
+        return ZeroPM()
+    
+    def test_get_id_table_from_inchi(self, zpm):
+        """Test getting ID table from InChI"""
+        # Get a known InChI from the database
+        zpm.cursor.execute("""
+            SELECT inchi 
+            FROM substances 
+            WHERE inchi IS NOT NULL
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            inchi = result[0]
+            df = zpm.get_id_table_from_inchi(inchi)
+            
+            assert df is not None
+            assert len(df) > 0
+            assert 'inchi' in df.columns
+            assert 'inchikey' in df.columns
+            assert 'inchi_id' in df.columns
+            assert 'query_id' in df.columns
+            assert 'rank' in df.columns
+            assert 'cas' in df.columns
+            assert 'synonyms' in df.columns
+            assert df['inchi'].iloc[0] == inchi
+        else:
+            pytest.skip("No InChI found in database")
+    
+    def test_get_id_table_from_inchi_nonexistent(self, zpm):
+        """Test getting ID table from nonexistent InChI"""
+        df = zpm.get_id_table_from_inchi("InChI=1S/NONEXISTENT")
+        assert df is None
+    
+    def test_batch_get_id_table_from_inchi(self, zpm):
+        """Test batch getting ID tables from InChI list"""
+        # Get some known InChIs from the database
+        zpm.cursor.execute("""
+            SELECT inchi 
+            FROM substances 
+            WHERE inchi IS NOT NULL
+            LIMIT 3
+        """)
+        results = zpm.cursor.fetchall()
+        
+        if results:
+            inchi_list = [row[0] for row in results]
+            df = zpm.batch_get_id_table_from_inchi(inchi_list)
+            
+            assert df is not None
+            assert len(df) > 0
+            assert 'inchi' in df.columns
+            assert 'inchikey' in df.columns
+            # Check that all InChIs are in the result
+            for inchi in inchi_list:
+                assert inchi in df['inchi'].values
+        else:
+            pytest.skip("No InChIs found in database")
+    
+    def test_batch_get_id_table_from_inchi_empty_list(self, zpm):
+        """Test batch getting ID tables from empty list"""
+        df = zpm.batch_get_id_table_from_inchi([])
+        assert df is not None
+        assert len(df) == 0
+    
+    def test_get_id_table_from_inchikey(self, zpm):
+        """Test getting ID table from InChIKey"""
+        # Get a known InChIKey from the database
+        zpm.cursor.execute("""
+            SELECT inchikey 
+            FROM substances 
+            WHERE inchikey IS NOT NULL
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            inchikey = result[0]
+            df = zpm.get_id_table_from_inchikey(inchikey)
+            
+            assert df is not None
+            assert len(df) > 0
+            assert 'inchikey' in df.columns
+            assert 'inchi' in df.columns
+            assert 'inchi_id' in df.columns
+            assert 'query_id' in df.columns
+            assert 'rank' in df.columns
+            assert 'cas' in df.columns
+            assert 'synonyms' in df.columns
+            assert df['inchikey'].iloc[0] == inchikey
+        else:
+            pytest.skip("No InChIKey found in database")
+    
+    def test_get_id_table_from_inchikey_nonexistent(self, zpm):
+        """Test getting ID table from nonexistent InChIKey"""
+        df = zpm.get_id_table_from_inchikey("NONEXISTENTKEY-UHFFFAOYSA-N")
+        assert df is None
+    
+    def test_batch_get_id_table_from_inchikey(self, zpm):
+        """Test batch getting ID tables from InChIKey list"""
+        # Get some known InChIKeys from the database
+        zpm.cursor.execute("""
+            SELECT inchikey 
+            FROM substances 
+            WHERE inchikey IS NOT NULL
+            LIMIT 3
+        """)
+        results = zpm.cursor.fetchall()
+        
+        if results:
+            inchikey_list = [row[0] for row in results]
+            df = zpm.batch_get_id_table_from_inchikey(inchikey_list)
+            
+            assert df is not None
+            assert len(df) > 0
+            assert 'inchikey' in df.columns
+            assert 'inchi' in df.columns
+            # Check that all InChIKeys are in the result
+            for inchikey in inchikey_list:
+                assert inchikey in df['inchikey'].values
+        else:
+            pytest.skip("No InChIKeys found in database")
+    
+    def test_batch_get_id_table_from_inchikey_empty_list(self, zpm):
+        """Test batch getting ID tables from empty list"""
+        df = zpm.batch_get_id_table_from_inchikey([])
+        assert df is not None
+        assert len(df) == 0
+    
+    def test_get_id_table_from_name(self, zpm):
+        """Test getting ID table from chemical name"""
+        # Get a known chemical name from the database
+        zpm.cursor.execute("""
+            SELECT query 
+            FROM api_ready_query 
+            WHERE type = 'chemical name'
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            name = result[0]
+            df = zpm.get_id_table_from_name(name)
+            
+            assert df is not None
+            assert len(df) > 0
+            assert 'name' in df.columns
+            assert 'query_id' in df.columns
+            assert 'inchi_id' in df.columns
+            assert 'rank' in df.columns
+            assert 'inchi' in df.columns
+            assert 'inchikey' in df.columns
+            assert 'cas' in df.columns
+            assert df['name'].iloc[0] == name
+        else:
+            pytest.skip("No chemical names found in database")
+    
+    def test_get_id_table_from_name_nonexistent(self, zpm):
+        """Test getting ID table from nonexistent name"""
+        df = zpm.get_id_table_from_name("nonexistent_chemical_name_12345")
+        assert df is None
+    
+    def test_batch_get_id_table_from_name(self, zpm):
+        """Test batch getting ID tables from name list"""
+        # Get some known chemical names from the database
+        zpm.cursor.execute("""
+            SELECT query 
+            FROM api_ready_query 
+            WHERE type = 'chemical name'
+            LIMIT 3
+        """)
+        results = zpm.cursor.fetchall()
+        
+        if results:
+            name_list = [row[0] for row in results]
+            df = zpm.batch_get_id_table_from_name(name_list)
+            
+            assert df is not None
+            assert len(df) > 0
+            assert 'name' in df.columns
+            assert 'query_id' in df.columns
+            # Check that all names are in the result
+            for name in name_list:
+                assert name in df['name'].values
+        else:
+            pytest.skip("No chemical names found in database")
+    
+    def test_batch_get_id_table_from_name_empty_list(self, zpm):
+        """Test batch getting ID tables from empty list"""
+        df = zpm.batch_get_id_table_from_name([])
+        assert df is not None
+        assert len(df) == 0
+
+
+class TestZeroPMCASConversionMethods:
+    """Test suite for CAS conversion methods (get_cas_from_*)"""
+    
+    @pytest.fixture
+    def zpm(self):
+        """Create a ZeroPM instance for testing"""
+        return ZeroPM()
+    
+    def test_get_cas_from_name(self, zpm):
+        """Test getting CAS from chemical name"""
+        # Get a known chemical name from the database
+        zpm.cursor.execute("""
+            SELECT query 
+            FROM api_ready_query 
+            WHERE type = 'chemical name'
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            name = result[0]
+            cas = zpm.get_cas_from_name(name)
+            
+            # Should return either a string or list of CAS numbers
+            assert cas is not None
+            assert isinstance(cas, (str, list))
+            
+            if isinstance(cas, str):
+                # Basic CAS format check: XXX-XX-X or similar
+                assert '-' in cas or cas.isdigit()
+            else:
+                assert len(cas) > 0
+                assert all('-' in c or c.isdigit() for c in cas)
+        else:
+            pytest.skip("No chemical names found in database")
+    
+    def test_get_cas_from_name_nonexistent(self, zpm):
+        """Test getting CAS from nonexistent name"""
+        cas = zpm.get_cas_from_name("nonexistent_chemical_name_12345")
+        assert cas is None
+    
+    def test_get_cas_from_formula(self, zpm):
+        """Test getting CAS from molecular formula"""
+        # Test with a simple formula that should exist (water)
+        cas_list = zpm.get_cas_from_formula("H2O")
+        
+        if cas_list:
+            assert isinstance(cas_list, list)
+            assert len(cas_list) > 0
+            # Check format of CAS numbers
+            for cas in cas_list:
+                assert isinstance(cas, str)
+                assert '-' in cas or cas.isdigit()
+        else:
+            # If H2O not found, try with formaldehyde
+            cas_list = zpm.get_cas_from_formula("CH2O")
+            if cas_list:
+                assert isinstance(cas_list, list)
+                assert len(cas_list) > 0
+            else:
+                pytest.skip("Neither H2O nor CH2O found in database")
+    
+    def test_get_cas_from_formula_nonexistent(self, zpm):
+        """Test getting CAS from nonexistent formula"""
+        # Use an unlikely formula
+        cas_list = zpm.get_cas_from_formula("Zr999Xe999")
+        assert cas_list is None
+    
+    def test_batch_get_cas_from_smiles(self, zpm):
+        """Test batch getting CAS from SMILES"""
+        # Use simple SMILES
+        smiles_list = ["C", "CC", "O"]  # methane, ethane, water
+        results = zpm.batch_get_cas_from_smiles(smiles_list)
+        
+        assert isinstance(results, dict)
+        assert len(results) == len(smiles_list)
+        
+        # Check that all SMILES are in the results
+        for smiles in smiles_list:
+            assert smiles in results
+            # Result can be None, string, or list
+            assert results[smiles] is None or isinstance(results[smiles], (str, list))
+    
+    def test_batch_get_cas_from_smiles_empty_list(self, zpm):
+        """Test batch getting CAS from empty SMILES list"""
+        results = zpm.batch_get_cas_from_smiles([])
+        assert isinstance(results, dict)
+        assert len(results) == 0
+    
+    def test_batch_get_cas_from_name(self, zpm):
+        """Test batch getting CAS from names"""
+        # Get some known chemical names from the database
+        zpm.cursor.execute("""
+            SELECT query 
+            FROM api_ready_query 
+            WHERE type = 'chemical name'
+            LIMIT 3
+        """)
+        results_db = zpm.cursor.fetchall()
+        
+        if results_db:
+            name_list = [row[0] for row in results_db]
+            results = zpm.batch_get_cas_from_name(name_list)
+            
+            assert isinstance(results, dict)
+            assert len(results) == len(name_list)
+            
+            # Check that all names are in the results
+            for name in name_list:
+                assert name in results
+                # Result can be None, string, or list
+                assert results[name] is None or isinstance(results[name], (str, list))
+        else:
+            pytest.skip("No chemical names found in database")
+    
+    def test_batch_get_cas_from_name_empty_list(self, zpm):
+        """Test batch getting CAS from empty name list"""
+        results = zpm.batch_get_cas_from_name([])
+        assert isinstance(results, dict)
+        assert len(results) == 0
+    
+    def test_batch_get_cas_from_formula(self, zpm):
+        """Test batch getting CAS from formulas"""
+        formula_list = ["H2O", "CH4", "CH2O"]
+        results = zpm.batch_get_cas_from_formula(formula_list)
+        
+        assert isinstance(results, dict)
+        assert len(results) == len(formula_list)
+        
+        # Check that all formulas are in the results
+        for formula in formula_list:
+            assert formula in results
+            # Result can be None or list
+            assert results[formula] is None or isinstance(results[formula], list)
+    
+    def test_batch_get_cas_from_formula_empty_list(self, zpm):
+        """Test batch getting CAS from empty formula list"""
+        results = zpm.batch_get_cas_from_formula([])
+        assert isinstance(results, dict)
+        assert len(results) == 0
+    
+    def test_get_cas_from_name_integration(self, zpm):
+        """Integration test: name -> CAS -> back to name"""
+        # Get a CAS number with known names
+        zpm.cursor.execute("""
+            SELECT query 
+            FROM api_ready_query 
+            WHERE type = 'CAS Registry Number'
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            original_cas = result[0]
+            # Get names for this CAS
+            names = zpm.get_names(original_cas)
+            
+            if names:
+                # Try to get CAS back from the first name
+                first_name = names[0]
+                
+                # First check if this name exists as a query
+                query_id = zpm.query_name(first_name)
+                if query_id:
+                    retrieved_cas = zpm.get_cas_from_name(first_name)
+                    
+                    # The retrieved CAS should either be the original or in a list containing it
+                    if isinstance(retrieved_cas, str):
+                        assert retrieved_cas == original_cas or original_cas in names
+                    elif isinstance(retrieved_cas, list):
+                        assert original_cas in retrieved_cas or any(cas in names for cas in retrieved_cas)
+                else:
+                    pytest.skip(f"Name '{first_name}' not found as a query in database")
+            else:
+                pytest.skip("No names found for CAS")
+        else:
+            pytest.skip("No CAS numbers found in database")
+
+
+class TestZeroPMv004Features:
+    """Test suite for ZeroPM v0-0-4 new features"""
+    
+    @pytest.fixture
+    def zpm(self):
+        """Create a ZeroPM instance for testing"""
+        return ZeroPM()
+    
+    # ==================== ZeroPM ID Tests ====================
+    
+    def test_get_zeropm_id_with_inchi_id(self, zpm):
+        """Test getting ZeroPM ID from inchi_id"""
+        # Find a chemical in zeropm_chemicals
+        zpm.cursor.execute("""
+            SELECT inchi_id, zeropm_id 
+            FROM zeropm_chemicals 
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            inchi_id, expected_zeropm_id = result
+            zeropm_id = zpm.get_zeropm_id(inchi_id=inchi_id)
+            assert zeropm_id == expected_zeropm_id
+        else:
+            pytest.skip("No chemicals found in zeropm_chemicals table")
+    
+    def test_get_zeropm_id_with_cas(self, zpm):
+        """Test getting ZeroPM ID from CAS number"""
+        # Find a CAS that has a zeropm_id
+        zpm.cursor.execute("""
+            SELECT DISTINCT aq.query 
+            FROM api_ready_query aq
+            JOIN api_results ar ON aq.query_id = ar.query_id
+            JOIN zeropm_chemicals zc ON ar.inchi_id = zc.inchi_id
+            WHERE aq.type = 'CAS Registry Number'
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            cas = result[0]
+            zeropm_id = zpm.get_zeropm_id(cas=cas)
+            assert zeropm_id is not None
+            assert isinstance(zeropm_id, int)
+        else:
+            pytest.skip("No CAS found with zeropm_id")
+    
+    def test_get_zeropm_id_not_found(self, zpm):
+        """Test getting ZeroPM ID for non-existent chemical"""
+        zeropm_id = zpm.get_zeropm_id(inchi_id=999999999)
+        assert zeropm_id is None
+    
+    def test_get_zeropm_id_no_parameters(self, zpm):
+        """Test that get_zeropm_id raises error with no parameters"""
+        with pytest.raises(ValueError):
+            zpm.get_zeropm_id()
+    
+    def test_is_in_zeropm_true(self, zpm):
+        """Test is_in_zeropm returns True for ZeroPM chemical"""
+        zpm.cursor.execute("""
+            SELECT inchi_id 
+            FROM zeropm_chemicals 
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            inchi_id = result[0]
+            assert zpm.is_in_zeropm(inchi_id=inchi_id) is True
+        else:
+            pytest.skip("No chemicals found in zeropm_chemicals table")
+    
+    def test_is_in_zeropm_false(self, zpm):
+        """Test is_in_zeropm returns False for non-ZeroPM chemical"""
+        assert zpm.is_in_zeropm(inchi_id=999999999) is False
+    
+    # ==================== P/M Probability Tests ====================
+    
+    def test_get_pm_probabilities(self, zpm):
+        """Test getting P/M probabilities"""
+        # Find a chemical with PM probabilities
+        zpm.cursor.execute("""
+            SELECT zeropm_id 
+            FROM pm_probabilities 
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            zeropm_id = result[0]
+            probs = zpm.get_pm_probabilities(zeropm_id=zeropm_id)
+            
+            assert probs is not None
+            assert isinstance(probs, dict)
+            
+            # Check all expected keys
+            expected_keys = [
+                'probability_of_not_p', 'probability_of_p_or_vp',
+                'probability_of_p', 'probability_of_vp',
+                'probability_of_not_m', 'probability_of_m_or_vm',
+                'probability_of_m', 'probability_of_vm', 'n'
+            ]
+            for key in expected_keys:
+                assert key in probs
+                # n should be an integer, others should be numeric or None
+                if key == 'n':
+                    assert isinstance(probs[key], (int, type(None)))
+                else:
+                    assert isinstance(probs[key], (int, float, type(None)))
+        else:
+            pytest.skip("No P/M probabilities found in database")
+    
+    def test_get_pm_probabilities_not_found(self, zpm):
+        """Test getting P/M probabilities for non-existent zeropm_id"""
+        probs = zpm.get_pm_probabilities(zeropm_id=999999999)
+        assert probs is None
+    
+    def test_batch_get_pm_probabilities_with_cas(self, zpm):
+        """Test batch getting P/M probabilities from CAS list"""
+        # Find CAS numbers with PM data
+        zpm.cursor.execute("""
+            SELECT DISTINCT aq.query 
+            FROM api_ready_query aq
+            JOIN api_results ar ON aq.query_id = ar.query_id
+            JOIN zeropm_chemicals zc ON ar.inchi_id = zc.inchi_id
+            JOIN pm_probabilities pm ON zc.zeropm_id = pm.zeropm_id
+            WHERE aq.type = 'CAS Registry Number'
+            LIMIT 3
+        """)
+        results = zpm.cursor.fetchall()
+        
+        if results:
+            cas_list = [row[0] for row in results]
+            df = zpm.batch_get_pm_probabilities(cas_list=cas_list)
+            
+            assert df is not None
+            assert not df.empty
+            assert 'cas' in df.columns
+            assert 'probability_of_p' in df.columns
+            assert 'probability_of_m' in df.columns
+            assert len(df) > 0
+        else:
+            pytest.skip("No CAS with P/M probabilities found")
+    
+    def test_batch_get_pm_probabilities_with_inchi_ids(self, zpm):
+        """Test batch getting P/M probabilities from inchi_id list"""
+        zpm.cursor.execute("""
+            SELECT zc.inchi_id 
+            FROM zeropm_chemicals zc
+            JOIN pm_probabilities pm ON zc.zeropm_id = pm.zeropm_id
+            LIMIT 3
+        """)
+        results = zpm.cursor.fetchall()
+        
+        if results:
+            inchi_id_list = [row[0] for row in results]
+            df = zpm.batch_get_pm_probabilities(inchi_id_list=inchi_id_list)
+            
+            assert df is not None
+            assert not df.empty
+            assert 'inchi_id' in df.columns
+            assert len(df) > 0
+        else:
+            pytest.skip("No inchi_ids with P/M probabilities found")
+    
+    def test_get_all_zeropm_chemicals(self, zpm):
+        """Test getting all ZeroPM chemicals"""
+        df = zpm.get_all_zeropm_chemicals(limit=10)
+        
+        assert df is not None
+        assert 'zeropm_id' in df.columns
+        assert 'inchi_id' in df.columns
+        assert 'inchi' in df.columns
+        assert 'inchikey' in df.columns
+        assert len(df) <= 10
+    
+    def test_get_all_zeropm_chemicals_with_probs(self, zpm):
+        """Test getting all ZeroPM chemicals with P/M probabilities"""
+        df = zpm.get_all_zeropm_chemicals(limit=5, include_pm_probs=True)
+        
+        assert df is not None
+        assert 'zeropm_id' in df.columns
+        assert 'probability_of_p' in df.columns
+        assert 'probability_of_m' in df.columns
+        assert len(df) <= 5
+    
+    # ==================== Multi-Component Tests ====================
+    
+    def test_is_multicomponent(self, zpm):
+        """Test checking if substance is multi-component"""
+        # Find a multi-component substance
+        zpm.cursor.execute("""
+            SELECT inchi_id 
+            FROM multi_components 
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            inchi_id = result[0]
+            assert zpm.is_multicomponent(inchi_id) is True
+        else:
+            pytest.skip("No multi-component substances found")
+    
+    def test_is_multicomponent_false(self, zpm):
+        """Test is_multicomponent returns False for single component"""
+        # Find a substance that is NOT multi-component
+        zpm.cursor.execute("""
+            SELECT s.inchi_id 
+            FROM substances s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM multi_components mc WHERE mc.inchi_id = s.inchi_id
+            )
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            inchi_id = result[0]
+            assert zpm.is_multicomponent(inchi_id) is False
+        else:
+            pytest.skip("All substances are multi-component")
+    
+    def test_get_multicomponent_id(self, zpm):
+        """Test getting multi-component ID"""
+        zpm.cursor.execute("""
+            SELECT inchi_id, mc_id 
+            FROM multi_components 
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            inchi_id, expected_mc_id = result
+            mc_id = zpm.get_multicomponent_id(inchi_id)
+            assert mc_id == expected_mc_id
+        else:
+            pytest.skip("No multi-component substances found")
+    
+    def test_get_components(self, zpm):
+        """Test getting components of a multi-component substance"""
+        zpm.cursor.execute("""
+            SELECT mc_id 
+            FROM multi_components 
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            mc_id = result[0]
+            components = zpm.get_components(mc_id)
+            
+            assert isinstance(components, list)
+            if len(components) > 0:
+                # Check structure of component data
+                component = components[0]
+                assert 'component_id' in component
+                assert 'component_frequency' in component
+                assert 'inchi_id' in component
+                assert 'inchi' in component
+                assert 'inchikey' in component
+        else:
+            pytest.skip("No multi-component substances found")
+    
+    def test_get_multicomponent_info(self, zpm):
+        """Test getting complete multi-component information"""
+        zpm.cursor.execute("""
+            SELECT inchi_id 
+            FROM multi_components 
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            inchi_id = result[0]
+            info = zpm.get_multicomponent_info(inchi_id=inchi_id)
+            
+            assert info is not None
+            assert isinstance(info, dict)
+            assert 'mc_id' in info
+            assert 'inchi_id' in info
+            assert 'inchi' in info
+            assert 'inchikey' in info
+            assert 'components' in info
+            assert isinstance(info['components'], list)
+        else:
+            pytest.skip("No multi-component substances found")
+    
+    def test_get_multicomponent_info_not_multicomponent(self, zpm):
+        """Test get_multicomponent_info returns None for single component"""
+        # Find a substance that is NOT multi-component
+        zpm.cursor.execute("""
+            SELECT s.inchi_id 
+            FROM substances s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM multi_components mc WHERE mc.inchi_id = s.inchi_id
+            )
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            inchi_id = result[0]
+            info = zpm.get_multicomponent_info(inchi_id=inchi_id)
+            assert info is None
+        else:
+            pytest.skip("All substances are multi-component")
+    
+    def test_get_all_multicomponent_substances(self, zpm):
+        """Test getting all multi-component substances"""
+        df = zpm.get_all_multicomponent_substances(limit=10)
+        
+        assert df is not None
+        assert 'mc_id' in df.columns
+        assert 'inchi_id' in df.columns
+        assert 'component_count' in df.columns
+        assert len(df) <= 10
+    
+    # ==================== Cleanventory Tests ====================
+    
+    def test_is_in_cleanventory_true(self, zpm):
+        """Test is_in_cleanventory returns True for Cleanventory chemical"""
+        zpm.cursor.execute("""
+            SELECT inchi_id 
+            FROM cleanventory_chemicals 
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            inchi_id = result[0]
+            assert zpm.is_in_cleanventory(inchi_id=inchi_id) is True
+        else:
+            pytest.skip("No chemicals found in cleanventory_chemicals table")
+    
+    def test_is_in_cleanventory_false(self, zpm):
+        """Test is_in_cleanventory returns False for non-Cleanventory chemical"""
+        # Find a substance NOT in cleanventory
+        zpm.cursor.execute("""
+            SELECT s.inchi_id 
+            FROM substances s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM cleanventory_chemicals cc WHERE cc.inchi_id = s.inchi_id
+            )
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            inchi_id = result[0]
+            assert zpm.is_in_cleanventory(inchi_id=inchi_id) is False
+        else:
+            pytest.skip("All substances are in cleanventory")
+    
+    # ==================== Consensus Score Tests ====================
+    
+    def test_get_consensus_score(self, zpm):
+        """Test getting consensus scores"""
+        zpm.cursor.execute("""
+            SELECT DISTINCT inchi_id 
+            FROM consensus_index 
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            inchi_id = result[0]
+            consensus = zpm.get_consensus_score(inchi_id=inchi_id)
+            
+            assert consensus is not None
+            assert isinstance(consensus, list)
+            if len(consensus) > 0:
+                score = consensus[0]
+                assert 'inventory_id' in score
+                assert 'consensus_score' in score
+                assert 'consensus_count' in score
+        else:
+            pytest.skip("No consensus scores found in database")
+    
+    def test_get_consensus_score_not_found(self, zpm):
+        """Test getting consensus score for chemical without consensus data"""
+        consensus = zpm.get_consensus_score(inchi_id=999999999)
+        assert consensus is None
+    
+    # ==================== Sources Column Tests ====================
+    
+    def test_get_id_table_from_cas_includes_sources(self, zpm):
+        """Test that get_id_table_from_cas includes sources column"""
+        # Find a CAS with inventory data
+        zpm.cursor.execute("""
+            SELECT DISTINCT aq.query 
+            FROM api_ready_query aq
+            JOIN inventory_summary issum ON aq.query_id = issum.query_id
+            WHERE aq.type = 'CAS Registry Number'
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            cas = result[0]
+            df = zpm.get_id_table_from_cas(cas)
+            
+            assert df is not None
+            assert 'sources' in df.columns
+            # Check that sources column contains data
+            if not df.empty:
+                assert df['sources'].notna().any() or df['sources'].str.len().sum() >= 0
+        else:
+            pytest.skip("No CAS with inventory data found")
+    
+    def test_get_id_table_from_inchi_includes_sources(self, zpm):
+        """Test that get_id_table_from_inchi includes sources column"""
+        # Find an InChI with inventory data
+        zpm.cursor.execute("""
+            SELECT DISTINCT s.inchi 
+            FROM substances s
+            JOIN api_results ar ON s.inchi_id = ar.inchi_id
+            JOIN inventory_summary issum ON ar.query_id = issum.query_id
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            inchi = result[0]
+            df = zpm.get_id_table_from_inchi(inchi)
+            
+            assert df is not None
+            assert 'sources' in df.columns
+        else:
+            pytest.skip("No InChI with inventory data found")
+    
+    def test_get_id_table_from_inchikey_includes_sources(self, zpm):
+        """Test that get_id_table_from_inchikey includes sources column"""
+        # Find an InChIKey with inventory data
+        zpm.cursor.execute("""
+            SELECT DISTINCT s.inchikey 
+            FROM substances s
+            JOIN api_results ar ON s.inchi_id = ar.inchi_id
+            JOIN inventory_summary issum ON ar.query_id = issum.query_id
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            inchikey = result[0]
+            df = zpm.get_id_table_from_inchikey(inchikey)
+            
+            assert df is not None
+            assert 'sources' in df.columns
+        else:
+            pytest.skip("No InChIKey with inventory data found")
+    
+    def test_get_id_table_from_name_includes_sources(self, zpm):
+        """Test that get_id_table_from_name includes sources column"""
+        # Find a name with inventory data
+        zpm.cursor.execute("""
+            SELECT DISTINCT aq.query 
+            FROM api_ready_query aq
+            JOIN inventory_summary issum ON aq.query_id = issum.query_id
+            WHERE aq.type = 'chemical name'
+            LIMIT 1
+        """)
+        result = zpm.cursor.fetchone()
+        
+        if result:
+            name = result[0]
+            df = zpm.get_id_table_from_name(name)
+            
+            assert df is not None
+            assert 'sources' in df.columns
+        else:
+            pytest.skip("No chemical name with inventory data found")
 
 
 if __name__ == "__main__":

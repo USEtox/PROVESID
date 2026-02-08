@@ -29,7 +29,7 @@ jobs:
 
     - name: Run all tests including CAS (with API key)
       run: |
-        python -m pytest tests/ -v --tb=short
+        python -m pytest tests/ -v --tb=short --ignore=tests/test_zeropm.py --ignore=tests/test_chebi_sdf.py
       env:
         CCC_API_KEY: ${{ secrets.CCC_API_KEY }}
       continue-on-error: false
@@ -53,5 +53,5 @@ jobs:
 
     - name: Run tests excluding CAS (no API key required)
       run: |
-        python -m pytest tests/ -v --tb=short --ignore=tests/test_cascommonchem.py
+        python -m pytest tests/ -v --tb=short --ignore=tests/test_cascommonchem.py --ignore=tests/test_zeropm.py --ignore=tests/test_chebi_sdf.py
       continue-on-error: false

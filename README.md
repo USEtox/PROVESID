@@ -64,11 +64,16 @@ which returns a table with the reported values of `logP` for aspirin (including 
 ```python
 from provesid import NCIChemicalIdentifierResolver
 resolver = NCIChemicalIdentifierResolver()
-smiles = resolver.resolve(compound, 'smiles')
+# smiles for formaldehyde
+smiles = resolver.resolve("50-00-0", 'smiles')
+print(f"SMILES for CASRN 50-00-0 is {smiles}") # SMILES for CASRN 50-00-0 is C=O
+# inchi for aspirin
+inchi = resolver.resolve("50-78-2", "stdinchi") # InChI for 50-78-2 is InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)
+print(f"InChI for 50-78-2 is {inchi}")
 ```
 
 **OPSIN**
-
+This is the online `OPSIN` interface. A local interface also exist that uses `py2opsin` python package and the `JAVA` executables of the `OPSIN` library. You can use the local version (recommended) by loading the `PYOPSIN` clss instead of `OPSIN`.
 ```python
 from provesid import OPSIN
 opsin = OPSIN()

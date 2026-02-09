@@ -1,5 +1,6 @@
 from .cascommonchem import CASCommonChem
 from .pubchem import PubChemAPI
+from .opsin import OPSIN, PYOPSIN
 from typing import Union, List, Optional
 import pandas as pd
 from tqdm import tqdm
@@ -15,6 +16,16 @@ except ImportError:
     RDKIT_AVAILABLE = False
     logging.warning("RDKit not available. Install with: pip install rdkit-pypi")
 
+def iupac_name_to_id(iupac_name_list: list):
+    """
+    converts a list of iupac_names to a dataframe that contains the iupac_name, inchi, inchikey, and smiles for each name. It uses the 
+    PYOPSIN class to call the py2opsin package. Make sure that java is installed on your system.
+    Note that at the moment, the column extended_smiles seems to have an encoding issue and the column cml is not strictly necessary for most users.
+    """
+    opsin = PYOPSIN()
+    results = opsin.get_id_from_list(iupac_name_list)
+    return pd.DataFrame(results)
+    
 def smiles_to_canonical(smiles: str) -> Optional[str]:
     """
     Convert SMILES to canonical SMILES using RDKit.

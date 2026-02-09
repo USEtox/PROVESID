@@ -21,6 +21,7 @@ import xml.etree.ElementTree as ET
 from rdkit import Chem
 import pandas as pd
 from tqdm import tqdm
+from .utils import data_path
 
 
 class ChEBIError(Exception):
@@ -531,7 +532,6 @@ class ChebiSDF:
             auto_download (bool): If True, automatically download SDF file if not found (default: True)
             sdf_url (str, optional): Custom URL to download the SDF from. If None, uses default.
         """
-        from .utils import data_path
         
         if sdf_path is None:
             data_dir = data_path()

@@ -8,6 +8,8 @@ PROVESID provides Python interfaces to several major chemical databases and web 
 
 - **[PubChem API](pubchem.md)** - Standard PubChem REST API with enhanced data access ✨ *Enhanced*
 - **[PubChem PUG View](pubchemview.md)** - Advanced property extraction from PubChem ✨ *Enhanced*
+- **[ChEMBL](chembl.md)** - Local SQLite database for bioactive drug-like compounds 🆕
+- **[ChEBI](chebi.md)** - Chemical Entities of Biological Interest database
 - **[NCI Resolver](nci_resolver.md)** - Chemical identifier resolution
 - **[CAS Common Chemistry](cascommonchem.md)** - CAS Registry data access
 - **[OPSIN](opsin.md)** - IUPAC name to structure conversion
@@ -22,6 +24,8 @@ All API classes follow a similar pattern:
 ```python
 # Import the desired API
 from provesid import PubChemAPI  # Enhanced standard API
+from provesid import CheMBL  # Local ChEMBL database
+from provesid import ChEBI  # ChEBI database
 from provesid.pubchemview import PubChemPUGViewAPI  # Advanced properties
 from provesid.cascommonchem import CASCommonChem
 from provesid.opsin import OPSIN
@@ -30,6 +34,8 @@ from provesid.classyfire import ClassyFireAPI
 # Initialize APIs
 pc = PubChemAPI()  # Standard PubChem API
 pug_view = PubChemPUGViewAPI()  # Advanced PubChem properties
+chembl = CheMBL()  # Local ChEMBL database (auto-downloads if needed)
+chebi = ChEBI()  # ChEBI API
 cas_api = CASCommonChem()
 opsin = OPSIN()
 
@@ -106,14 +112,17 @@ compound = pc.get_compound_by_cid(cid)
 
 ## Module Comparison
 
-| Feature | PubChem API | PubChem View | CAS Common | OPSIN | ClassyFire | NCI Resolver |
-|---------|-------------|--------------|------------|-------|------------|--------------|
-| **Primary Use** | Standard data | Properties | Registry data | Name→Structure | Classification | ID conversion |
-| **Input Types** | CID, Name, SMILES, InChI Key | CID, Name, SMILES | CAS, Name, SMILES | IUPAC names | SMILES, InChI | Various IDs |
-| **Output Format** | JSON ✨ *Clean* | JSON, DataFrame | JSON | JSON | JSON, SDF, CSV | JSON |
-| **Rate Limits** | Yes | Yes | Unofficial | Unofficial | Unofficial | Yes |
-| **Batch Support** | Yes ✨ *Enhanced* | Yes | Manual | Yes | Manual | Yes |
-| **Recent Updates** | ✨ *Major* | ✨ *Enhanced* | - | - | - | - |
+| Feature | PubChem API | PubChem View | ChEMBL | ChEBI | CAS Common | OPSIN | ClassyFire | NCI Resolver |
+|---------|-------------|--------------|--------|-------|------------|-------|------------|--------------|
+| **Primary Use** | Standard data | Properties | Drug-like compounds | Biological entities | Registry data | Name→Structure | Classification | ID conversion |
+| **Input Types** | CID, Name, SMILES, InChI Key | CID, Name, SMILES | ChEMBL ID, Name, InChI, SMILES | ChEBI ID, Name | CAS, Name, SMILES | IUPAC names | SMILES, InChI | Various IDs |
+| **Data Source** | REST API | REST API | Local SQLite | REST API + SDF | REST API | Web service | Web service | Web service |
+| **Database Size** | 110M+ | 110M+ | 2.3M | 190K+ | 500K+ | N/A | N/A | N/A |
+| **Output Format** | JSON ✨ *Clean* | JSON, DataFrame | Dict | JSON, XML | JSON | JSON | JSON, SDF, CSV | JSON |
+| **Rate Limits** | Yes | Yes | None (local) | Yes | Unofficial | Unofficial | Unofficial | Yes |
+| **Offline Mode** | No | No | Yes 🆕 | Partial (SDF) | No | No | No | No |
+| **Batch Support** | Yes ✨ *Enhanced* | Yes | Yes | Yes | Manual | Yes | Manual | Yes |
+| **Recent Updates** | ✨ *Major* | ✨ *Enhanced* | 🆕 *New* | - | - | - | - | - |
 
 ## Authentication Requirements
 
@@ -121,6 +130,8 @@ compound = pc.get_compound_by_cid(cid)
 |---------|---------------|-------|
 | PubChem API | None | Rate limits apply, enhanced data access ✨ |
 | PubChem PUG View | None | Rate limits apply, advanced properties |
+| ChEMBL | None | Local database, no limits 🆕 |
+| ChEBI | None | Rate limits apply |
 | CAS Common Chemistry | None | Free tier available |
 | OPSIN | None | Cambridge University service |
 | ClassyFire | None | Long processing times |

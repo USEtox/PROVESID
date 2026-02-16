@@ -4,7 +4,7 @@ ChEMBL Implementation Demo
 This script demonstrates the completed ChEMBL implementation without
 requiring the full database download.
 """
-
+# %% load the package
 from provesid import CheMBL, ChEMBLError
 import os
 
@@ -12,23 +12,23 @@ print("=" * 70)
 print("ChEMBL Implementation Complete!")
 print("=" * 70)
 
-# Verify class and methods
+# %% Verify class and methods
 print("\n1. Class Import: SUCCESS")
 print(f"   - CheMBL class: {CheMBL}")
 print(f"   - ChEMBLError exception: {ChEMBLError}")
 
-# List all public methods
+# %% List all public methods
 methods = [m for m in dir(CheMBL) if not m.startswith('_') or m in ['__init__', '__del__']]
 print(f"\n2. Available Methods ({len(methods)}):")
 for method in sorted(methods):
     print(f"   - {method}")
 
-# Show default configuration
+# %% Show default configuration
 print(f"\n3. Configuration:")
 print(f"   - Default DB URL: {CheMBL.DEFAULT_DB_URL}")
 print(f"   - Database name: chembl_36.db")
 
-# Show what would happen on initialization
+# %% Show what would happen on initialization
 print(f"\n4. Initialization Behavior:")
 print(f"   - With auto_download=True: Downloads database if missing")
 print(f"   - With auto_download=False: Raises FileNotFoundError if missing")

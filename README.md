@@ -184,4 +184,9 @@ Several other Python (and other) packages and sample codes are available. We are
 
 # TODO list
 
-We will provide Python interfaces to more online services. Please [open an issue](https://github.com/USEtox/PROVESID/issues) and let us know what else you would like to have included.
+We will provide Python interfaces to more online services. Please [open an issue](https://github.com/USEtox/PROVESID/issues) and let us know what else you would like to have included.  
+
+Add data and tool for [Chebi ontology](https://ftp.ebi.ac.uk/pub/databases/chebi/ontology/) data using [pronto](https://github.com/althonos/pronto)  
+Add an interface to the [ChEMBL standardization pipeline](https://link.springer.com/article/10.1186/s13321-020-00456-1) using its [Python package](https://github.com/chembl/ChEMBL_Structure_Pipeline)  
+
+Add [UniChem](https://www.ebi.ac.uk/unichem/api/docs) API

@@ -1,9 +1,11 @@
 """
 ChEBI (Chemical Entities of Biological Interest) API interface.
 
-This module provides a Python interface to the ChEBI REST API for retrieving
+This module provides a Python interface to the ChEBI 2.0 REST API for retrieving
 chemical compound information from the ChEBI database, as well as a local
 SDF file parser for offline access to ChEBI data.
+
+API documentation: https://www.ebi.ac.uk/chebi/backend/api/docs/
 
 Author: USEtox team
 Date: August 2025
@@ -17,7 +19,6 @@ import pickle
 import gzip
 import shutil
 from typing import Dict, List, Optional, Union, Any
-import xml.etree.ElementTree as ET
 from rdkit import Chem
 import pandas as pd
 from tqdm import tqdm
@@ -31,466 +32,777 @@ class ChEBIError(Exception):
 
 class ChEBI:
     """
-    Interface for the ChEBI (Chemical Entities of Biological Interest) REST API.
-    
-    The ChEBI database is a freely available dictionary of molecular entities 
+    Interface for the ChEBI 2.0 (Chemical Entities of Biological Interest) REST API.
+
+    The ChEBI database is a freely available dictionary of molecular entities
     focused on 'small' chemical compounds. This class provides methods to search
-    for and retrieve compound information from ChEBI.
-    
+    for and retrieve compound information from the ChEBI 2.0 API.
+
     Attributes:
-        base_url (str): Base URL for ChEBI API
+        base_url (str): Base URL for ChEBI 2.0 API
         timeout (int): Request timeout in seconds
         session (requests.Session): HTTP session for connection pooling
-    
+
     Example:
         >>> chebi = ChEBI()
-        >>> compound = chebi.get_complete_entity(15377)  # ChEBI:15377 (water)
-        >>> print(compound['chebiAsciiName'])
+        >>> compound = chebi.get_compound(15377)  # CHEBI:15377 (water)
+        >>> print(compound['name'])
         water
     """
-    
+
+    # Valid ontology relation types for the ChEBI 2.0 API
+    VALID_RELATIONS = [
+        "has_functional_parent", "has_parent_hydride", "has_part", "has_role",
+        "is_a", "is_conjugate_acid_of", "is_conjugate_base_of",
+        "is_enantiomer_of", "is_part_of", "is_substituent_group_from",
+        "is_tautomer_of",
+    ]
+
+    # Valid structure search types
+    VALID_SEARCH_TYPES = ["connectivity", "similarity", "substructure"]
+
     def __init__(self, timeout: int = 30):
         """
-        Initialize ChEBI API client.
-        
+        Initialize ChEBI 2.0 API client.
+
         Args:
             timeout (int): Request timeout in seconds (default: 30)
         """
-        self.base_url = "https://www.ebi.ac.uk/webservices/chebi/2.0/test"
+        self.base_url = "https://www.ebi.ac.uk/chebi/backend/api/public"
         self.timeout = timeout
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'PROVESID-ChEBI-Client/1.0',
-            'Accept': 'application/xml, text/xml'
+            'User-Agent': 'PROVESID-ChEBI-Client/2.0',
+            'Accept': 'application/json',
         })
-        
+
         # Setup logging
         self.logger = logging.getLogger(__name__)
-    
-    def _make_request(self, endpoint: str, params: Optional[Dict] = None) -> requests.Response:
+
+    @staticmethod
+    def _format_chebi_id(chebi_id: Union[int, str]) -> str:
         """
-        Make HTTP request to ChEBI API.
-        
+        Format a ChEBI ID to the canonical ``CHEBI:<number>`` form.
+
+        The ChEBI 2.0 API accepts IDs with or without the prefix, but this
+        helper ensures consistency.
+
         Args:
-            endpoint (str): API endpoint
-            params (dict, optional): Query parameters
-            
+            chebi_id: ChEBI ID (int, bare number string, or ``CHEBI:…`` string)
+
         Returns:
-            requests.Response: HTTP response object
-            
+            str: ID in ``CHEBI:<number>`` form
+        """
+        chebi_id_str = str(chebi_id).strip()
+        if not chebi_id_str.upper().startswith("CHEBI:"):
+            chebi_id_str = f"CHEBI:{chebi_id_str}"
+        return chebi_id_str
+
+    # ------------------------------------------------------------------
+    # Low-level HTTP helpers
+    # ------------------------------------------------------------------
+
+    def _get(self, endpoint: str, params: Optional[Dict] = None) -> Any:
+        """
+        Perform a GET request and return the parsed JSON body.
+
+        Args:
+            endpoint (str): Path relative to *base_url* (e.g. ``compound/15377/``).
+            params (dict, optional): Query-string parameters.
+
+        Returns:
+            Parsed JSON response (dict / list / str).
+
         Raises:
-            ChEBIError: If request fails or returns error status
+            ChEBIError: On network / HTTP / JSON errors.
         """
         url = f"{self.base_url}/{endpoint}"
-        
         try:
             response = self.session.get(url, params=params, timeout=self.timeout)
             response.raise_for_status()
-            return response
-            
+            if response.headers.get("Content-Type", "").startswith("application/json"):
+                return response.json()
+            return response.text
         except requests.exceptions.Timeout:
             raise ChEBIError(f"Request timeout after {self.timeout} seconds")
         except requests.exceptions.RequestException as e:
             raise ChEBIError(f"Request failed: {str(e)}")
-    
-    def _parse_xml_response(self, response: requests.Response) -> Any:
+
+    def _get_raw(self, endpoint: str, params: Optional[Dict] = None) -> requests.Response:
         """
-        Parse XML response from ChEBI API.
-        
+        Perform a GET request and return the raw :class:`requests.Response`.
+
+        Useful for endpoints that return non-JSON content (SVG, molfile, images).
+        """
+        url = f"{self.base_url}/{endpoint}"
+        try:
+            response = self.session.get(url, params=params, timeout=self.timeout)
+            response.raise_for_status()
+            return response
+        except requests.exceptions.Timeout:
+            raise ChEBIError(f"Request timeout after {self.timeout} seconds")
+        except requests.exceptions.RequestException as e:
+            raise ChEBIError(f"Request failed: {str(e)}")
+
+    def _post_json(self, endpoint: str, json_body: Any = None,
+                   params: Optional[Dict] = None) -> Any:
+        """
+        Perform a POST request with a JSON body and return parsed JSON.
+
         Args:
-            response (requests.Response): HTTP response with XML content
-            
+            endpoint (str): Path relative to *base_url*.
+            json_body: Object to serialise as JSON request body.
+            params (dict, optional): Query-string parameters.
+
         Returns:
-            Any: Parsed XML data as dictionary, list, or string
-            
+            Parsed JSON response.
+
         Raises:
-            ChEBIError: If XML parsing fails
+            ChEBIError: On network / HTTP / JSON errors.
         """
+        url = f"{self.base_url}/{endpoint}"
         try:
-            root = ET.fromstring(response.content)
-            return self._xml_to_dict(root)
-        except ET.ParseError as e:
-            raise ChEBIError(f"Failed to parse XML response: {str(e)}")
-    
-    def _xml_to_dict(self, element: ET.Element) -> Union[Dict, List, str]:
+            response = self.session.post(
+                url, json=json_body, params=params, timeout=self.timeout,
+            )
+            response.raise_for_status()
+            if response.headers.get("Content-Type", "").startswith("application/json"):
+                return response.json()
+            return response.text
+        except requests.exceptions.Timeout:
+            raise ChEBIError(f"Request timeout after {self.timeout} seconds")
+        except requests.exceptions.RequestException as e:
+            raise ChEBIError(f"Request failed: {str(e)}")
+
+    def _post_text(self, endpoint: str, text_body: str,
+                   params: Optional[Dict] = None) -> str:
         """
-        Convert XML element to dictionary.
-        
+        Perform a POST request with a ``text/plain`` body and return the
+        response text.  Used by the structure-calculation endpoints.
+        """
+        url = f"{self.base_url}/{endpoint}"
+        try:
+            response = self.session.post(
+                url, data=text_body, params=params, timeout=self.timeout,
+                headers={**self.session.headers, "Content-Type": "text/plain;charset=UTF-8"},
+            )
+            response.raise_for_status()
+            return response.text
+        except requests.exceptions.Timeout:
+            raise ChEBIError(f"Request timeout after {self.timeout} seconds")
+        except requests.exceptions.RequestException as e:
+            raise ChEBIError(f"Request failed: {str(e)}")
+
+    # ------------------------------------------------------------------
+    # Compound retrieval
+    # ------------------------------------------------------------------
+
+    def get_compound(self, chebi_id: Union[int, str], *,
+                     only_ontology_parents: bool = False,
+                     only_ontology_children: bool = False) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve information about a single compound.
+
+        Endpoint: ``GET /compound/{chebi_id}/``
+
         Args:
-            element (ET.Element): XML element to convert
-            
+            chebi_id: ChEBI ID (with or without ``CHEBI:`` prefix).
+            only_ontology_parents: If *True*, return only ontology parents.
+            only_ontology_children: If *True*, return only ontology children.
+
         Returns:
-            Union[dict, list, str]: Converted data structure
+            dict with compound data, or *None* if not found.
+
+        Example:
+            >>> chebi = ChEBI()
+            >>> water = chebi.get_compound(15377)
         """
-        # Remove namespace from tag
-        tag = element.tag.split('}')[-1] if '}' in element.tag else element.tag
-        
-        # If element has children, process recursively
-        if len(element) > 0:
-            result = {}
-            for child in element:
-                child_tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                child_data = self._xml_to_dict(child)
-                
-                # Handle multiple elements with same tag
-                if child_tag in result:
-                    if not isinstance(result[child_tag], list):
-                        result[child_tag] = [result[child_tag]]
-                    result[child_tag].append(child_data)
-                else:
-                    result[child_tag] = child_data
-            
-            # Add attributes if any
-            if element.attrib:
-                result.update(element.attrib)
-                
+        chebi_id_str = self._format_chebi_id(chebi_id)
+        params: Dict[str, Any] = {}
+        if only_ontology_parents:
+            params["only_ontology_parents"] = "true"
+        if only_ontology_children:
+            params["only_ontology_children"] = "true"
+
+        try:
+            return self._get(f"compound/{chebi_id_str}/", params=params or None)
+        except ChEBIError as e:
+            self.logger.warning(f"Failed to get compound {chebi_id_str}: {e}")
+            return None
+
+    def get_compounds(self, chebi_ids: List[Union[int, str]]) -> Optional[Any]:
+        """
+        Retrieve information about one or more compounds in a single call.
+
+        Endpoint: ``POST /compounds/``
+
+        Args:
+            chebi_ids: List of ChEBI IDs.
+
+        Returns:
+            API response (typically a list of compound dicts), or *None* on error.
+
+        Example:
+            >>> chebi = ChEBI()
+            >>> results = chebi.get_compounds(["CHEBI:15377", "CHEBI:16236"])
+        """
+        ids_formatted = [self._format_chebi_id(cid) for cid in chebi_ids]
+        try:
+            return self._post_json("compounds/", json_body={"chebi_ids": ids_formatted})
+        except ChEBIError as e:
+            self.logger.warning(f"Failed to get compounds: {e}")
+            return None
+
+    # ------------------------------------------------------------------
+    # Search
+    # ------------------------------------------------------------------
+
+    def search(self, term: str, *, page: int = 1, size: int = 15) -> Optional[Any]:
+        """
+        General text search (Elasticsearch-backed).
+
+        Endpoint: ``GET /es_search/``
+
+        You can search by ChEBI name, brand name, IUPAC name, synonym,
+        InChIKey, formula, SMILES, InChI, CAS number, database cross-reference
+        IDs, PubMed IDs, and more.
+
+        Args:
+            term: Search term (name, SMILES, InChIKey, CAS, formula, …).
+            page: Page number for pagination (default 1).
+            size: Page size (default 15).
+
+        Returns:
+            Search results dict, or *None* on error.
+
+        Example:
+            >>> chebi = ChEBI()
+            >>> results = chebi.search("paracetamol")
+        """
+        params: Dict[str, Any] = {"term": term, "page": page, "size": size}
+        try:
+            return self._get("es_search/", params=params)
+        except ChEBIError as e:
+            self.logger.warning(f"Search failed for '{term}': {e}")
+            return None
+
+    def search_by_name(self, search_text: str, *, page: int = 1,
+                       size: int = 15) -> List[Dict[str, Any]]:
+        """
+        Search ChEBI by compound name (convenience wrapper around :meth:`search`).
+
+        Args:
+            search_text: Text to search for.
+            page: Page number for pagination (default 1).
+            size: Page size (default 15).
+
+        Returns:
+            list of matching entity dicts (may be empty).
+        """
+        result = self.search(search_text, page=page, size=size)
+        if result is None:
+            return []
+        # The es_search endpoint typically returns a dict with a results list
+        if isinstance(result, dict):
+            return result.get("results", result.get("items", [result]))
+        if isinstance(result, list):
             return result
-        else:
-            # Leaf element - return text content
-            return element.text if element.text else ""
-    
-    def get_complete_entity(self, chebi_id: Union[int, str]) -> Optional[Dict[str, Any]]:
+        return []
+
+    # ------------------------------------------------------------------
+    # Advanced search
+    # ------------------------------------------------------------------
+
+    def advanced_search(
+        self,
+        specification: Dict[str, Any],
+        *,
+        three_star_only: bool = True,
+        has_structure: Optional[bool] = None,
+        page: int = 1,
+        size: int = 15,
+        download: bool = False,
+    ) -> Optional[Any]:
         """
-        Get complete entity information for a ChEBI ID.
-        
+        Perform an advanced compound search using specification objects.
+
+        Endpoint: ``POST /advanced_search/``
+
+        Seven specification types are supported (combine with ``and_specification``,
+        ``or_specification``, ``but_not_specification``):
+
+        - ``ontology_specification``
+        - ``formula_specification``
+        - ``mass_specification``
+        - ``monoisotopicmass_specification``
+        - ``charge_specification``
+        - ``database_name_specification``
+        - ``text_search_specification``
+
         Args:
-            chebi_id (Union[int, str]): ChEBI ID (with or without 'CHEBI:' prefix)
-            
+            specification: Request body following the ``FullSpecification`` schema.
+            three_star_only: Only include 3-star compounds (default *True*).
+            has_structure: Filter by structure availability (*None* = no filter).
+            page: Page number (default 1).
+            size: Page size (default 15).
+            download: Return results in download format (default *False*).
+
         Returns:
-            dict: Complete entity information, None if not found
-            
+            API response dict/list, or *None* on error.
+
         Example:
             >>> chebi = ChEBI()
-            >>> water = chebi.get_complete_entity(15377)
-            >>> print(water['chebiAsciiName'])
-            water
+            >>> results = chebi.advanced_search({
+            ...     "formula_specification": {
+            ...         "and_specification": [{"term": "C6H12O7"}]
+            ...     }
+            ... }, three_star_only=False)
         """
-        # Ensure ChEBI ID is properly formatted
-        if isinstance(chebi_id, int):
-            chebi_id = f"CHEBI:{chebi_id}"
-        elif not str(chebi_id).startswith("CHEBI:"):
-            chebi_id = f"CHEBI:{chebi_id}"
-        
+        params: Dict[str, Any] = {
+            "three_star_only": str(three_star_only).lower(),
+            "page": page,
+            "size": size,
+            "download": str(download).lower(),
+        }
+        if has_structure is not None:
+            params["has_structure"] = str(has_structure).lower()
+
         try:
-            response = self._make_request("getCompleteEntity", {"chebiId": chebi_id})
-            data = self._parse_xml_response(response)
-            
-            # Navigate to the actual entity data
-            if 'Body' in data and 'getCompleteEntityResponse' in data['Body']:
-                response_data = data['Body']['getCompleteEntityResponse']
-                # Handle case where response is an error string
-                if isinstance(response_data, str):
-                    self.logger.warning(f"ChEBI API returned error: {response_data}")
-                    return None
-                
-                entity = response_data.get('return')
-                return entity
-            
-            return None
-            
+            return self._post_json("advanced_search/", json_body=specification,
+                                   params=params)
         except ChEBIError as e:
-            self.logger.warning(f"Failed to get complete entity for {chebi_id}: {e}")
+            self.logger.warning(f"Advanced search failed: {e}")
             return None
-    
-    def get_lite_entity(self, chebi_id: Union[int, str]) -> Optional[Dict[str, Any]]:
+
+    def get_sources_list(self) -> Optional[Any]:
         """
-        Get lite entity information for a ChEBI ID (basic information only).
-        
-        Args:
-            chebi_id (Union[int, str]): ChEBI ID (with or without 'CHEBI:' prefix)
-            
+        Retrieve the list of available database sources for advanced search.
+
+        Endpoint: ``GET /advanced_search/sources_list``
+
         Returns:
-            dict: Lite entity information, None if not found
+            Sources information, or *None* on error.
         """
-        # Ensure ChEBI ID is properly formatted
-        if isinstance(chebi_id, int):
-            chebi_id = f"CHEBI:{chebi_id}"
-        elif not str(chebi_id).startswith("CHEBI:"):
-            chebi_id = f"CHEBI:{chebi_id}"
-        
         try:
-            response = self._make_request("getLiteEntity", {"chebiId": chebi_id})
-            data = self._parse_xml_response(response)
-            
-            # Navigate to the actual entity data
-            if 'Body' in data and 'getLiteEntityResponse' in data['Body']:
-                entity = data['Body']['getLiteEntityResponse'].get('return')
-                return entity
-            
-            return None
-            
+            return self._get("advanced_search/sources_list")
         except ChEBIError as e:
-            self.logger.warning(f"Failed to get lite entity for {chebi_id}: {e}")
+            self.logger.warning(f"Failed to get sources list: {e}")
             return None
-    
-    def search_by_name(self, search_text: str, search_category: str = "ALL", 
-                      max_results: int = 50, stars: str = "ALL") -> List[Dict[str, Any]]:
+
+    # ------------------------------------------------------------------
+    # Ontology
+    # ------------------------------------------------------------------
+
+    def get_ontology_parents(self, chebi_id: Union[int, str]) -> Optional[Any]:
         """
-        Search ChEBI by compound name.
-        
+        Get the ontology parents of a compound.
+
+        Endpoint: ``GET /ontology/parents/{chebi_id}/``
+
         Args:
-            search_text (str): Text to search for
-            search_category (str): Search category ('ALL', 'CHEBI_NAME', 'DEFINITION', etc.)
-            max_results (int): Maximum number of results to return
-            stars (str): Star category ('ALL', 'TWO_ONLY', 'THREE_ONLY')
-            
+            chebi_id: ChEBI ID (with or without ``CHEBI:`` prefix).
+
         Returns:
-            list: List of matching entities
-            
+            Ontology parent data, or *None* on error.
+        """
+        chebi_id_str = self._format_chebi_id(chebi_id)
+        try:
+            return self._get(f"ontology/parents/{chebi_id_str}/")
+        except ChEBIError as e:
+            self.logger.warning(f"Failed to get ontology parents for {chebi_id_str}: {e}")
+            return None
+
+    def get_ontology_children(self, chebi_id: Union[int, str]) -> Optional[Any]:
+        """
+        Get the ontology children of a compound.
+
+        Endpoint: ``GET /ontology/children/{chebi_id}/``
+
+        Args:
+            chebi_id: ChEBI ID (with or without ``CHEBI:`` prefix).
+
+        Returns:
+            Ontology children data, or *None* on error.
+        """
+        chebi_id_str = self._format_chebi_id(chebi_id)
+        try:
+            return self._get(f"ontology/children/{chebi_id_str}/")
+        except ChEBIError as e:
+            self.logger.warning(f"Failed to get ontology children for {chebi_id_str}: {e}")
+            return None
+
+    def get_all_ontology_children_in_path(
+        self,
+        relation: str,
+        entity: Union[int, str],
+        *,
+        three_star_only: bool = True,
+        has_structure: Optional[bool] = None,
+        page: int = 1,
+        size: int = 15,
+        download: bool = False,
+    ) -> Optional[Any]:
+        """
+        Search all compounds in the ontology matching a relation and entity.
+
+        Endpoint: ``GET /ontology/all_children_in_path/``
+
+        Args:
+            relation: Ontology relation type (e.g. ``is_a``, ``has_role``).
+            entity: ChEBI ID of the entity to find children of.
+            three_star_only: Only include 3-star compounds (default *True*).
+            has_structure: Filter by structure availability.
+            page: Page number (default 1).
+            size: Page size (default 15).
+            download: Return results in download format.
+
+        Returns:
+            API response, or *None* on error.
+
         Example:
             >>> chebi = ChEBI()
-            >>> results = chebi.search_by_name("water")
-            >>> for result in results[:3]:
-            ...     print(f"{result['chebiId']}: {result['chebiAsciiName']}")
+            >>> # Get all compounds that are alcohols
+            >>> results = chebi.get_all_ontology_children_in_path(
+            ...     relation="is_a", entity="CHEBI:30879"
+            ... )
         """
-        params = {
-            "search": search_text,
-            "searchCategory": search_category,
-            "maxResults": max_results,
-            "stars": stars
+        entity_str = self._format_chebi_id(entity)
+        params: Dict[str, Any] = {
+            "relation": relation,
+            "entity": entity_str,
+            "three_star_only": str(three_star_only).lower(),
+            "page": page,
+            "size": size,
+            "download": str(download).lower(),
         }
-        
+        if has_structure is not None:
+            params["has_structure"] = str(has_structure).lower()
+
         try:
-            response = self._make_request("getLiteEntity", params)
-            data = self._parse_xml_response(response)
-            
-            # Navigate to the search results
-            if 'Body' in data and 'getLiteEntityResponse' in data['Body']:
-                results = data['Body']['getLiteEntityResponse'].get('return', [])
-                if not isinstance(results, list):
-                    results = [results] if results else []
-                return results
-            
-            return []
-            
+            return self._get("ontology/all_children_in_path/", params=params)
         except ChEBIError as e:
-            self.logger.warning(f"Search failed for '{search_text}': {e}")
-            return []
-    
-    def get_ontology_parents(self, chebi_id: Union[int, str]) -> List[Dict[str, Any]]:
-        """
-        Get ontology parents for a ChEBI ID.
-        
-        Args:
-            chebi_id (Union[int, str]): ChEBI ID (with or without 'CHEBI:' prefix)
-            
-        Returns:
-            list: List of parent entities in the ontology
-        """
-        # Ensure ChEBI ID is properly formatted
-        if isinstance(chebi_id, int):
-            chebi_id = f"CHEBI:{chebi_id}"
-        elif not str(chebi_id).startswith("CHEBI:"):
-            chebi_id = f"CHEBI:{chebi_id}"
-        
-        try:
-            response = self._make_request("getOntologyParents", {"chebiId": chebi_id})
-            data = self._parse_xml_response(response)
-            
-            if 'Body' in data and 'getOntologyParentsResponse' in data['Body']:
-                parents = data['Body']['getOntologyParentsResponse'].get('return', [])
-                if not isinstance(parents, list):
-                    parents = [parents] if parents else []
-                return parents
-            
-            return []
-            
-        except ChEBIError as e:
-            self.logger.warning(f"Failed to get ontology parents for {chebi_id}: {e}")
-            return []
-    
-    def get_ontology_children(self, chebi_id: Union[int, str]) -> List[Dict[str, Any]]:
-        """
-        Get ontology children for a ChEBI ID.
-        
-        Args:
-            chebi_id (Union[int, str]): ChEBI ID (with or without 'CHEBI:' prefix)
-            
-        Returns:
-            list: List of child entities in the ontology
-        """
-        # Ensure ChEBI ID is properly formatted
-        if isinstance(chebi_id, int):
-            chebi_id = f"CHEBI:{chebi_id}"
-        elif not str(chebi_id).startswith("CHEBI:"):
-            chebi_id = f"CHEBI:{chebi_id}"
-        
-        try:
-            response = self._make_request("getOntologyChildren", {"chebiId": chebi_id})
-            data = self._parse_xml_response(response)
-            
-            if 'Body' in data and 'getOntologyChildrenResponse' in data['Body']:
-                children = data['Body']['getOntologyChildrenResponse'].get('return', [])
-                if not isinstance(children, list):
-                    children = [children] if children else []
-                return children
-            
-            return []
-            
-        except ChEBIError as e:
-            self.logger.warning(f"Failed to get ontology children for {chebi_id}: {e}")
-            return []
-    
-    def get_all_ontology_children_in_path(self, chebi_id: Union[int, str], 
-                                        ontology_type: str = "is_a") -> List[Dict[str, Any]]:
-        """
-        Get all ontology children in path for a ChEBI ID.
-        
-        Args:
-            chebi_id (Union[int, str]): ChEBI ID (with or without 'CHEBI:' prefix)
-            ontology_type (str): Type of ontology relationship ('is_a', 'has_part', etc.)
-            
-        Returns:
-            list: List of all children in the ontology path
-        """
-        # Ensure ChEBI ID is properly formatted
-        if isinstance(chebi_id, int):
-            chebi_id = f"CHEBI:{chebi_id}"
-        elif not str(chebi_id).startswith("CHEBI:"):
-            chebi_id = f"CHEBI:{chebi_id}"
-        
-        params = {
-            "chebiId": chebi_id,
-            "ontologyType": ontology_type
-        }
-        
-        try:
-            response = self._make_request("getAllOntologyChildrenInPath", params)
-            data = self._parse_xml_response(response)
-            
-            if 'Body' in data and 'getAllOntologyChildrenInPathResponse' in data['Body']:
-                children = data['Body']['getAllOntologyChildrenInPathResponse'].get('return', [])
-                if not isinstance(children, list):
-                    children = [children] if children else []
-                return children
-            
-            return []
-            
-        except ChEBIError as e:
-            self.logger.warning(f"Failed to get all ontology children for {chebi_id}: {e}")
-            return []
-    
-    def get_structure(self, chebi_id: Union[int, str], structure_type: str = "mol") -> Optional[str]:
-        """
-        Get chemical structure for a ChEBI ID.
-        
-        Args:
-            chebi_id (Union[int, str]): ChEBI ID (with or without 'CHEBI:' prefix)
-            structure_type (str): Structure format ('mol', 'sdf', 'smiles', 'inchi')
-            
-        Returns:
-            str: Chemical structure in requested format, None if not found
-        """
-        # Ensure ChEBI ID is properly formatted
-        if isinstance(chebi_id, int):
-            chebi_id = f"CHEBI:{chebi_id}"
-        elif not str(chebi_id).startswith("CHEBI:"):
-            chebi_id = f"CHEBI:{chebi_id}"
-        
-        params = {
-            "chebiId": chebi_id,
-            "structureType": structure_type.upper()
-        }
-        
-        try:
-            response = self._make_request("getStructure", params)
-            data = self._parse_xml_response(response)
-            
-            if 'Body' in data and 'getStructureResponse' in data['Body']:
-                response_data = data['Body']['getStructureResponse']
-                # Handle case where response is an error string
-                if isinstance(response_data, str):
-                    self.logger.warning(f"ChEBI API returned error: {response_data}")
-                    return None
-                
-                structure = response_data.get('return')
-                return structure
-            
+            self.logger.warning(f"Failed to get all ontology children: {e}")
             return None
-            
-        except ChEBIError as e:
-            self.logger.warning(f"Failed to get structure for {chebi_id}: {e}")
-            return None
-    
-    def batch_get_entities(self, chebi_ids: List[Union[int, str]], 
-                          pause_time: float = 0.1) -> Dict[str, Dict[str, Any]]:
+
+    # ------------------------------------------------------------------
+    # Structures
+    # ------------------------------------------------------------------
+
+    def get_compound_structure(self, chebi_id: Union[int, str], *,
+                               width: int = 300, height: int = 300) -> Optional[str]:
         """
-        Get complete entity information for multiple ChEBI IDs.
-        
+        Get the default SVG structure for a compound.
+
+        Endpoint: ``GET /compound/{id}/structure/``
+
         Args:
-            chebi_ids (List[Union[int, str]]): List of ChEBI IDs
-            pause_time (float): Pause between requests to be respectful to the API
-            
+            chebi_id: ChEBI ID (numeric, the primary key of the compound).
+            width: Width of the SVG (default 300).
+            height: Height of the SVG (default 300).
+
         Returns:
-            dict: Dictionary mapping ChEBI IDs to entity information
-            
+            Raw SVG string, or *None* on error.
+        """
+        # This endpoint expects the numeric compound PK
+        numeric_id = str(chebi_id)
+        if numeric_id.upper().startswith("CHEBI:"):
+            numeric_id = numeric_id.split(":")[-1]
+
+        params: Dict[str, Any] = {"width": width, "height": height}
+        try:
+            resp = self._get_raw(f"compound/{numeric_id}/structure/", params=params)
+            return resp.text
+        except ChEBIError as e:
+            self.logger.warning(f"Failed to get compound structure for {chebi_id}: {e}")
+            return None
+
+    def get_structure(self, structure_id: int, *, width: int = 300,
+                      height: int = 300) -> Optional[str]:
+        """
+        Get raw SVG contents of a structure by its primary key.
+
+        Endpoint: ``GET /structure/{id}/``
+
+        Args:
+            structure_id: Primary key of the structure.
+            width: Width of the SVG (default 300).
+            height: Height of the SVG (default 300).
+
+        Returns:
+            Raw SVG string, or *None* on error.
+        """
+        params: Dict[str, Any] = {"width": width, "height": height}
+        try:
+            resp = self._get_raw(f"structure/{structure_id}/", params=params)
+            return resp.text
+        except ChEBIError as e:
+            self.logger.warning(f"Failed to get structure {structure_id}: {e}")
+            return None
+
+    def get_molfile(self, compound_id: int) -> Optional[str]:
+        """
+        Download the Mol file for a compound's default structure.
+
+        Endpoint: ``GET /molfile/{id}/``
+
+        Args:
+            compound_id: Primary key of the compound.
+
+        Returns:
+            Mol file contents as string, or *None* on error.
+        """
+        try:
+            resp = self._get_raw(f"molfile/{compound_id}/")
+            return resp.text
+        except ChEBIError as e:
+            self.logger.warning(f"Failed to get molfile for {compound_id}: {e}")
+            return None
+
+    # ------------------------------------------------------------------
+    # Structure search
+    # ------------------------------------------------------------------
+
+    def structure_search(
+        self,
+        smiles: str,
+        search_type: str = "connectivity",
+        *,
+        similarity: Optional[float] = None,
+        three_star_only: bool = True,
+        page: int = 1,
+        size: int = 15,
+        download: bool = False,
+    ) -> Optional[Any]:
+        """
+        Search compounds by chemical structure.
+
+        Endpoint: ``GET /structure_search/``
+
+        Args:
+            smiles: Molecule structure in SMILES representation.
+            search_type: One of ``connectivity``, ``similarity``, ``substructure``.
+            similarity: Similarity threshold for similarity search (0.4–1.0).
+            three_star_only: Only include 3-star compounds (default *True*).
+            page: Page number (default 1).
+            size: Page size (default 15).
+            download: Return in download format.
+
+        Returns:
+            Search results, or *None* on error.
+
         Example:
             >>> chebi = ChEBI()
-            >>> results = chebi.batch_get_entities([15377, 16236])  # water, ethanol
-            >>> for chebi_id, data in results.items():
-            ...     print(f"{chebi_id}: {data['chebiAsciiName']}")
+            >>> results = chebi.structure_search("c1ccccc1", "substructure")
         """
-        results = {}
-        
+        params: Dict[str, Any] = {
+            "smiles": smiles,
+            "search_type": search_type,
+            "three_star_only": str(three_star_only).lower(),
+            "page": page,
+            "size": size,
+            "download": str(download).lower(),
+        }
+        if similarity is not None:
+            params["similarity"] = similarity
+
+        try:
+            return self._get("structure_search/", params=params)
+        except ChEBIError as e:
+            self.logger.warning(f"Structure search failed: {e}")
+            return None
+
+    # ------------------------------------------------------------------
+    # Structure calculations
+    # ------------------------------------------------------------------
+
+    def calculate_avg_mass(self, structure: str) -> Optional[str]:
+        """
+        Calculate the average mass from a structure (SMILES or molfile).
+
+        Endpoint: ``POST /structure-calculations/avg-mass/``
+        """
+        try:
+            return self._post_text("structure-calculations/avg-mass/", structure)
+        except ChEBIError as e:
+            self.logger.warning(f"avg-mass calculation failed: {e}")
+            return None
+
+    def calculate_avg_mass_from_formula(self, formula: str) -> Optional[str]:
+        """
+        Calculate the average mass from a molecular formula.
+
+        Endpoint: ``POST /structure-calculations/avg-mass/from-formula/``
+        """
+        try:
+            return self._post_text("structure-calculations/avg-mass/from-formula/", formula)
+        except ChEBIError as e:
+            self.logger.warning(f"avg-mass-from-formula calculation failed: {e}")
+            return None
+
+    def calculate_mol_formula(self, structure: str) -> Optional[str]:
+        """
+        Calculate the molecular formula from a structure (SMILES or molfile).
+
+        Endpoint: ``POST /structure-calculations/mol-formula/``
+        """
+        try:
+            return self._post_text("structure-calculations/mol-formula/", structure)
+        except ChEBIError as e:
+            self.logger.warning(f"mol-formula calculation failed: {e}")
+            return None
+
+    def calculate_monoisotopic_mass(self, structure: str) -> Optional[str]:
+        """
+        Calculate the monoisotopic mass from a structure (SMILES or molfile).
+
+        Endpoint: ``POST /structure-calculations/monoisotopic-mass/``
+        """
+        try:
+            return self._post_text("structure-calculations/monoisotopic-mass/", structure)
+        except ChEBIError as e:
+            self.logger.warning(f"monoisotopic-mass calculation failed: {e}")
+            return None
+
+    def calculate_monoisotopic_mass_from_formula(self, formula: str) -> Optional[str]:
+        """
+        Calculate the monoisotopic mass from a molecular formula.
+
+        Endpoint: ``POST /structure-calculations/monoisotopic-mass/from-formula/``
+        """
+        try:
+            return self._post_text(
+                "structure-calculations/monoisotopic-mass/from-formula/", formula,
+            )
+        except ChEBIError as e:
+            self.logger.warning(f"monoisotopic-mass-from-formula calculation failed: {e}")
+            return None
+
+    def calculate_net_charge(self, structure: str) -> Optional[str]:
+        """
+        Calculate the net charge from a structure (SMILES or molfile).
+
+        Endpoint: ``POST /structure-calculations/net-charge/``
+        """
+        try:
+            return self._post_text("structure-calculations/net-charge/", structure)
+        except ChEBIError as e:
+            self.logger.warning(f"net-charge calculation failed: {e}")
+            return None
+
+    def depict_structure(self, structure: str, *, width: int = 300,
+                         height: int = 300,
+                         transparent_bg: bool = False) -> Optional[bytes]:
+        """
+        Generate a PNG depiction of a structure using Indigo.
+
+        Endpoint: ``POST /structure-calculations/depict-indigo/``
+
+        Args:
+            structure: Structure in SMILES or molfile format.
+            width: Image width in pixels (default 300).
+            height: Image height in pixels (default 300).
+            transparent_bg: Use transparent background (default *False*).
+
+        Returns:
+            PNG image data as bytes, or *None* on error.
+        """
+        url = f"{self.base_url}/structure-calculations/depict-indigo/"
+        params: Dict[str, Any] = {
+            "width": width,
+            "height": height,
+            "transbg": str(transparent_bg).lower(),
+        }
+        try:
+            response = self.session.post(
+                url, data=structure, params=params, timeout=self.timeout,
+                headers={**self.session.headers, "Content-Type": "text/plain;charset=UTF-8"},
+            )
+            response.raise_for_status()
+            return response.content
+        except requests.exceptions.Timeout:
+            raise ChEBIError(f"Request timeout after {self.timeout} seconds")
+        except requests.exceptions.RequestException as e:
+            self.logger.warning(f"depict-indigo failed: {e}")
+            return None
+
+    # ------------------------------------------------------------------
+    # Batch helpers
+    # ------------------------------------------------------------------
+
+    def batch_get_compounds(self, chebi_ids: List[Union[int, str]],
+                            pause_time: float = 0.1) -> Dict[str, Dict[str, Any]]:
+        """
+        Retrieve compound info for multiple ChEBI IDs one-by-one.
+
+        For small batches prefer :meth:`get_compounds` which uses the bulk
+        endpoint.  This method calls :meth:`get_compound` in a loop with an
+        optional pause between requests.
+
+        Args:
+            chebi_ids: List of ChEBI IDs.
+            pause_time: Seconds to pause between requests (default 0.1).
+
+        Returns:
+            dict mapping ``CHEBI:<id>`` to compound data.
+        """
+        results: Dict[str, Dict[str, Any]] = {}
         for chebi_id in chebi_ids:
-            # Format the ID for the key
-            key = f"CHEBI:{chebi_id}" if not str(chebi_id).startswith("CHEBI:") else str(chebi_id)
-            
-            entity = self.get_complete_entity(chebi_id)
+            key = self._format_chebi_id(chebi_id)
+            entity = self.get_compound(chebi_id)
             if entity:
                 results[key] = entity
-            
-            # Be respectful to the API
             if pause_time > 0:
                 time.sleep(pause_time)
-        
         return results
-    
+
+    # ------------------------------------------------------------------
+    # Dunder
+    # ------------------------------------------------------------------
+
     def __repr__(self) -> str:
         """String representation of ChEBI client."""
         return f"ChEBI(base_url='{self.base_url}', timeout={self.timeout})"
 
 
-# Convenience function for quick lookups
+# ------------------------------------------------------------------
+# Convenience functions
+# ------------------------------------------------------------------
+
 def get_chebi_entity(chebi_id: Union[int, str]) -> Optional[Dict[str, Any]]:
     """
-    Convenience function to get ChEBI entity information.
-    
+    Convenience function to get ChEBI compound information.
+
     Args:
-        chebi_id (Union[int, str]): ChEBI ID (with or without 'CHEBI:' prefix)
-        
+        chebi_id: ChEBI ID (with or without ``CHEBI:`` prefix).
+
     Returns:
-        dict: Entity information, None if not found
-        
+        dict with compound data, or *None* if not found.
+
     Example:
         >>> from provesid import get_chebi_entity
         >>> water = get_chebi_entity(15377)
-        >>> print(water['chebiAsciiName'])
-        water
     """
     chebi = ChEBI()
-    return chebi.get_complete_entity(chebi_id)
+    return chebi.get_compound(chebi_id)
 
 
 def search_chebi(search_text: str, max_results: int = 10) -> List[Dict[str, Any]]:
     """
     Convenience function to search ChEBI by name.
-    
+
     Args:
-        search_text (str): Text to search for
-        max_results (int): Maximum number of results to return
-        
+        search_text: Text to search for.
+        max_results: Maximum number of results to return.
+
     Returns:
-        list: List of matching entities
-        
+        list of matching entity dicts.
+
     Example:
         >>> from provesid import search_chebi
         >>> results = search_chebi("aspirin")
-        >>> for result in results[:3]:
-        ...     print(f"{result['chebiId']}: {result['chebiAsciiName']}")
     """
     chebi = ChEBI()
-    return chebi.search_by_name(search_text, max_results=max_results)
+    return chebi.search_by_name(search_text, size=max_results)
 
 
 class ChebiSDF:

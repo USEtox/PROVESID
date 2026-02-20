@@ -1,0 +1,1291 @@
+openapi: 3.0.3
+info:
+  title: ChEBI 2.0
+  version: 2.0.0
+  description: ChEBI 2.0 WebServices
+paths:
+  /chebi/backend/api/public/advanced_search/:
+    post:
+      operationId: public_advanced_search_create
+      description: |-
+        ### Description
+        This endpoint performs a searching of all the compounds using a set of specifications passed as a request body.
+        We have seven kinds of different specifications:
+
+        - OntologySpecification
+        - FormulaSpecification
+        - MassSpecification
+        - MonoisotopicMassSpecification
+        - ChargeSpecification
+        - DatabaseNameSpecification
+        - TextSearchSpecification
+
+        Each of the above must have at least one operator: `AND`, `OR` and `BUT NOT`, represented by
+        `and_specification`, `but_not_specification` and `or_specification`.
+
+        An advanced search is performed when a combination of specifications and operators are created to retrieve a set
+        of terms. With this endpoint, you can perform queries keeping the following structure:
+         - `(A AND B AND C ... AND Z)`
+         - `(A OR B OR C ... OR Z)`
+         - `(A AND B AND C ... AND Y) BUT NOT Z`
+         - `(A OR B OR C ... OR Y) BUT NOT Z`
+      parameters:
+      - in: query
+        name: three_star_only
+        schema:
+          type: boolean
+          default: true
+        description: Flag to indicate if the search should be performed in the whole
+          DB. Defaults to True, and will only include 3 stars compounds. Use False
+          to get 2 and 3 stars entries.
+      - in: query
+        name: has_structure
+        schema:
+          type: boolean
+        description: Flag to indicate if the search should include results with our
+          without structure. If it is not specified, it will not perform any filtering.
+          Defaults to unspecified.
+      - in: query
+        name: page
+        schema:
+          type: integer
+          default: 1
+        description: Page number for search results pagination.
+      - in: query
+        name: size
+        schema:
+          type: integer
+          default: 15
+        description: Page size for search results pagination.
+      - in: query
+        name: download
+        schema:
+          type: boolean
+          default: false
+        description: Get results in a download format.
+      tags:
+      - public
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FullSpecification'
+            examples:
+              CompoundsWithFormulaC6H12O7ButNotIsACarbohydratesAndCarbohydrateDerivatives:
+                value:
+                  ontology_specification:
+                    but_not_specification:
+                    - relation: is_a
+                      entity: CHEBI:78616
+                  formula_specification:
+                    and_specification:
+                    - term: C6H12O7
+                summary: Find all compounds which are not carbohydrates and carbohydrate
+                  derivatives with formula C6H12O7
+                description: 'The above query can be interpreted as follow: Find all
+                  compounds with formula C6H12O7, BUT NOT (**IS A**) carbohydrates
+                  and carbohydrate derivatives **(CHEBI:78616)**.<br>**NOTE**: You
+                  **must** set the `three_star_only` parameter to `False` (check the
+                  _Parameters_ section showed above), in order to get all the results
+                  entries. Otherwise, you will get 3 stars entries only'
+              IsAPhenolButNotHasRolePlantMetaboliteAndMass288290:
+                value:
+                  ontology_specification:
+                    and_specification:
+                    - relation: is_a
+                      entity: CHEBI:33853
+                    but_not_specification:
+                    - relation: has_role
+                      entity: CHEBI:76924
+                  mass_specification:
+                    and_specification:
+                    - init_range: 288.0
+                      final_range: 290.0
+                summary: Get all terms which are phenols with an average mass between
+                  288 to 290, exclude those terms which do not have rol plant metabolite.
+                description: 'The above query can be interpreted as follow: **IS A**
+                  phenols **(CHEBI:33853)** AND Average Mass range from 288 to 290
+                  BUT NOT (**HAS ROLE**) plant metabolite **(CHEBI:76924)**.<br>**NOTE**:
+                  You **must** set the `three_star_only` parameter to `False` (check
+                  the _Parameters_ section showed above), in order to get all the
+                  results entries. Otherwise, you will get 3 stars entries only'
+              IsAQuinolesAndIsAPhenolsButNotIsAAntimalarial:
+                value:
+                  ontology_specification:
+                    and_specification:
+                    - relation: is_a
+                      entity: CHEBI:26513
+                    - relation: is_a
+                      entity: CHEBI:33853
+                    but_not_specification:
+                    - relation: is_a
+                      entity: CHEBI:38068
+                summary: Terms which are quinolines and phenols, but not antimalarial
+                description: 'The above query can be interpreted as follow: **IS A**
+                  quinolines **(CHEBI:26513)** AND **IS A** phenols **(CHEBI:33853)**
+                  BUT NOT (**IS A**) antimalaria **(CHEBI:38068)**.<br>**NOTE**: You
+                  **must** set the `three_star_only` parameter to `False` (check the
+                  _Parameters_ section showed above), in order to get all the results
+                  entries. Otherwise, you will get 3 stars entries only'
+              AllCompoundsHMDBDatabase:
+                value:
+                  database_name_specification:
+                    and_specification:
+                    - term: HMDB
+                summary: All terms which have as a reference, the HMDB database
+                description: 'The above query can be interpreted as follow: **IS A**
+                  quinolines **(CHEBI:26513)** AND **IS A** phenols **(CHEBI:33853)**
+                  BUT NOT (**IS A**) antimalaria **(CHEBI:38068)**.<br>**NOTE**: You
+                  **must** set the `three_star_only` parameter to `False` (check the
+                  _Parameters_ section showed above), in order to get all the results
+                  entries. Otherwise, you will get 3 stars entries only'
+              SimpleMonoisotopicmassSpecification:
+                value:
+                  monoisotopicmass_specification:
+                    and_specification:
+                    - init_range: 44.5
+                      final_range: 70.5
+                summary: All compounds which have a monoisotopic mass range from 44.5
+                  to 70.5
+                description: '**NOTE**: You **must** set the `three_star_only` parameter
+                  to `False` (check the _Parameters_ section showed above), in order
+                  to get all the results entries. Otherwise, you will get 3 stars
+                  entries only'
+              SimpleFormulaSpecification:
+                value:
+                  formula_specification:
+                    and_specification:
+                    - term: C10H7NO4
+                summary: Get compounds which have as a formula C10H7NO4
+                description: '**NOTE**: You **must** set the `three_star_only` parameter
+                  to `False` (check the _Parameters_ section showed above), in order
+                  to get all the results entries. Otherwise, you will get 3 stars
+                  entries only'
+              AdvancedTextSearchBRANDNAME:
+                value:
+                  text_search_specification:
+                    and_specification:
+                    - categories:
+                      - synonyms.name
+                      - synonyms.type
+                      texts:
+                      - Sophoricol
+                      - BRAND_NAME
+                summary: Get compound with Sophoricol brand name
+                description: 'The body has two list: `categories` and `texts`. Item
+                  in `text[i]` will be searched against `categories[i]`.<br>**NOTE**:
+                  You **must** set the `three_star_only` parameter to `False` (check
+                  the _Parameters_ section showed above), in order to get all the
+                  results entries. Otherwise, you will get 3 stars entries only'
+              AdvancedTextOrButNotAnd:
+                value:
+                  text_search_specification:
+                    or_specification:
+                    - text: ketone
+                      category: name
+                    - text: alcohol
+                      category: name
+                    but_not_specification:
+                    - text: -1.0
+                      category: charge
+                summary: Get all stars terms with 'acid' or 'benzo' in their name,
+                  excluding any term with -1 charge.
+                description: '**NOTE**: You **must** set the `three_star_only` parameter
+                  to `False` (check the _Parameters_ section showed above), in order
+                  to get all the results entries. Otherwise, you will get 3 stars
+                  entries only'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/FullSpecification'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/FullSpecification'
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /chebi/backend/api/public/advanced_search/sources_list:
+    get:
+      operationId: public_advanced_search_sources_list_retrieve
+      tags:
+      - public
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /chebi/backend/api/public/compound/{chebi_id}/:
+    get:
+      operationId: public_compound_retrieve
+      description: |-
+        ### Description
+        This endpoint allows you to retrieve information about a compound.
+      parameters:
+      - in: path
+        name: chebi_id
+        schema:
+          type: string
+          pattern: ^([cC][hH][eE][bB][iI]:)?\d+$
+        required: true
+      - in: query
+        name: only_ontology_parents
+        schema:
+          type: boolean
+          default: false
+        description: Return only the ontology Parents.
+      - in: query
+        name: only_ontology_children
+        schema:
+          type: boolean
+          default: false
+        description: Return only the ontology Children.
+      tags:
+      - public
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /chebi/backend/api/public/compound/{id}/structure/:
+    get:
+      operationId: public_compound_structure_retrieve
+      description: Expects ChEBI ID and returns raw SVG contents of its default structure
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      - in: query
+        name: width
+        schema:
+          type: integer
+          default: 300
+        description: Width of the SVG structure
+      - in: query
+        name: height
+        schema:
+          type: integer
+          default: 300
+        description: Height of the SVG structure
+      tags:
+      - public
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /chebi/backend/api/public/compounds/:
+    get:
+      operationId: public_compounds_retrieve
+      description: |-
+        ### Description
+        This endpoint allows you to retrieve information about one or more compounds.
+      parameters:
+      - in: query
+        name: chebi_ids
+        schema:
+          type: string
+        description: List of comma separated ChEBI identifiers
+        examples:
+          Request3Identifiers:
+            value: CHEBI:18357,chebi:22982,5974
+            summary: Request 3 identifiers
+      tags:
+      - public
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompoundsForm'
+          description: ''
+    post:
+      operationId: public_compounds_create
+      description: |-
+        ### Description
+        This endpoint allows you to retrieve information about one or more compounds.
+      tags:
+      - public
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompoundsForm'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CompoundsForm'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CompoundsForm'
+        required: true
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompoundsForm'
+          description: ''
+  /chebi/backend/api/public/es_search/:
+    get:
+      operationId: public_es_search_retrieve
+      description: |-
+        Perform a text search in the elasticsearch documents, it tries to get an exact match in the first place, otherwise, it
+        is executed a text search on the documents. You can use a variety of terms to get compounds.
+
+        - Use a chebi name: `paracetamol`, `α,α-trehalose`, `alpha,alpha-trehalose`
+        - Use a brand name: `panadol`
+        - Use a IUPAC NAME: `N-(4-hydroxyphenyl)acetamide`
+        - Use part of the name: `paraceta`, `paraceta*` or `panad`
+        - Use a synonym: `4-acetamidophenol`
+        - Use a chebi definition: `A member of the class of phenols that is 4`
+        - Use a chebi id: `CHEBI:46195`, `CHEBI46195`, `chebi:46195`, `46195`, `chebi46195`
+        - Use a chebi secondary id, for example `CHEBI:2386` that is a secondary id of `CHEBI:46195`
+        - Use an inchikey using the full text or part of them, for example: `RZVAJINKPMORJF-UHFFFAOYSA-N`, `RZVAJINKPMORJF` or `RZVAJINKPMORJF-UHFFFAOYSA`
+        - Use a formula, inchi and smiles: `C8H9NO2`, `CC(=O)Nc1ccc(O)cc1`, `InChI=1S/C8H9NO2/c1-6(10)9-7-2-4-8(11)5-3-7/h2-5,11H,1H3,(H,9,10)`
+        - Use any kind of manual cross-references ids: `HMDB0001859`, `LSM-5533`, `D00217`, `DB00316`,
+        - Use registry numbers: `103-90-2` (CAS number), Reaxys (2208089)
+        - Use PubMed ids: `11304127`
+      parameters:
+      - in: query
+        name: term
+        schema:
+          type: string
+        description: Term to execute the general search.
+        required: true
+      - in: query
+        name: page
+        schema:
+          type: integer
+          default: 1
+        description: Page number for search results pagination.
+      - in: query
+        name: size
+        schema:
+          type: integer
+          default: 15
+        description: Page size for search results pagination.
+      tags:
+      - public
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /chebi/backend/api/public/molfile/{id}/:
+    get:
+      operationId: public_molfile_retrieve
+      description: |-
+        Expects a Primary Key of Compound, and downloads Mol file of default structure
+        Only handles parent compounds
+        Returns empty mol file if there is no default structure
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - public
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /chebi/backend/api/public/ontology/all_children_in_path/:
+    get:
+      operationId: public_ontology_all_children_in_path_retrieve
+      description: |-
+        ### Description
+        This endpoint performs a searching of all the compounds in the ontology,
+        having into account an ontological relation and a ChEBI ID.Some examples of queries can be:
+
+        **• Get all compounds that have a role "plan metabolite":** In this case, you should set the parameter relation
+        to `"has_role"` and the parameter entity to `"CHEBI:76924"`, the chebi id for plant metabolite.
+
+        **• Get all compounds that are "alcohols":** In this case, you should set the parameter relation to `"is_a"` and
+        the parameter entity to `"CHEBI:30879"`, the chebi id for alcohol.
+      parameters:
+      - in: query
+        name: relation
+        schema:
+          type: string
+          enum:
+          - has_functional_parent
+          - has_parent_hydride
+          - has_part
+          - has_role
+          - is_a
+          - is_conjugate_acid_of
+          - is_conjugate_base_of
+          - is_enantiomer_of
+          - is_part_of
+          - is_substituent_group_from
+          - is_tautomer_of
+        description: Ontology relation.
+        required: true
+      - in: query
+        name: entity
+        schema:
+          type: string
+        description: ChEBI Identifier of the entity for which all the children in
+          path will be found.
+        required: true
+      - in: query
+        name: three_star_only
+        schema:
+          type: boolean
+          default: true
+        description: Flag to indicate if the search should be performed in the whole
+          DB. Defaults to True, and will only include 3 stars compounds. Use False
+          to get 2 and 3 stars entries.
+      - in: query
+        name: has_structure
+        schema:
+          type: boolean
+        description: Flag to indicate if the search should include results with our
+          without structure. If it is not specified, it will not perform any filtering.
+          Defaults to unspecified.
+      - in: query
+        name: page
+        schema:
+          type: integer
+          default: 1
+        description: Page number for search results pagination.
+      - in: query
+        name: size
+        schema:
+          type: integer
+          default: 15
+        description: Page size for search results pagination.
+      - in: query
+        name: download
+        schema:
+          type: boolean
+          default: false
+        description: Get results in a download format.
+      tags:
+      - public
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+    post:
+      operationId: public_ontology_all_children_in_path_create
+      description: |-
+        ### Description
+        This endpoint performs a searching of all the compounds in the ontology,
+        having into account an ontological relation and a ChEBI ID.
+      parameters:
+      - in: query
+        name: three_star_only
+        schema:
+          type: boolean
+          default: true
+        description: Flag to indicate if the search should be performed in the whole
+          DB. Defaults to True, and will only include 3 stars compounds. Use False
+          to get 2 and 3 stars entries.
+      - in: query
+        name: has_structure
+        schema:
+          type: boolean
+        description: Flag to indicate if the search should include results with our
+          without structure. If it is not specified, it will not perform any filtering.
+          Defaults to unspecified.
+      - in: query
+        name: page
+        schema:
+          type: integer
+          default: 1
+        description: Page number for search results pagination.
+      - in: query
+        name: size
+        schema:
+          type: integer
+          default: 15
+        description: Page size for search results pagination.
+      - in: query
+        name: download
+        schema:
+          type: boolean
+          default: false
+        description: Get results in a download format.
+      tags:
+      - public
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Ontology'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Ontology'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Ontology'
+        required: true
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /chebi/backend/api/public/ontology/children/{chebi_id}/:
+    get:
+      operationId: public_ontology_children_retrieve
+      description: Get the children of a compound
+      parameters:
+      - in: path
+        name: chebi_id
+        schema:
+          type: string
+          pattern: ^([cC][hH][eE][bB][iI]:)?\d+$
+        required: true
+      tags:
+      - public
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /chebi/backend/api/public/ontology/parents/{chebi_id}/:
+    get:
+      operationId: public_ontology_parents_retrieve
+      description: Get the parents of a compound
+      parameters:
+      - in: path
+        name: chebi_id
+        schema:
+          type: string
+          pattern: ^([cC][hH][eE][bB][iI]:)?\d+$
+        required: true
+      tags:
+      - public
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /chebi/backend/api/public/structure-calculations/avg-mass/:
+    post:
+      operationId: public_structure_calculations_avg_mass_create
+      tags:
+      - public
+      requestBody:
+        content:
+          text/plain;charset=UTF-8:
+            schema:
+              type: string
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            text/plain;charset=UTF-8:
+              schema:
+                type: string
+          description: ''
+        '400':
+          content:
+            text/plain;charset=UTF-8:
+              schema:
+                type: string
+          description: ''
+  /chebi/backend/api/public/structure-calculations/avg-mass/from-formula/:
+    post:
+      operationId: public_structure_calculations_avg_mass_from_formula_create
+      tags:
+      - public
+      requestBody:
+        content:
+          text/plain;charset=UTF-8:
+            schema:
+              type: string
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            text/plain;charset=UTF-8:
+              schema:
+                type: string
+          description: ''
+        '400':
+          content:
+            text/plain;charset=UTF-8:
+              schema:
+                type: string
+          description: ''
+  /chebi/backend/api/public/structure-calculations/depict-indigo/:
+    post:
+      operationId: public_structure_calculations_depict_indigo_create
+      parameters:
+      - in: query
+        name: width
+        schema:
+          type: integer
+          default: 300
+        description: Width in pixels of the generated image.
+      - in: query
+        name: height
+        schema:
+          type: integer
+          default: 300
+        description: Height in pixels of the generated image.
+      - in: query
+        name: transbg
+        schema:
+          type: boolean
+          default: false
+        description: Use transparent background.
+      tags:
+      - public
+      requestBody:
+        content:
+          text/plain;charset=UTF-8:
+            schema:
+              type: string
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+          description: ''
+        '400':
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: ''
+  /chebi/backend/api/public/structure-calculations/mol-formula/:
+    post:
+      operationId: public_structure_calculations_mol_formula_create
+      tags:
+      - public
+      requestBody:
+        content:
+          text/plain;charset=UTF-8:
+            schema:
+              type: string
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            text/plain;charset=UTF-8:
+              schema:
+                type: string
+          description: ''
+        '400':
+          content:
+            text/plain;charset=UTF-8:
+              schema:
+                type: string
+          description: ''
+  /chebi/backend/api/public/structure-calculations/monoisotopic-mass/:
+    post:
+      operationId: public_structure_calculations_monoisotopic_mass_create
+      tags:
+      - public
+      requestBody:
+        content:
+          text/plain;charset=UTF-8:
+            schema:
+              type: string
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            text/plain;charset=UTF-8:
+              schema:
+                type: string
+          description: ''
+        '400':
+          content:
+            text/plain;charset=UTF-8:
+              schema:
+                type: string
+          description: ''
+  /chebi/backend/api/public/structure-calculations/monoisotopic-mass/from-formula/:
+    post:
+      operationId: public_structure_calculations_monoisotopic_mass_from_formula_create
+      tags:
+      - public
+      requestBody:
+        content:
+          text/plain;charset=UTF-8:
+            schema:
+              type: string
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            text/plain;charset=UTF-8:
+              schema:
+                type: string
+          description: ''
+        '400':
+          content:
+            text/plain;charset=UTF-8:
+              schema:
+                type: string
+          description: ''
+  /chebi/backend/api/public/structure-calculations/net-charge/:
+    post:
+      operationId: public_structure_calculations_net_charge_create
+      tags:
+      - public
+      requestBody:
+        content:
+          text/plain;charset=UTF-8:
+            schema:
+              type: string
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            text/plain;charset=UTF-8:
+              schema:
+                type: string
+          description: ''
+        '400':
+          content:
+            text/plain;charset=UTF-8:
+              schema:
+                type: string
+          description: ''
+  /chebi/backend/api/public/structure/{id}/:
+    get:
+      operationId: public_structure_retrieve
+      description: Expects a Primary Key of Structure, and returns raw SVG contents
+        of structure
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      - in: query
+        name: width
+        schema:
+          type: integer
+          default: 300
+        description: Width of the SVG structure
+      - in: query
+        name: height
+        schema:
+          type: integer
+          default: 300
+        description: Height of the SVG structure
+      tags:
+      - public
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /chebi/backend/api/public/structure_search/:
+    get:
+      operationId: public_structure_search_retrieve
+      parameters:
+      - in: query
+        name: smiles
+        schema:
+          type: string
+        description: Molecule structure in smiles representation.
+        required: true
+      - in: query
+        name: search_type
+        schema:
+          type: string
+          enum:
+          - connectivity
+          - similarity
+          - substructure
+        description: 'Structure search type. Options: <enum ''SearchType''>.'
+        required: true
+      - in: query
+        name: similarity
+        schema:
+          type: number
+          format: double
+        description: Similarity percentage for similarity search (>=0.4 and <= 1.0)
+      - in: query
+        name: three_star_only
+        schema:
+          type: boolean
+          default: true
+        description: Flag to indicate if the search should be performed in the whole
+          DB. Defaults to True, and will only include 3 stars compounds. Use False
+          to get 2 and 3 stars entries.
+      - in: query
+        name: page
+        schema:
+          type: integer
+          default: 1
+        description: Page number for search results pagination.
+      - in: query
+        name: size
+        schema:
+          type: integer
+          default: 15
+        description: Page size for search results pagination.
+      - in: query
+        name: download
+        schema:
+          type: boolean
+          default: false
+        description: Get results in a download format.
+      tags:
+      - public
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+    post:
+      operationId: public_structure_search_create
+      parameters:
+      - in: query
+        name: three_star_only
+        schema:
+          type: boolean
+          default: true
+        description: Flag to indicate if the search should be performed in the whole
+          DB. Defaults to True, and will only include 3 stars compounds. Use False
+          to get 2 and 3 stars entries.
+      - in: query
+        name: page
+        schema:
+          type: integer
+          default: 1
+        description: Page number for search results pagination.
+      - in: query
+        name: size
+        schema:
+          type: integer
+          default: 15
+        description: Page size for search results pagination.
+      - in: query
+        name: download
+        schema:
+          type: boolean
+          default: false
+        description: Get results in a download format.
+      tags:
+      - public
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StructureSearch'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/StructureSearch'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/StructureSearch'
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+components:
+  schemas:
+    CategoryEnum:
+      enum:
+      - alternative_ids
+      - ascii_name
+      - charge
+      - chebi_accession
+      - children
+      - compound_origins
+      - database_references
+      - default_structure
+      - definition
+      - formula
+      - has_functional_parent
+      - has_parent_hydride
+      - has_part
+      - has_role
+      - inchi
+      - inchikey
+      - is_conjugate_acid_of
+      - is_conjugate_base_of
+      - is_enantiomer_of
+      - is_substituent_group_from
+      - is_tautomer_of
+      - mass
+      - modified_on
+      - monoisotopicmass
+      - name
+      - parents
+      - smiles
+      - stars
+      - structures
+      - suggestions
+      - synonyms
+      - wurcs
+      - all
+      type: string
+    CompoundsForm:
+      type: object
+      properties:
+        chebi_ids:
+          type: array
+          items:
+            type: string
+            maxLength: 100
+      required:
+      - chebi_ids
+    FullSpecification:
+      properties:
+        structure_search:
+          anyOf:
+          - $ref: '#/components/schemas/StructureSearch'
+          - type: 'null'
+          default: null
+        ontology_specification:
+          anyOf:
+          - $ref: '#/components/schemas/OntologySpecification'
+          - items: {}
+            maxItems: 0
+            type: array
+          default: []
+          title: Ontology Specification
+        formula_specification:
+          anyOf:
+          - $ref: '#/components/schemas/TermSpecification'
+          - items: {}
+            maxItems: 0
+            type: array
+          default: []
+          title: Formula Specification
+        mass_specification:
+          anyOf:
+          - $ref: '#/components/schemas/RangeSpecification'
+          - items: {}
+            maxItems: 0
+            type: array
+          default: []
+          title: Mass Specification
+        monoisotopicmass_specification:
+          anyOf:
+          - $ref: '#/components/schemas/RangeSpecification'
+          - items: {}
+            maxItems: 0
+            type: array
+          default: []
+          title: Monoisotopicmass Specification
+        charge_specification:
+          anyOf:
+          - $ref: '#/components/schemas/RangeSpecification'
+          - items: {}
+            maxItems: 0
+            type: array
+          default: []
+          title: Charge Specification
+        database_name_specification:
+          anyOf:
+          - $ref: '#/components/schemas/TermSpecification'
+          - items: {}
+            maxItems: 0
+            type: array
+          default: []
+          title: Database Name Specification
+        text_search_specification:
+          anyOf:
+          - $ref: '#/components/schemas/TextSearchSpecification'
+          - items: {}
+            maxItems: 0
+            type: array
+          default: []
+          title: Text Search Specification
+        stars:
+          anyOf:
+          - items:
+              type: integer
+            maxItems: 2
+            minItems: 1
+            type: array
+          - enum:
+            - 2
+            - 3
+            type: integer
+          default:
+          - 2
+          - 3
+          title: Stars
+        has_structure:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          default: null
+          title: Has Structure
+      title: FullSpecification
+      type: object
+    Nested:
+      properties:
+        categories:
+          items: {}
+          title: Categories
+          type: array
+        texts:
+          items: {}
+          title: Texts
+          type: array
+      required:
+      - categories
+      - texts
+      title: Nested
+      type: object
+    Ontology:
+      properties:
+        relation:
+          title: Relation
+          type: string
+        entity:
+          title: Entity
+          type: string
+      required:
+      - relation
+      - entity
+      title: Ontology
+      type: object
+    OntologySpecification:
+      properties:
+        and_specification:
+          default: []
+          items:
+            $ref: '#/components/schemas/Ontology'
+          title: And Specification
+          type: array
+        or_specification:
+          default: []
+          items:
+            $ref: '#/components/schemas/Ontology'
+          title: Or Specification
+          type: array
+        but_not_specification:
+          default: []
+          items:
+            $ref: '#/components/schemas/Ontology'
+          title: But Not Specification
+          type: array
+      title: OntologySpecification
+      type: object
+    Range:
+      properties:
+        init_range:
+          title: Init Range
+          type: number
+        final_range:
+          title: Final Range
+          type: number
+      required:
+      - init_range
+      - final_range
+      title: Range
+      type: object
+    RangeSpecification:
+      properties:
+        and_specification:
+          default: []
+          items:
+            $ref: '#/components/schemas/Range'
+          title: And Specification
+          type: array
+        or_specification:
+          default: []
+          items:
+            $ref: '#/components/schemas/Range'
+          title: Or Specification
+          type: array
+        but_not_specification:
+          default: []
+          items:
+            $ref: '#/components/schemas/Range'
+          title: But Not Specification
+          type: array
+      title: RangeSpecification
+      type: object
+    SearchType:
+      enum:
+      - connectivity
+      - similarity
+      - substructure
+      title: SearchType
+      type: string
+    StructureSearch:
+      properties:
+        structure:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Structure that should be used for searching in SMILES or MOLFILE/SDF
+            format.
+          examples:
+          - c1ccccc1
+          - CCO
+          - Cn1cnc2c1c(=O)n(C)c(=O)n2C
+          title: Structure
+        type:
+          allOf:
+          - $ref: '#/components/schemas/SearchType'
+          default: connectivity
+        similarity:
+          anyOf:
+          - maximum: 1.0
+            minimum: 0.4
+            type: number
+          - type: 'null'
+          default: null
+          description: Similarity percentage for similarity search (>=0.4 and <= 1.0)
+          examples:
+          - 0.4
+          - 0.69
+          - 0.9
+          - 1.0
+          title: Similarity
+      title: StructureSearch
+      type: object
+    Term:
+      properties:
+        term:
+          title: Term
+          type: string
+      required:
+      - term
+      title: Term
+      type: object
+    TermSpecification:
+      properties:
+        and_specification:
+          default: []
+          items:
+            $ref: '#/components/schemas/Term'
+          title: And Specification
+          type: array
+        or_specification:
+          default: []
+          items:
+            $ref: '#/components/schemas/Term'
+          title: Or Specification
+          type: array
+        but_not_specification:
+          default: []
+          items:
+            $ref: '#/components/schemas/Term'
+          title: But Not Specification
+          type: array
+      title: TermSpecification
+      type: object
+    Text:
+      properties:
+        text:
+          anyOf:
+          - type: string
+          - type: number
+          title: Text
+        category:
+          allOf:
+          - $ref: '#/components/schemas/CategoryEnum'
+          title: Category
+      required:
+      - text
+      - category
+      title: Text
+      type: object
+    TextSearchSpecification:
+      properties:
+        and_specification:
+          default: []
+          items:
+            anyOf:
+            - $ref: '#/components/schemas/Text'
+            - $ref: '#/components/schemas/Nested'
+          title: And Specification
+          type: array
+        or_specification:
+          default: []
+          items:
+            anyOf:
+            - $ref: '#/components/schemas/Text'
+            - $ref: '#/components/schemas/Nested'
+          title: Or Specification
+          type: array
+        but_not_specification:
+          default: []
+          items:
+            anyOf:
+            - $ref: '#/components/schemas/Text'
+            - $ref: '#/components/schemas/Nested'
+          title: But Not Specification
+          type: array
+      title: TextSearchSpecification
+      type: object
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: sessionid

@@ -29,6 +29,7 @@ dependencies = [
     "rdkit>=2022.09.0",
     "rapidfuzz>=3.0.0",
     "py2opsin>=1.1.0",
+    "chembl-structure-pipeline>=1.2.4",
 ]
 
 [project.urls]

@@ -6,23 +6,26 @@ from .chebi import ChEBI, ChEBIError, ChebiSDF, get_chebi_entity, search_chebi
 from .chembl import CheMBL, ChEMBLError
 from .classyfire import ClassyFireAPI
 from .opsin import OPSIN, PYOPSIN
-from .pubchem import PubChemAPI, CompoundProperties, PubChemNotFoundError, PubChemError, Domain, PubChemID
+from .pubchem import (
+    PubChemAPI,
+    CompoundProperties,
+    PubChemNotFoundError,
+    PubChemError,
+    Domain,
+    PubChemID,
+)
+from .comptox import CompToxID
 from .pubchemview import (
-    PubChemView, 
-    PropertyData, 
-    PubChemViewError, 
+    PubChemView,
+    PropertyData,
+    PubChemViewError,
     PubChemViewNotFoundError,
     get_experimental_property,
     get_all_experimental_properties,
     get_property_values_only,
-    get_property_table
+    get_property_table,
 )
-from .config import (
-    set_cas_api_key,
-    get_cas_api_key,
-    remove_cas_api_key,
-    show_config
-)
+from .config import set_cas_api_key, get_cas_api_key, remove_cas_api_key, show_config
 from .cache import (
     clear_cache,
     get_cache_info,
@@ -30,11 +33,11 @@ from .cache import (
     import_cache,
     get_cache_size,
     set_cache_warning_threshold,
-    enable_cache_warnings
+    enable_cache_warnings,
 )
 from .resolver import (
-    NCIChemicalIdentifierResolver, 
-    NCIResolverError, 
+    NCIChemicalIdentifierResolver,
+    NCIResolverError,
     NCIResolverNotFoundError,
     nci_cas_to_mol,
     nci_id_to_mol,
@@ -44,7 +47,7 @@ from .resolver import (
     nci_inchi_to_smiles,
     nci_cas_to_inchi,
     nci_get_molecular_weight,
-    nci_get_formula
+    nci_get_formula,
 )
 from .utils import check_CASRN
 from .zeropm import ZeroPM

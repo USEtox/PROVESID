@@ -51,3 +51,4 @@ from .resolver import (
 )
 from .utils import check_CASRN
 from .zeropm import ZeroPM
+from .reach import REACHDossierID

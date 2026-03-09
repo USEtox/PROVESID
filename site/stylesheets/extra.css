@@ -1,0 +1,86 @@
+/* Custom styles for PROVESID documentation */
+
+:root {
+  --md-primary-fg-color: #1976d2;
+  --md-accent-fg-color: #00bcd4;
+}
+
+/* Code highlighting improvements */
+.highlight pre code {
+  font-size: 0.85em;
+  line-height: 1.4;
+}
+
+/* API documentation improvements */
+.doc-contents {
+  margin: 1rem 0;
+}
+
+.doc-signature {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 0.9em;
+  background-color: var(--md-code-bg-color);
+  padding: 0.5rem 1rem;
+  border-left: 4px solid var(--md-accent-fg-color);
+  margin: 1rem 0;
+}
+
+/* Table improvements */
+table {
+  font-size: 0.9em;
+}
+
+table th {
+  background-color: var(--md-primary-fg-color--light);
+  color: white;
+}
+
+/* Admonition customization */
+.admonition.tip {
+  border-color: #00bcd4;
+}
+
+.admonition.tip > .admonition-title {
+  background-color: #00bcd4;
+}
+
+/* Navigation improvements */
+.md-nav__item--active > .md-nav__link {
+  color: var(--md-primary-fg-color);
+}
+
+/* Footer customization */
+.md-footer {
+  background-color: var(--md-primary-fg-color);
+}
+
+/* Search improvements */
+.md-search__form {
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+/* Code block title styling */
+.codehilite-title {
+  background-color: var(--md-code-bg-color);
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-bottom: none;
+  font-size: 0.8em;
+  font-weight: 700;
+  margin: 0;
+  padding: 0.5rem 1rem;
+  color: var(--md-default-fg-color--light);
+}
+
+/* Example blocks */
+.example {
+  background-color: #f8f9fa;
+  border-left: 4px solid #17a2b8;
+  padding: 1rem;
+  margin: 1rem 0;
+}
+
+.example-title {
+  font-weight: bold;
+  color: #17a2b8;
+  margin-bottom: 0.5rem;
+}

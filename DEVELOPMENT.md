@@ -234,6 +234,23 @@ mkdocs serve
 mkdocs build --strict
 ```
 
+### Deployment Model (Local Build, CI Deploy Only)
+
+Documentation is built locally and committed as static files under `site/`.
+GitHub Actions does not run `mkdocs build`; it only uploads and deploys the
+committed `site/` artifact to GitHub Pages.
+
+```bash
+# Build docs locally (include executed notebook outputs)
+PROVESID_DOCS_EXECUTE=true mkdocs build --clean --strict
+
+# Commit sources and generated site
+git add docs/ examples/ mkdocs.yml site/
+git commit -m "Update docs and prebuilt site"
+```
+
+If `docs/` or `examples/` change, regenerate `site/` before pushing to `main`.
+
 ### Tutorial Format Migration (In Progress)
 
 Tutorials are being migrated from committed notebook JSON (`.ipynb`) to
@@ -263,18 +280,17 @@ Migration and refresh checklists are tracked in:
 ```
 docs/
 ├── index.md                # Main documentation page
-├── installation.md         # Installation instructions
 ├── quickstart.md          # Quick start guide
 ├── api/                   # API documentation
 │   ├── index.md
 │   ├── pubchem.md
 │   ├── pubchemview.md
 │   └── ...
-├── examples/              # Jupyter notebook tutorials
-│   ├── pubchem/
-│   ├── resolver/
+├── examples/              # Tutorial links/symlinks to examples/
 │   └── ...
 └── stylesheets/           # Custom CSS
+
+site/                      # Committed static site deployed by CI
 ```
 
 ### Adding Documentation

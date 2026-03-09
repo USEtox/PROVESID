@@ -43,8 +43,8 @@ dev = [
     "pytest>=6.0",
     "black>=21.0",
     "flake8>=3.8",
-    "mkdocs>=1.4",
-    "mkdocs-material>=8.0",
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.5.0",
     "mkdocstrings[python]>=0.19",
 ]
 test = [
@@ -55,8 +55,8 @@ test = [
     "pytest-timeout>=2.0", # For test timeouts
 ]
 docs = [
-    "mkdocs>=1.4",
-    "mkdocs-material>=8.0",
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.5.0",
     "mkdocstrings[python]>=0.19",
     "mkdocs-jupyter>=0.24.0",
     "mkdocs-autorefs>=0.4.0",

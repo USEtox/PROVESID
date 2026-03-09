@@ -152,7 +152,7 @@ venv.bak/
 .ropeproject
 
 # mkdocs documentation
-/site
+# site/ is intentionally committed for deploy-only CI workflow.
 
 # mypy
 .mypy_cache/

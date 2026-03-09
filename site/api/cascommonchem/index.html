@@ -1,0 +1,2446 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A Python package for chemical identifier resolution and experimental property extraction">
+      
+      
+        <meta name="author" content="PROVESID Team">
+      
+      
+        <link rel="canonical" href="https://usetox.github.io/PROVESID/api/cascommonchem/">
+      
+      
+        <link rel="prev" href="../nci_resolver/">
+      
+      
+        <link rel="next" href="../classyfire/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.1">
+    
+    
+      
+        <title>Common Chemistry - PROVESID Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#cas-common-chemistry-api" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="PROVESID Documentation" class="md-header__button md-logo" aria-label="PROVESID Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            PROVESID Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Common Chemistry
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="cyan"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="cyan"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../quickstart/" class="md-tabs__link">
+          
+  
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../examples/pubchem/pubchem_tutorial/" class="md-tabs__link">
+          
+  
+  
+  Tutorials
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../plans/examples-migration-plan/" class="md-tabs__link">
+          
+  
+  
+  Modernization
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--lifted md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="PROVESID Documentation" class="md-nav__button md-logo" aria-label="PROVESID Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    PROVESID Documentation
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../data_methods/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Online and Offline Data Methods
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced_caching/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Advanced Caching
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tutorials
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/pubchem/pubchem_tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PubChem Tutorial
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/CCC/CAS_Common_Chemistry_tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CAS Common Chemistry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/ChEBI/ChEBI_tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ChEBI Tutorial
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/ChEBI/chebi_sdf_tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ChEBI SDF Tutorial
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/ClassyFire/classyfire_tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ClassyFire Tutorial
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/OPSIN/opsin_tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OPSIN Tutorial
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/resolver/chem_id_resolver_tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chemical ID Resolver
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/chembl/chembl_tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ChEMBL Tutorial
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/pubchemview/pubchem_view_tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PubChem View Tutorial
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/zeropm/zeropm-example/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ZeroPM Tutorial
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Modernization
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Modernization
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/examples-migration-plan/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples Migration Plan
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/docs-refresh-plan/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docs Refresh Plan
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pubchem/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PubChem API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pubchemview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PubChem View
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chembl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ChEMBL
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nci_resolver/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NCI Resolver
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Common Chemistry
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Common Chemistry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#class-cascommonchem" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Class: CASCommonChem
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Class: CASCommonChem">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#initialization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Initialization
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#persistent-api-key-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Persistent API Key Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Persistent API Key Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cas_to_detailcas_number" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cas_to_detail(cas_number)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#name_to_detailname" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        name_to_detail(name)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#smiles_to_detailsmiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        smiles_to_detail(smiles)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#data-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data Structure
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#comprehensive-usage-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Comprehensive Usage Examples
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Comprehensive Usage Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#single-compound-lookup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single Compound Lookup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batch-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Batch Processing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cross-reference-with-other-apis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-Reference with Other APIs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#property-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Property Analysis
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Best Practices
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Best Practices">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-error-handling-and-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Error Handling and Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-rate-limiting-and-caching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Rate Limiting and Caching
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-data-export-and-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Data Export and Analysis
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#integration-patterns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Integration Patterns
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Integration Patterns">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#database-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Database Integration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#limitations-and-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limitations and Considerations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Limitations and Considerations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#data-coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data Coverage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rate-limiting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rate Limiting
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#data-quality" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data Quality
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#api-stability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API Stability
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cache-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache Management
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Cache Management">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cache-control" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache Control
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cache-management-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache Management Methods
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#authentication-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication Requirements
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Authentication Requirements">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#api-key-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API Key Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#migration-from-v10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration from v1.0
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../classyfire/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ClassyFire
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../opsin/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OPSIN
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chebi/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ChEBI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="cas-common-chemistry-api">CAS Common Chemistry API<a class="headerlink" href="#cas-common-chemistry-api" title="Permanent link">&para;</a></h1>
+<p>The CASCommonChem class provides an interface to the CAS (Chemical Abstracts Service) Common Chemistry database using API v2.0 with authentication.</p>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>CAS Common Chemistry provides reliable chemical information for over 500,000 chemical substances from CAS REGISTRY. This class enables searches by CAS Registry Number, chemical name, and SMILES notation using the authenticated v2.0 API gateway.</p>
+<h2 id="class-cascommonchem">Class: CASCommonChem<a class="headerlink" href="#class-cascommonchem" title="Permanent link">&para;</a></h2>
+<h3 id="initialization">Initialization<a class="headerlink" href="#initialization" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">provesid</span><span class="w"> </span><span class="kn">import</span> <span class="n">CASCommonChem</span><span class="p">,</span> <span class="n">set_cas_api_key</span>
+
+<span class="c1"># Recommended: Set API key once for persistent storage</span>
+<span class="n">set_cas_api_key</span><span class="p">(</span><span class="s2">&quot;your-api-key-here&quot;</span><span class="p">)</span>
+<span class="n">cas_api</span> <span class="o">=</span> <span class="n">CASCommonChem</span><span class="p">()</span>  <span class="c1"># Automatically uses stored API key</span>
+
+<span class="c1"># Alternative: Initialize with API key directly  </span>
+<span class="n">cas_api</span> <span class="o">=</span> <span class="n">CASCommonChem</span><span class="p">(</span><span class="n">api_key</span><span class="o">=</span><span class="s2">&quot;your-api-key-here&quot;</span><span class="p">)</span>
+
+<span class="c1"># Or initialize with API key from file</span>
+<span class="n">cas_api</span> <span class="o">=</span> <span class="n">CASCommonChem</span><span class="p">(</span><span class="n">api_key_file</span><span class="o">=</span><span class="s2">&quot;path/to/api/key/file.txt&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p><strong>Parameters:</strong>
+- <code>api_key</code> (str, optional): CAS API key for authentication
+- <code>api_key_file</code> (str, optional): Path to file containing API key
+- <code>use_cache</code> (bool, default=True): Enable/disable result caching</p>
+<p><strong>API Key Priority Order:</strong>
+1. Direct <code>api_key</code> parameter
+2. <code>api_key_file</code> parameter<br />
+3. Persistent configuration (via <code>set_cas_api_key()</code>)
+4. Environment variables (<code>CCC_API_KEY</code>, <code>CAS_API_KEY</code>)</p>
+<p>The CASCommonChem class initializes with:
+- <code>base_url</code>: "https://commonchemistry.cas.org/api" (v2.0 gateway)
+- API key authentication using X-API-KEY header
+- Enhanced error handling for authentication failures
+- Service-specific caching system</p>
+<h2 id="persistent-api-key-configuration">Persistent API Key Configuration<a class="headerlink" href="#persistent-api-key-configuration" title="Permanent link">&para;</a></h2>
+<p>The recommended approach is to configure your API key once using the persistent configuration system:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># One-time setup</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">provesid</span><span class="w"> </span><span class="kn">import</span> <span class="n">set_cas_api_key</span><span class="p">,</span> <span class="n">show_config</span>
+
+<span class="c1"># Set your API key (stored securely in user config directory)</span>
+<span class="n">set_cas_api_key</span><span class="p">(</span><span class="s2">&quot;your-cas-api-key&quot;</span><span class="p">)</span>
+
+<span class="c1"># Verify configuration</span>
+<span class="n">show_config</span><span class="p">()</span>
+
+<span class="c1"># Now use anywhere without specifying API key</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">provesid</span><span class="w"> </span><span class="kn">import</span> <span class="n">CASCommonChem</span>
+<span class="n">cas_api</span> <span class="o">=</span> <span class="n">CASCommonChem</span><span class="p">()</span>  <span class="c1"># Automatically loads stored API key</span>
+</code></pre></div>
+<p><strong>Configuration Management:</strong>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">provesid</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_cas_api_key</span><span class="p">,</span> <span class="n">remove_cas_api_key</span><span class="p">,</span> <span class="n">show_config</span>
+
+<span class="c1"># Check current configuration</span>
+<span class="n">show_config</span><span class="p">()</span>
+
+<span class="c1"># Get stored API key</span>
+<span class="n">api_key</span> <span class="o">=</span> <span class="n">get_cas_api_key</span><span class="p">()</span>
+
+<span class="c1"># Remove stored API key</span>
+<span class="n">remove_cas_api_key</span><span class="p">()</span>
+</code></pre></div></p>
+<h3 id="methods">Methods<a class="headerlink" href="#methods" title="Permanent link">&para;</a></h3>
+<h4 id="cas_to_detailcas_number"><code>cas_to_detail(cas_number)</code><a class="headerlink" href="#cas_to_detailcas_number" title="Permanent link">&para;</a></h4>
+<p>Retrieve detailed information for a compound using its CAS Registry Number.</p>
+<p><strong>Parameters:</strong>
+- <code>cas_number</code> (str): CAS Registry Number (e.g., "64-17-5")</p>
+<p><strong>Returns:</strong>
+- <code>dict</code> or <code>None</code>: Detailed compound information if found, None if not found or error</p>
+<p><strong>Example:</strong>
+<div class="highlight"><pre><span></span><code><span class="n">cas_api</span> <span class="o">=</span> <span class="n">CASCommonChem</span><span class="p">(</span><span class="n">api_key</span><span class="o">=</span><span class="s2">&quot;your-api-key&quot;</span><span class="p">)</span>
+
+<span class="c1"># Get details for ethanol (CAS: 64-17-5)</span>
+<span class="n">ethanol_data</span> <span class="o">=</span> <span class="n">cas_api</span><span class="o">.</span><span class="n">cas_to_detail</span><span class="p">(</span><span class="s2">&quot;64-17-5&quot;</span><span class="p">)</span>
+
+<span class="k">if</span> <span class="n">ethanol_data</span> <span class="ow">and</span> <span class="n">ethanol_data</span><span class="p">[</span><span class="s1">&#39;found&#39;</span><span class="p">]:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Status: </span><span class="si">{</span><span class="n">ethanol_data</span><span class="p">[</span><span class="s1">&#39;status&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Name: </span><span class="si">{</span><span class="n">ethanol_data</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Molecular Formula: </span><span class="si">{</span><span class="n">ethanol_data</span><span class="p">[</span><span class="s1">&#39;molecularFormula&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;SMILES: </span><span class="si">{</span><span class="n">ethanol_data</span><span class="p">[</span><span class="s1">&#39;smile&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;InChI: </span><span class="si">{</span><span class="n">ethanol_data</span><span class="p">[</span><span class="s1">&#39;inchi&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;InChI Key: </span><span class="si">{</span><span class="n">ethanol_data</span><span class="p">[</span><span class="s1">&#39;inchiKey&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Error: </span><span class="si">{</span><span class="n">ethanol_data</span><span class="p">[</span><span class="s1">&#39;status&#39;</span><span class="p">]</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">ethanol_data</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="s1">&#39;No response&#39;</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</code></pre></div></p>
+<h4 id="name_to_detailname"><code>name_to_detail(name)</code><a class="headerlink" href="#name_to_detailname" title="Permanent link">&para;</a></h4>
+<p>Search for compound information using chemical name.</p>
+<p><strong>Parameters:</strong>
+- <code>name</code> (str): Chemical name (common or systematic)</p>
+<p><strong>Returns:</strong>
+- <code>dict</code> or <code>None</code>: Detailed compound information if found, None if not found or error</p>
+<p><strong>Example:</strong>
+<div class="highlight"><pre><span></span><code><span class="n">cas_api</span> <span class="o">=</span> <span class="n">CASCommonChem</span><span class="p">()</span>
+
+<span class="c1"># Search by common name</span>
+<span class="n">ethanol_data</span> <span class="o">=</span> <span class="n">cas_api</span><span class="o">.</span><span class="n">name_to_detail</span><span class="p">(</span><span class="s2">&quot;ethanol&quot;</span><span class="p">)</span>
+
+<span class="c1"># Search by systematic name</span>
+<span class="n">ethanol_data</span> <span class="o">=</span> <span class="n">cas_api</span><span class="o">.</span><span class="n">name_to_detail</span><span class="p">(</span><span class="s2">&quot;ethyl alcohol&quot;</span><span class="p">)</span>
+
+<span class="k">if</span> <span class="n">ethanol_data</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;CAS Number: </span><span class="si">{</span><span class="n">ethanol_data</span><span class="p">[</span><span class="s1">&#39;rn&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Molecular Formula: </span><span class="si">{</span><span class="n">ethanol_data</span><span class="p">[</span><span class="s1">&#39;molecularFormula&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</code></pre></div></p>
+<h4 id="smiles_to_detailsmiles"><code>smiles_to_detail(smiles)</code><a class="headerlink" href="#smiles_to_detailsmiles" title="Permanent link">&para;</a></h4>
+<p>Search for compound information using SMILES notation.</p>
+<p><strong>Parameters:</strong>
+- <code>smiles</code> (str): SMILES string representation</p>
+<p><strong>Returns:</strong>
+- <code>dict</code> or <code>None</code>: Detailed compound information if found, None if not found or error</p>
+<p><strong>Example:</strong>
+<div class="highlight"><pre><span></span><code><span class="n">cas_api</span> <span class="o">=</span> <span class="n">CASCommonChem</span><span class="p">()</span>
+
+<span class="c1"># Search by SMILES</span>
+<span class="n">compound_data</span> <span class="o">=</span> <span class="n">cas_api</span><span class="o">.</span><span class="n">smiles_to_detail</span><span class="p">(</span><span class="s2">&quot;CCO&quot;</span><span class="p">)</span>  <span class="c1"># Ethanol</span>
+
+<span class="k">if</span> <span class="n">compound_data</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Name: </span><span class="si">{</span><span class="n">compound_data</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;CAS Number: </span><span class="si">{</span><span class="n">compound_data</span><span class="p">[</span><span class="s1">&#39;rn&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</code></pre></div></p>
+<h3 id="data-structure">Data Structure<a class="headerlink" href="#data-structure" title="Permanent link">&para;</a></h3>
+<p>The API returns detailed compound information in the following structure:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+    <span class="s2">&quot;uri&quot;</span><span class="p">:</span> <span class="s2">&quot;substance/pt/64175&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;rn&quot;</span><span class="p">:</span> <span class="s2">&quot;64-17-5&quot;</span><span class="p">,</span>                    <span class="c1"># CAS Registry Number</span>
+    <span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;Ethanol&quot;</span><span class="p">,</span>                  <span class="c1"># Primary name</span>
+    <span class="s2">&quot;image&quot;</span><span class="p">:</span> <span class="s2">&quot;&lt;svg&gt;...&lt;/svg&gt;&quot;</span><span class="p">,</span>          <span class="c1"># Chemical structure image (SVG)</span>
+    <span class="s2">&quot;inchi&quot;</span><span class="p">:</span> <span class="s2">&quot;InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;inchiKey&quot;</span><span class="p">:</span> <span class="s2">&quot;LFQSCWFLJHTTHZ-UHFFFAOYSA-N&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;smile&quot;</span><span class="p">:</span> <span class="s2">&quot;CCO&quot;</span><span class="p">,</span>                     <span class="c1"># SMILES notation</span>
+    <span class="s2">&quot;canonicalSmile&quot;</span><span class="p">:</span> <span class="s2">&quot;CCO&quot;</span><span class="p">,</span>            <span class="c1"># Canonical SMILES</span>
+    <span class="s2">&quot;molecularFormula&quot;</span><span class="p">:</span> <span class="s2">&quot;C&lt;sub&gt;2&lt;/sub&gt;H&lt;sub&gt;6&lt;/sub&gt;O&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;molecularMass&quot;</span><span class="p">:</span> <span class="s2">&quot;46.07&quot;</span><span class="p">,</span>           <span class="c1"># Molecular mass in g/mol</span>
+    <span class="s2">&quot;experimentalProperties&quot;</span><span class="p">:</span> <span class="p">[</span>         <span class="c1"># Experimental data</span>
+        <span class="p">{</span>
+            <span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;Boiling Point&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;property&quot;</span><span class="p">:</span> <span class="s2">&quot;78.37 °C&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;sourceNumber&quot;</span><span class="p">:</span> <span class="mi">1</span>
+        <span class="p">}</span>
+    <span class="p">],</span>
+    <span class="s2">&quot;propertyCitations&quot;</span><span class="p">:</span> <span class="p">[</span>              <span class="c1"># Literature references</span>
+        <span class="p">{</span>
+            <span class="s2">&quot;docId&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+            <span class="s2">&quot;title&quot;</span><span class="p">:</span> <span class="s2">&quot;CRC Handbook of Chemistry and Physics&quot;</span>
+        <span class="p">}</span>
+    <span class="p">],</span>
+    <span class="s2">&quot;synonyms&quot;</span><span class="p">:</span> <span class="p">[</span>                       <span class="c1"># Alternative names</span>
+        <span class="s2">&quot;Ethyl alcohol&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;Grain alcohol&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;EtOH&quot;</span>
+    <span class="p">],</span>
+    <span class="s2">&quot;replacedRns&quot;</span><span class="p">:</span> <span class="p">[],</span>                  <span class="c1"># Historical CAS numbers</span>
+    <span class="s2">&quot;hasMolfile&quot;</span><span class="p">:</span> <span class="n">true</span>                  <span class="c1"># Molfile availability</span>
+<span class="p">}</span>
+</code></pre></div>
+<h3 id="comprehensive-usage-examples">Comprehensive Usage Examples<a class="headerlink" href="#comprehensive-usage-examples" title="Permanent link">&para;</a></h3>
+<h4 id="single-compound-lookup">Single Compound Lookup<a class="headerlink" href="#single-compound-lookup" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">provesid.cascommonchem</span><span class="w"> </span><span class="kn">import</span> <span class="n">CASCommonChem</span>
+
+<span class="n">cas_api</span> <span class="o">=</span> <span class="n">CASCommonChem</span><span class="p">()</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">get_compound_info</span><span class="p">(</span><span class="n">identifier</span><span class="p">,</span> <span class="n">search_type</span><span class="o">=</span><span class="s2">&quot;cas&quot;</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Get comprehensive compound information&quot;&quot;&quot;</span>
+
+    <span class="k">if</span> <span class="n">search_type</span> <span class="o">==</span> <span class="s2">&quot;cas&quot;</span><span class="p">:</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="n">cas_api</span><span class="o">.</span><span class="n">cas_to_detail</span><span class="p">(</span><span class="n">identifier</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">search_type</span> <span class="o">==</span> <span class="s2">&quot;name&quot;</span><span class="p">:</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="n">cas_api</span><span class="o">.</span><span class="n">name_to_detail</span><span class="p">(</span><span class="n">identifier</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">search_type</span> <span class="o">==</span> <span class="s2">&quot;smiles&quot;</span><span class="p">:</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="n">cas_api</span><span class="o">.</span><span class="n">smiles_to_detail</span><span class="p">(</span><span class="n">identifier</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Invalid search type&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+    <span class="k">if</span> <span class="n">data</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;=== </span><span class="si">{</span><span class="n">data</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> ===&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;CAS Number: </span><span class="si">{</span><span class="n">data</span><span class="p">[</span><span class="s1">&#39;rn&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Molecular Formula: </span><span class="si">{</span><span class="n">data</span><span class="p">[</span><span class="s1">&#39;molecularFormula&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Molecular Mass: </span><span class="si">{</span><span class="n">data</span><span class="p">[</span><span class="s1">&#39;molecularMass&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> g/mol&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;SMILES: </span><span class="si">{</span><span class="n">data</span><span class="p">[</span><span class="s1">&#39;smile&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;InChI Key: </span><span class="si">{</span><span class="n">data</span><span class="p">[</span><span class="s1">&#39;inchiKey&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="c1"># Synonyms</span>
+        <span class="k">if</span> <span class="s1">&#39;synonyms&#39;</span> <span class="ow">in</span> <span class="n">data</span> <span class="ow">and</span> <span class="n">data</span><span class="p">[</span><span class="s1">&#39;synonyms&#39;</span><span class="p">]:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Synonyms: </span><span class="si">{</span><span class="s1">&#39;, &#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s1">&#39;synonyms&#39;</span><span class="p">][:</span><span class="mi">5</span><span class="p">])</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>  <span class="c1"># First 5</span>
+
+        <span class="c1"># Experimental properties</span>
+        <span class="k">if</span> <span class="s1">&#39;experimentalProperties&#39;</span> <span class="ow">in</span> <span class="n">data</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Experimental Properties:&quot;</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">prop</span> <span class="ow">in</span> <span class="n">data</span><span class="p">[</span><span class="s1">&#39;experimentalProperties&#39;</span><span class="p">]:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  - </span><span class="si">{</span><span class="n">prop</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">prop</span><span class="p">[</span><span class="s1">&#39;property&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">data</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;No data found for </span><span class="si">{</span><span class="n">identifier</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+<span class="c1"># Usage examples</span>
+<span class="n">ethanol_by_cas</span> <span class="o">=</span> <span class="n">get_compound_info</span><span class="p">(</span><span class="s2">&quot;64-17-5&quot;</span><span class="p">,</span> <span class="s2">&quot;cas&quot;</span><span class="p">)</span>
+<span class="n">ethanol_by_name</span> <span class="o">=</span> <span class="n">get_compound_info</span><span class="p">(</span><span class="s2">&quot;ethanol&quot;</span><span class="p">,</span> <span class="s2">&quot;name&quot;</span><span class="p">)</span>
+<span class="n">ethanol_by_smiles</span> <span class="o">=</span> <span class="n">get_compound_info</span><span class="p">(</span><span class="s2">&quot;CCO&quot;</span><span class="p">,</span> <span class="s2">&quot;smiles&quot;</span><span class="p">)</span>
+</code></pre></div>
+<h4 id="batch-processing">Batch Processing<a class="headerlink" href="#batch-processing" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">batch_cas_lookup</span><span class="p">(</span><span class="n">cas_numbers</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Process multiple CAS numbers with error handling&quot;&quot;&quot;</span>
+    <span class="n">cas_api</span> <span class="o">=</span> <span class="n">CASCommonChem</span><span class="p">()</span>
+    <span class="n">results</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="k">for</span> <span class="n">cas_num</span> <span class="ow">in</span> <span class="n">cas_numbers</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Processing CAS: </span><span class="si">{</span><span class="n">cas_num</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">data</span> <span class="o">=</span> <span class="n">cas_api</span><span class="o">.</span><span class="n">cas_to_detail</span><span class="p">(</span><span class="n">cas_num</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">data</span><span class="p">:</span>
+                <span class="n">results</span><span class="p">[</span><span class="n">cas_num</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="s1">&#39;name&#39;</span><span class="p">:</span> <span class="n">data</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">],</span>
+                    <span class="s1">&#39;formula&#39;</span><span class="p">:</span> <span class="n">data</span><span class="p">[</span><span class="s1">&#39;molecularFormula&#39;</span><span class="p">],</span>
+                    <span class="s1">&#39;smiles&#39;</span><span class="p">:</span> <span class="n">data</span><span class="p">[</span><span class="s1">&#39;smile&#39;</span><span class="p">],</span>
+                    <span class="s1">&#39;mass&#39;</span><span class="p">:</span> <span class="n">data</span><span class="p">[</span><span class="s1">&#39;molecularMass&#39;</span><span class="p">]</span>
+                <span class="p">}</span>
+                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  ✓ Found: </span><span class="si">{</span><span class="n">data</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">results</span><span class="p">[</span><span class="n">cas_num</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  ✗ Not found&quot;</span><span class="p">)</span>
+
+        <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  ✗ Error: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="n">results</span><span class="p">[</span><span class="n">cas_num</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="c1"># Rate limiting - be respectful to the API</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mf">0.5</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">results</span>
+
+<span class="c1"># Example usage</span>
+<span class="n">cas_list</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;64-17-5&quot;</span><span class="p">,</span> <span class="s2">&quot;67-56-1&quot;</span><span class="p">,</span> <span class="s2">&quot;108-88-3&quot;</span><span class="p">,</span> <span class="s2">&quot;71-43-2&quot;</span><span class="p">]</span>
+<span class="n">batch_results</span> <span class="o">=</span> <span class="n">batch_cas_lookup</span><span class="p">(</span><span class="n">cas_list</span><span class="p">)</span>
+
+<span class="k">for</span> <span class="n">cas</span><span class="p">,</span> <span class="n">data</span> <span class="ow">in</span> <span class="n">batch_results</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="k">if</span> <span class="n">data</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">cas</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">data</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">data</span><span class="p">[</span><span class="s1">&#39;formula&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">cas</span><span class="si">}</span><span class="s2">: Not found&quot;</span><span class="p">)</span>
+</code></pre></div>
+<h4 id="cross-reference-with-other-apis">Cross-Reference with Other APIs<a class="headerlink" href="#cross-reference-with-other-apis" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">provesid.cascommonchem</span><span class="w"> </span><span class="kn">import</span> <span class="n">CASCommonChem</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">provesid.pubchem</span><span class="w"> </span><span class="kn">import</span> <span class="n">PubChemAPI</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">provesid.opsin</span><span class="w"> </span><span class="kn">import</span> <span class="n">OPSIN</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">comprehensive_compound_lookup</span><span class="p">(</span><span class="n">compound_name</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Cross-reference compound across multiple databases&quot;&quot;&quot;</span>
+
+    <span class="n">results</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s1">&#39;input_name&#39;</span><span class="p">:</span> <span class="n">compound_name</span><span class="p">,</span>
+        <span class="s1">&#39;cas_data&#39;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="s1">&#39;pubchem_data&#39;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="s1">&#39;opsin_data&#39;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="s1">&#39;cross_validated&#39;</span><span class="p">:</span> <span class="kc">False</span>
+    <span class="p">}</span>
+
+    <span class="c1"># 1. Get structure from OPSIN</span>
+    <span class="n">opsin</span> <span class="o">=</span> <span class="n">OPSIN</span><span class="p">()</span>
+    <span class="n">opsin_result</span> <span class="o">=</span> <span class="n">opsin</span><span class="o">.</span><span class="n">get_id</span><span class="p">(</span><span class="n">compound_name</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">opsin_result</span><span class="p">[</span><span class="s1">&#39;status&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="s1">&#39;SUCCESS&#39;</span><span class="p">:</span>
+        <span class="n">results</span><span class="p">[</span><span class="s1">&#39;opsin_data&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">opsin_result</span>
+        <span class="n">smiles</span> <span class="o">=</span> <span class="n">opsin_result</span><span class="p">[</span><span class="s1">&#39;smiles&#39;</span><span class="p">]</span>
+
+        <span class="c1"># 2. Search CAS by SMILES</span>
+        <span class="n">cas_api</span> <span class="o">=</span> <span class="n">CASCommonChem</span><span class="p">()</span>
+        <span class="n">cas_data</span> <span class="o">=</span> <span class="n">cas_api</span><span class="o">.</span><span class="n">smiles_to_detail</span><span class="p">(</span><span class="n">smiles</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">cas_data</span><span class="p">:</span>
+            <span class="n">results</span><span class="p">[</span><span class="s1">&#39;cas_data&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">cas_data</span>
+
+            <span class="c1"># 3. Search PubChem by CAS</span>
+            <span class="n">pubchem</span> <span class="o">=</span> <span class="n">PubChemAPI</span><span class="p">()</span>
+            <span class="n">pubchem_data</span> <span class="o">=</span> <span class="n">pubchem</span><span class="o">.</span><span class="n">get_compound_by_name</span><span class="p">(</span><span class="n">cas_data</span><span class="p">[</span><span class="s1">&#39;rn&#39;</span><span class="p">])</span>
+
+            <span class="k">if</span> <span class="n">pubchem_data</span><span class="p">:</span>
+                <span class="n">results</span><span class="p">[</span><span class="s1">&#39;pubchem_data&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pubchem_data</span>
+                <span class="n">results</span><span class="p">[</span><span class="s1">&#39;cross_validated&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+
+    <span class="c1"># Alternative: try direct name search in CAS</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">results</span><span class="p">[</span><span class="s1">&#39;cas_data&#39;</span><span class="p">]:</span>
+        <span class="n">cas_data</span> <span class="o">=</span> <span class="n">cas_api</span><span class="o">.</span><span class="n">name_to_detail</span><span class="p">(</span><span class="n">compound_name</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">cas_data</span><span class="p">:</span>
+            <span class="n">results</span><span class="p">[</span><span class="s1">&#39;cas_data&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">cas_data</span>
+
+    <span class="k">return</span> <span class="n">results</span>
+
+<span class="c1"># Usage</span>
+<span class="n">compound_info</span> <span class="o">=</span> <span class="n">comprehensive_compound_lookup</span><span class="p">(</span><span class="s2">&quot;caffeine&quot;</span><span class="p">)</span>
+
+<span class="k">if</span> <span class="n">compound_info</span><span class="p">[</span><span class="s1">&#39;cross_validated&#39;</span><span class="p">]:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Successfully cross-validated across all databases!&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;CAS: </span><span class="si">{</span><span class="n">compound_info</span><span class="p">[</span><span class="s1">&#39;cas_data&#39;</span><span class="p">][</span><span class="s1">&#39;rn&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;SMILES: </span><span class="si">{</span><span class="n">compound_info</span><span class="p">[</span><span class="s1">&#39;opsin_data&#39;</span><span class="p">][</span><span class="s1">&#39;smiles&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;PubChem CID: </span><span class="si">{</span><span class="n">compound_info</span><span class="p">[</span><span class="s1">&#39;pubchem_data&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;CID&#39;</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</code></pre></div>
+<h4 id="property-analysis">Property Analysis<a class="headerlink" href="#property-analysis" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">analyze_experimental_properties</span><span class="p">(</span><span class="n">cas_number</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Analyze experimental properties from CAS data&quot;&quot;&quot;</span>
+    <span class="n">cas_api</span> <span class="o">=</span> <span class="n">CASCommonChem</span><span class="p">()</span>
+    <span class="n">data</span> <span class="o">=</span> <span class="n">cas_api</span><span class="o">.</span><span class="n">cas_to_detail</span><span class="p">(</span><span class="n">cas_number</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">data</span> <span class="ow">or</span> <span class="s1">&#39;experimentalProperties&#39;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">data</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;No experimental properties available&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+    <span class="n">properties</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="s1">&#39;experimentalProperties&#39;</span><span class="p">]</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;=== Properties for </span><span class="si">{</span><span class="n">data</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> ===&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Categorize properties</span>
+    <span class="n">physical_props</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">thermal_props</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">other_props</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="k">for</span> <span class="n">prop</span> <span class="ow">in</span> <span class="n">properties</span><span class="p">:</span>
+        <span class="n">prop_name</span> <span class="o">=</span> <span class="n">prop</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+
+        <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">term</span> <span class="ow">in</span> <span class="n">prop_name</span> <span class="k">for</span> <span class="n">term</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;boiling&#39;</span><span class="p">,</span> <span class="s1">&#39;melting&#39;</span><span class="p">,</span> <span class="s1">&#39;flash&#39;</span><span class="p">]):</span>
+            <span class="n">thermal_props</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">prop</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="nb">any</span><span class="p">(</span><span class="n">term</span> <span class="ow">in</span> <span class="n">prop_name</span> <span class="k">for</span> <span class="n">term</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;density&#39;</span><span class="p">,</span> <span class="s1">&#39;refractive&#39;</span><span class="p">,</span> <span class="s1">&#39;viscosity&#39;</span><span class="p">]):</span>
+            <span class="n">physical_props</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">prop</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">other_props</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">prop</span><span class="p">)</span>
+
+    <span class="c1"># Display categorized properties</span>
+    <span class="n">categories</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="p">(</span><span class="s2">&quot;Thermal Properties&quot;</span><span class="p">,</span> <span class="n">thermal_props</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">&quot;Physical Properties&quot;</span><span class="p">,</span> <span class="n">physical_props</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">&quot;Other Properties&quot;</span><span class="p">,</span> <span class="n">other_props</span><span class="p">)</span>
+    <span class="p">]</span>
+
+    <span class="k">for</span> <span class="n">category_name</span><span class="p">,</span> <span class="n">props</span> <span class="ow">in</span> <span class="n">categories</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">props</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="si">{</span><span class="n">category_name</span><span class="si">}</span><span class="s2">:&quot;</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">prop</span> <span class="ow">in</span> <span class="n">props</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  </span><span class="si">{</span><span class="n">prop</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">prop</span><span class="p">[</span><span class="s1">&#39;property&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s1">&#39;thermal&#39;</span><span class="p">:</span> <span class="n">thermal_props</span><span class="p">,</span>
+        <span class="s1">&#39;physical&#39;</span><span class="p">:</span> <span class="n">physical_props</span><span class="p">,</span>
+        <span class="s1">&#39;other&#39;</span><span class="p">:</span> <span class="n">other_props</span>
+    <span class="p">}</span>
+
+<span class="c1"># Example</span>
+<span class="n">analyze_experimental_properties</span><span class="p">(</span><span class="s2">&quot;64-17-5&quot;</span><span class="p">)</span>  <span class="c1"># Ethanol</span>
+</code></pre></div>
+<h3 id="best-practices">Best Practices<a class="headerlink" href="#best-practices" title="Permanent link">&para;</a></h3>
+<h4 id="1-error-handling-and-validation">1. Error Handling and Validation<a class="headerlink" href="#1-error-handling-and-validation" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">safe_cas_lookup</span><span class="p">(</span><span class="n">cas_number</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Safely lookup CAS number with validation&quot;&quot;&quot;</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">re</span>
+
+    <span class="c1"># Validate CAS number format</span>
+    <span class="n">cas_pattern</span> <span class="o">=</span> <span class="sa">r</span><span class="s1">&#39;^\d{1,7}-\d</span><span class="si">{2}</span><span class="s1">-\d$&#39;</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">re</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">cas_pattern</span><span class="p">,</span> <span class="n">cas_number</span><span class="p">):</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Invalid CAS format: </span><span class="si">{</span><span class="n">cas_number</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+    <span class="n">cas_api</span> <span class="o">=</span> <span class="n">CASCommonChem</span><span class="p">()</span>
+
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="n">cas_api</span><span class="o">.</span><span class="n">cas_to_detail</span><span class="p">(</span><span class="n">cas_number</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">data</span><span class="p">:</span>
+            <span class="c1"># Validate essential fields</span>
+            <span class="n">required_fields</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">,</span> <span class="s1">&#39;molecularFormula&#39;</span><span class="p">,</span> <span class="s1">&#39;smile&#39;</span><span class="p">]</span>
+            <span class="n">missing_fields</span> <span class="o">=</span> <span class="p">[</span><span class="n">field</span> <span class="k">for</span> <span class="n">field</span> <span class="ow">in</span> <span class="n">required_fields</span> <span class="k">if</span> <span class="n">field</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">data</span><span class="p">]</span>
+
+            <span class="k">if</span> <span class="n">missing_fields</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Warning: Missing fields: </span><span class="si">{</span><span class="n">missing_fields</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+            <span class="k">return</span> <span class="n">data</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;No data found for CAS </span><span class="si">{</span><span class="n">cas_number</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="kc">None</span>
+
+    <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Error looking up CAS </span><span class="si">{</span><span class="n">cas_number</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+<span class="c1"># Usage</span>
+<span class="n">data</span> <span class="o">=</span> <span class="n">safe_cas_lookup</span><span class="p">(</span><span class="s2">&quot;64-17-5&quot;</span><span class="p">)</span>
+</code></pre></div>
+<h4 id="2-rate-limiting-and-caching">2. Rate Limiting and Caching<a class="headerlink" href="#2-rate-limiting-and-caching" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">lru_cache</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">CachedCASCommonChem</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;CAS API with caching and rate limiting&quot;&quot;&quot;</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">delay</span><span class="o">=</span><span class="mf">0.5</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">api</span> <span class="o">=</span> <span class="n">CASCommonChem</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">delay</span> <span class="o">=</span> <span class="n">delay</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">last_request_time</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_rate_limit</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Implement rate limiting&quot;&quot;&quot;</span>
+        <span class="n">elapsed</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">last_request_time</span>
+        <span class="k">if</span> <span class="n">elapsed</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">delay</span><span class="p">:</span>
+            <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">delay</span> <span class="o">-</span> <span class="n">elapsed</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">last_request_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+
+    <span class="nd">@lru_cache</span><span class="p">(</span><span class="n">maxsize</span><span class="o">=</span><span class="mi">1000</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">cached_cas_lookup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cas_number</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Cached CAS lookup&quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_rate_limit</span><span class="p">()</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">api</span><span class="o">.</span><span class="n">cas_to_detail</span><span class="p">(</span><span class="n">cas_number</span><span class="p">)</span>
+
+    <span class="nd">@lru_cache</span><span class="p">(</span><span class="n">maxsize</span><span class="o">=</span><span class="mi">1000</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">cached_name_lookup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Cached name lookup&quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_rate_limit</span><span class="p">()</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">api</span><span class="o">.</span><span class="n">name_to_detail</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
+
+<span class="c1"># Usage</span>
+<span class="n">cached_api</span> <span class="o">=</span> <span class="n">CachedCASCommonChem</span><span class="p">(</span><span class="n">delay</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+
+<span class="c1"># First call - hits API</span>
+<span class="n">data1</span> <span class="o">=</span> <span class="n">cached_api</span><span class="o">.</span><span class="n">cached_cas_lookup</span><span class="p">(</span><span class="s2">&quot;64-17-5&quot;</span><span class="p">)</span>
+
+<span class="c1"># Second call - uses cache</span>
+<span class="n">data2</span> <span class="o">=</span> <span class="n">cached_api</span><span class="o">.</span><span class="n">cached_cas_lookup</span><span class="p">(</span><span class="s2">&quot;64-17-5&quot;</span><span class="p">)</span>
+</code></pre></div>
+<h4 id="3-data-export-and-analysis">3. Data Export and Analysis<a class="headerlink" href="#3-data-export-and-analysis" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">export_cas_data</span><span class="p">(</span><span class="n">cas_numbers</span><span class="p">,</span> <span class="n">output_format</span><span class="o">=</span><span class="s1">&#39;csv&#39;</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Export CAS data to various formats&quot;&quot;&quot;</span>
+    <span class="n">cas_api</span> <span class="o">=</span> <span class="n">CASCommonChem</span><span class="p">()</span>
+    <span class="n">results</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="k">for</span> <span class="n">cas_num</span> <span class="ow">in</span> <span class="n">cas_numbers</span><span class="p">:</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="n">cas_api</span><span class="o">.</span><span class="n">cas_to_detail</span><span class="p">(</span><span class="n">cas_num</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">data</span><span class="p">:</span>
+            <span class="c1"># Flatten data for tabular export</span>
+            <span class="n">flat_data</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="s1">&#39;cas_number&#39;</span><span class="p">:</span> <span class="n">data</span><span class="p">[</span><span class="s1">&#39;rn&#39;</span><span class="p">],</span>
+                <span class="s1">&#39;name&#39;</span><span class="p">:</span> <span class="n">data</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">],</span>
+                <span class="s1">&#39;molecular_formula&#39;</span><span class="p">:</span> <span class="n">data</span><span class="p">[</span><span class="s1">&#39;molecularFormula&#39;</span><span class="p">],</span>
+                <span class="s1">&#39;molecular_mass&#39;</span><span class="p">:</span> <span class="n">data</span><span class="p">[</span><span class="s1">&#39;molecularMass&#39;</span><span class="p">],</span>
+                <span class="s1">&#39;smiles&#39;</span><span class="p">:</span> <span class="n">data</span><span class="p">[</span><span class="s1">&#39;smile&#39;</span><span class="p">],</span>
+                <span class="s1">&#39;inchi_key&#39;</span><span class="p">:</span> <span class="n">data</span><span class="p">[</span><span class="s1">&#39;inchiKey&#39;</span><span class="p">],</span>
+                <span class="s1">&#39;synonyms_count&#39;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;synonyms&#39;</span><span class="p">,</span> <span class="p">[])),</span>
+                <span class="s1">&#39;properties_count&#39;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;experimentalProperties&#39;</span><span class="p">,</span> <span class="p">[]))</span>
+            <span class="p">}</span>
+
+            <span class="c1"># Add first few synonyms</span>
+            <span class="n">synonyms</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;synonyms&#39;</span><span class="p">,</span> <span class="p">[])</span>
+            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">synonyms</span><span class="p">))):</span>
+                <span class="n">flat_data</span><span class="p">[</span><span class="sa">f</span><span class="s1">&#39;synonym_</span><span class="si">{</span><span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">synonyms</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+
+            <span class="n">results</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">flat_data</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">output_format</span> <span class="o">==</span> <span class="s1">&#39;csv&#39;</span><span class="p">:</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">results</span><span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="s1">&#39;cas_data.csv&#39;</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Exported </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">results</span><span class="p">)</span><span class="si">}</span><span class="s2"> compounds to cas_data.csv&quot;</span><span class="p">)</span>
+
+    <span class="k">elif</span> <span class="n">output_format</span> <span class="o">==</span> <span class="s1">&#39;json&#39;</span><span class="p">:</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="s1">&#39;cas_data.json&#39;</span><span class="p">,</span> <span class="s1">&#39;w&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+            <span class="n">json</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">results</span><span class="p">,</span> <span class="n">f</span><span class="p">,</span> <span class="n">indent</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Exported </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">results</span><span class="p">)</span><span class="si">}</span><span class="s2"> compounds to cas_data.json&quot;</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">results</span>
+
+<span class="c1"># Usage</span>
+<span class="n">cas_list</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;64-17-5&quot;</span><span class="p">,</span> <span class="s2">&quot;67-56-1&quot;</span><span class="p">,</span> <span class="s2">&quot;108-88-3&quot;</span><span class="p">]</span>
+<span class="n">exported_data</span> <span class="o">=</span> <span class="n">export_cas_data</span><span class="p">(</span><span class="n">cas_list</span><span class="p">,</span> <span class="s1">&#39;csv&#39;</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="integration-patterns">Integration Patterns<a class="headerlink" href="#integration-patterns" title="Permanent link">&para;</a></h3>
+<h4 id="database-integration">Database Integration<a class="headerlink" href="#database-integration" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">sqlite3</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">create_compound_database</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Create SQLite database for compound data&quot;&quot;&quot;</span>
+    <span class="n">conn</span> <span class="o">=</span> <span class="n">sqlite3</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="s1">&#39;compounds.db&#39;</span><span class="p">)</span>
+
+    <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s1">&#39;&#39;&#39;</span>
+<span class="s1">        CREATE TABLE IF NOT EXISTS compounds (</span>
+<span class="s1">            cas_number TEXT PRIMARY KEY,</span>
+<span class="s1">            name TEXT,</span>
+<span class="s1">            molecular_formula TEXT,</span>
+<span class="s1">            molecular_mass REAL,</span>
+<span class="s1">            smiles TEXT,</span>
+<span class="s1">            inchi_key TEXT,</span>
+<span class="s1">            data_json TEXT,</span>
+<span class="s1">            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP</span>
+<span class="s1">        )</span>
+<span class="s1">    &#39;&#39;&#39;</span><span class="p">)</span>
+
+    <span class="n">conn</span><span class="o">.</span><span class="n">commit</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">conn</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">store_cas_data</span><span class="p">(</span><span class="n">cas_number</span><span class="p">,</span> <span class="n">force_update</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Store or update CAS data in database&quot;&quot;&quot;</span>
+    <span class="n">conn</span> <span class="o">=</span> <span class="n">create_compound_database</span><span class="p">()</span>
+
+    <span class="c1"># Check if already exists</span>
+    <span class="n">cursor</span> <span class="o">=</span> <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+        <span class="s1">&#39;SELECT cas_number FROM compounds WHERE cas_number = ?&#39;</span><span class="p">,</span>
+        <span class="p">(</span><span class="n">cas_number</span><span class="p">,)</span>
+    <span class="p">)</span>
+
+    <span class="n">exists</span> <span class="o">=</span> <span class="n">cursor</span><span class="o">.</span><span class="n">fetchone</span><span class="p">()</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+
+    <span class="k">if</span> <span class="n">exists</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">force_update</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;CAS </span><span class="si">{</span><span class="n">cas_number</span><span class="si">}</span><span class="s2"> already in database&quot;</span><span class="p">)</span>
+        <span class="k">return</span>
+
+    <span class="c1"># Fetch from API</span>
+    <span class="n">cas_api</span> <span class="o">=</span> <span class="n">CASCommonChem</span><span class="p">()</span>
+    <span class="n">data</span> <span class="o">=</span> <span class="n">cas_api</span><span class="o">.</span><span class="n">cas_to_detail</span><span class="p">(</span><span class="n">cas_number</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">data</span><span class="p">:</span>
+        <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s1">&#39;&#39;&#39;</span>
+<span class="s1">            INSERT OR REPLACE INTO compounds </span>
+<span class="s1">            (cas_number, name, molecular_formula, molecular_mass, </span>
+<span class="s1">             smiles, inchi_key, data_json)</span>
+<span class="s1">            VALUES (?, ?, ?, ?, ?, ?, ?)</span>
+<span class="s1">        &#39;&#39;&#39;</span><span class="p">,</span> <span class="p">(</span>
+            <span class="n">data</span><span class="p">[</span><span class="s1">&#39;rn&#39;</span><span class="p">],</span>
+            <span class="n">data</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">],</span>
+            <span class="n">data</span><span class="p">[</span><span class="s1">&#39;molecularFormula&#39;</span><span class="p">],</span>
+            <span class="nb">float</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s1">&#39;molecularMass&#39;</span><span class="p">]),</span>
+            <span class="n">data</span><span class="p">[</span><span class="s1">&#39;smile&#39;</span><span class="p">],</span>
+            <span class="n">data</span><span class="p">[</span><span class="s1">&#39;inchiKey&#39;</span><span class="p">],</span>
+            <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+        <span class="p">))</span>
+
+        <span class="n">conn</span><span class="o">.</span><span class="n">commit</span><span class="p">()</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Stored </span><span class="si">{</span><span class="n">data</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> (CAS: </span><span class="si">{</span><span class="n">cas_number</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+
+    <span class="n">conn</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+
+<span class="c1"># Usage</span>
+<span class="n">store_cas_data</span><span class="p">(</span><span class="s2">&quot;64-17-5&quot;</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="limitations-and-considerations">Limitations and Considerations<a class="headerlink" href="#limitations-and-considerations" title="Permanent link">&para;</a></h3>
+<h4 id="data-coverage">Data Coverage<a class="headerlink" href="#data-coverage" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Free tier covers ~500,000 substances</li>
+<li>Focus on commonly used chemicals</li>
+<li>May not include very specialized or proprietary compounds</li>
+</ul>
+<h4 id="rate-limiting">Rate Limiting<a class="headerlink" href="#rate-limiting" title="Permanent link">&para;</a></h4>
+<ul>
+<li>No official documented limits</li>
+<li>Recommended to implement delays between requests</li>
+<li>Monitor for HTTP 429 (Too Many Requests) responses</li>
+</ul>
+<h4 id="data-quality">Data Quality<a class="headerlink" href="#data-quality" title="Permanent link">&para;</a></h4>
+<ul>
+<li>High-quality data from CAS REGISTRY</li>
+<li>Experimental properties may vary in precision</li>
+<li>Cross-validation with other sources recommended</li>
+</ul>
+<h4 id="api-stability">API Stability<a class="headerlink" href="#api-stability" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Production-grade API with good uptime</li>
+<li>Data structure may evolve over time</li>
+<li>Always check for API updates and changes</li>
+</ul>
+<h2 id="cache-management">Cache Management<a class="headerlink" href="#cache-management" title="Permanent link">&para;</a></h2>
+<p>The CASCommonChem class includes service-specific caching to improve performance and reduce API calls.</p>
+<h3 id="cache-control">Cache Control<a class="headerlink" href="#cache-control" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Enable/disable caching during initialization</span>
+<span class="n">cas_api</span> <span class="o">=</span> <span class="n">CASCommonChem</span><span class="p">(</span><span class="n">use_cache</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>  <span class="c1"># Default</span>
+
+<span class="c1"># Force fresh data retrieval (bypasses cache but still stores results)</span>
+<span class="n">cas_api</span><span class="o">.</span><span class="n">use_cache</span> <span class="o">=</span> <span class="kc">False</span>
+<span class="n">fresh_data</span> <span class="o">=</span> <span class="n">cas_api</span><span class="o">.</span><span class="n">cas_to_detail</span><span class="p">(</span><span class="s2">&quot;64-17-5&quot;</span><span class="p">)</span>
+
+<span class="c1"># Re-enable caching</span>
+<span class="n">cas_api</span><span class="o">.</span><span class="n">use_cache</span> <span class="o">=</span> <span class="kc">True</span>
+</code></pre></div>
+<h3 id="cache-management-methods">Cache Management Methods<a class="headerlink" href="#cache-management-methods" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Get cache information</span>
+<span class="n">cache_info</span> <span class="o">=</span> <span class="n">cas_api</span><span class="o">.</span><span class="n">get_cache_info</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Cache directory: </span><span class="si">{</span><span class="n">cache_info</span><span class="p">[</span><span class="s1">&#39;cache_directory&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Memory entries: </span><span class="si">{</span><span class="n">cache_info</span><span class="p">[</span><span class="s1">&#39;memory_entries&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Disk entries: </span><span class="si">{</span><span class="n">cache_info</span><span class="p">[</span><span class="s1">&#39;disk_entries&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Total size: </span><span class="si">{</span><span class="n">cache_info</span><span class="p">[</span><span class="s1">&#39;total_size_mb&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> MB&quot;</span><span class="p">)</span>
+
+<span class="c1"># Clear CAS-specific cache only</span>
+<span class="n">cas_api</span><span class="o">.</span><span class="n">clear_cache</span><span class="p">()</span>
+</code></pre></div>
+<h2 id="authentication-requirements">Authentication Requirements<a class="headerlink" href="#authentication-requirements" title="Permanent link">&para;</a></h2>
+<p>The CAS Common Chemistry API v2.0 requires authentication:</p>
+<ol>
+<li><strong>API Key</strong>: Obtain from CAS SciFinder or institutional access</li>
+<li><strong>Header Authentication</strong>: Uses <code>X-API-KEY</code> header</li>
+<li><strong>Error Handling</strong>: Comprehensive authentication error management</li>
+</ol>
+<h3 id="api-key-setup">API Key Setup<a class="headerlink" href="#api-key-setup" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Method 1: Direct API key</span>
+<span class="n">cas_api</span> <span class="o">=</span> <span class="n">CASCommonChem</span><span class="p">(</span><span class="n">api_key</span><span class="o">=</span><span class="s2">&quot;your-cas-api-key&quot;</span><span class="p">)</span>
+
+<span class="c1"># Method 2: File-based key</span>
+<span class="n">cas_api</span> <span class="o">=</span> <span class="n">CASCommonChem</span><span class="p">(</span><span class="n">api_key_file</span><span class="o">=</span><span class="s2">&quot;/path/to/api-key.txt&quot;</span><span class="p">)</span>
+
+<span class="c1"># Method 3: Default DTU location (if applicable)</span>
+<span class="n">cas_api</span> <span class="o">=</span> <span class="n">CASCommonChem</span><span class="p">()</span>  <span class="c1"># Uses DTU OneDrive path</span>
+</code></pre></div>
+<h2 id="migration-from-v10">Migration from v1.0<a class="headerlink" href="#migration-from-v10" title="Permanent link">&para;</a></h2>
+<p>If migrating from the previous v1.0 implementation:</p>
+<ol>
+<li><strong>Add API Key</strong>: v2.0 requires authentication</li>
+<li><strong>Error Handling</strong>: New authentication error responses</li>
+<li><strong>Status Fields</strong>: Enhanced status reporting with <code>found</code> boolean</li>
+<li><strong>Cache System</strong>: Now uses service-specific caching</li>
+</ol>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/provesid/provesid" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.top", "search.highlight", "search.share", "toc.integrate"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

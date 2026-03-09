@@ -4,10 +4,7 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'docs/**'
-      - 'src/**'
-      - 'examples/**'
-      - 'mkdocs.yml'
+      - 'site/**'
       - '.github/workflows/mkdocs-deploy.yml'
   workflow_dispatch:
 
@@ -23,8 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Build job
-  build:
+  package-site:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -32,40 +28,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-mkdocs-${{ hashFiles('**/pyproject.toml', '**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-mkdocs-
-            ${{ runner.os }}-pip-
-
-      - name: Install dependencies
+      - name: Verify committed site exists
         run: |
-          python -m pip install --upgrade pip
-          # Install the package with minimal dependencies first
-          pip install -e .
-          # Install documentation dependencies
-          pip install -e ".[docs]"
-          # Install additional documentation dependencies
-          pip install mkdocs-jupyter mkdocs-autorefs
+          test -d site
+          test -f site/index.html
 
       - name: Setup Pages
         id: pages
         uses: actions/configure-pages@v4
-
-      - name: Build documentation
-        run: |
-          mkdocs build --clean --strict
-        env:
-          SITE_URL: ${{ steps.pages.outputs.origin }}${{ steps.pages.outputs.base_path }}/
-          PROVESID_DOCS_EXECUTE: "true"
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
@@ -74,8 +44,7 @@ jobs:
 
   # Deploy job
   deploy:
-    # Add a dependency to the build job
-    needs: build
+    needs: package-site
 
     # Grant GITHUB_TOKEN the permissions required to make a Pages deployment
     permissions:

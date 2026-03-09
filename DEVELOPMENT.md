@@ -225,14 +225,38 @@ tests/
 
 ```bash
 # Install documentation dependencies
-pip install -e ".[dev]"
+pip install -e ".[docs]"
 
 # Serve documentation locally
 mkdocs serve
 
 # Build documentation
-mkdocs build
+mkdocs build --strict
 ```
+
+### Tutorial Format Migration (In Progress)
+
+Tutorials are being migrated from committed notebook JSON (`.ipynb`) to
+git-friendly Markdown sources using MyST/Jupytext.
+
+```bash
+# Convert notebooks to MyST Markdown
+./scripts/convert_notebooks_to_myst.sh
+
+# Re-generate notebooks from Markdown sources when needed
+./scripts/generate_notebooks_from_myst.sh
+
+# Validate strict docs build and tutorial round-trip conversion
+./scripts/validate_docs_local.sh
+
+# Optional: also execute converted tutorials locally
+./scripts/validate_docs_local.sh --execute
+```
+
+Migration and refresh checklists are tracked in:
+
+- `docs/plans/examples-migration-plan.md`
+- `docs/plans/docs-refresh-plan.md`
 
 ### Documentation Structure
 
@@ -256,7 +280,7 @@ docs/
 ### Adding Documentation
 
 1. **API Documentation:** Auto-generated from docstrings using mkdocstrings
-2. **Tutorials:** Add Jupyter notebooks to `examples/` and `docs/examples/`
+2. **Tutorials:** Add text-first tutorial sources under `examples/` (MyST/Jupytext during migration)
 3. **Guides:** Add Markdown files to `docs/`
 
 ## 🔍 Code Quality

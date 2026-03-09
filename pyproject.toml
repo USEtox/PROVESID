@@ -60,6 +60,7 @@ docs = [
     "mkdocstrings[python]>=0.19",
     "mkdocs-jupyter>=0.24.0",
     "mkdocs-autorefs>=0.4.0",
+    "jupytext>=1.16.0",
 ]
 
 [tool.setuptools]

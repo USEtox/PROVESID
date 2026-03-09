@@ -369,11 +369,16 @@ if aspirin_query_id:
         # Check if response is just plain text "Done" or JSON
         content_type = status_response.headers.get('content-type', '')
         if 'application/json' in content_type:
-            status_data = status_response.json()
-            status = status_data.get('classification_status', 'Unknown')
-            print(f"✓ Status check successful:")
-            print(f"  Classification Status: {status}")
-            print(f"  Submission Time: {status_data.get('created_at', 'Unknown')}")
+            try:
+                status_data = status_response.json()
+                status = status_data.get('classification_status', 'Unknown')
+                print(f"✓ Status check successful:")
+                print(f"  Classification Status: {status}")
+                print(f"  Submission Time: {status_data.get('created_at', 'Unknown')}")
+            except Exception:
+                status = status_response.text.strip()
+                print(f"✓ Status check successful:")
+                print(f"  Classification Status: {status}")
         else:
             # Plain text response (usually "Done" when complete)
             status = status_response.text.strip()

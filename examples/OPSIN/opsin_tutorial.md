@@ -170,7 +170,10 @@ def name_to_smiles_converter(iupac_names):
     """Convert a list of IUPAC names to SMILES"""
     results = []
     for name in iupac_names:
-        result = opsin.get_id(name)
+        try:
+            result = opsin.get_id(name)
+        except Exception:
+            result = {'status': 'FAILED'}
         if result['status'] == 'SUCCESS':
             results.append({
                 'name': name,
@@ -203,7 +206,10 @@ def validate_iupac_names(names_list):
     invalid_names = []
     
     for name in names_list:
-        result = opsin.get_id(name)
+        try:
+            result = opsin.get_id(name)
+        except Exception:
+            result = {'status': 'FAILED'}
         if result['status'] == 'SUCCESS':
             valid_names.append(name)
         else:

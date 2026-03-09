@@ -184,7 +184,10 @@ Let's analyze the data we've collected and create some visualizations.
 
 ```{code-cell} ipython3
 import pandas as pd
-import matplotlib.pyplot as plt
+try:
+    import matplotlib.pyplot as plt
+except Exception:
+    plt = None
 
 # Create a comprehensive property comparison
 property_data = []
@@ -227,38 +230,41 @@ print(df.to_string(index=False))
 
 ```{code-cell} ipython3
 # Create visualizations
-fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+if plt is None:
+    print("matplotlib is not installed; skipping plotting section.")
+else:
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
 
 # Plot 1: Melting Points
-mp_data = df[df['Melting Point'].notna()]
-if not mp_data.empty:
-    axes[0].bar(mp_data['Compound'], mp_data['Melting Point'])
-    axes[0].set_title('Melting Points of Compounds')
-    axes[0].set_ylabel('Temperature (°C)')
-    axes[0].tick_params(axis='x', rotation=45)
-else:
-    axes[0].text(0.5, 0.5, 'No melting point data available', 
-                ha='center', va='center', transform=axes[0].transAxes)
-    axes[0].set_title('Melting Points (No Data)')
+    mp_data = df[df['Melting Point'].notna()]
+    if not mp_data.empty:
+        axes[0].bar(mp_data['Compound'], mp_data['Melting Point'])
+        axes[0].set_title('Melting Points of Compounds')
+        axes[0].set_ylabel('Temperature (°C)')
+        axes[0].tick_params(axis='x', rotation=45)
+    else:
+        axes[0].text(0.5, 0.5, 'No melting point data available', 
+                    ha='center', va='center', transform=axes[0].transAxes)
+        axes[0].set_title('Melting Points (No Data)')
 
 # Plot 2: Density vs Melting Point correlation
-valid_data = df.dropna(subset=['Density', 'Melting Point'])
-if len(valid_data) > 1:
-    axes[1].scatter(valid_data['Density'], valid_data['Melting Point'])
-    for i, row in valid_data.iterrows():
-        axes[1].annotate(row['Compound'], 
-                        (row['Density'], row['Melting Point']),
-                        xytext=(5, 5), textcoords='offset points')
-    axes[1].set_xlabel('Density (g/cm³)')
-    axes[1].set_ylabel('Melting Point (°C)')
-    axes[1].set_title('Density vs Melting Point')
-else:
-    axes[1].text(0.5, 0.5, 'Insufficient data for correlation', 
-                ha='center', va='center', transform=axes[1].transAxes)
-    axes[1].set_title('Density vs Melting Point (Insufficient Data)')
+    valid_data = df.dropna(subset=['Density', 'Melting Point'])
+    if len(valid_data) > 1:
+        axes[1].scatter(valid_data['Density'], valid_data['Melting Point'])
+        for i, row in valid_data.iterrows():
+            axes[1].annotate(row['Compound'], 
+                            (row['Density'], row['Melting Point']),
+                            xytext=(5, 5), textcoords='offset points')
+        axes[1].set_xlabel('Density (g/cm³)')
+        axes[1].set_ylabel('Melting Point (°C)')
+        axes[1].set_title('Density vs Melting Point')
+    else:
+        axes[1].text(0.5, 0.5, 'Insufficient data for correlation', 
+                    ha='center', va='center', transform=axes[1].transAxes)
+        axes[1].set_title('Density vs Melting Point (Insufficient Data)')
 
-plt.tight_layout()
-plt.show()
+    plt.tight_layout()
+    plt.show()
 ```
 
 ## Error Handling and Best Practices
@@ -275,6 +281,28 @@ test_cases = [
 
 print("Error Handling Examples:")
 print("=" * 50)
+
+if "get_property_safely" not in globals():
+    def get_property_safely(cid, property_name, max_values=5):
+        result = {
+            'cid': cid,
+            'property': property_name,
+            'success': False,
+            'data': [],
+            'error': None,
+            'count': 0,
+        }
+        try:
+            data = get_experimental_property(cid, property_name)
+            if data:
+                result['success'] = True
+                result['data'] = data[:max_values]
+                result['count'] = len(data)
+            else:
+                result['error'] = "No data available"
+        except Exception as e:
+            result['error'] = str(e)
+        return result
 
 for cid, prop_name in test_cases:
     result = get_property_safely(cid, prop_name)

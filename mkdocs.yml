@@ -29,8 +29,8 @@ theme:
 nav:
   - Home: index.md
   - Getting Started:
-    - Installation: installation.md
     - Quick Start: quickstart.md
+    - Online and Offline Data Methods: data_methods.md
     - Advanced Caching: advanced_caching.md
   - Tutorials:
     - PubChem Tutorial: examples/pubchem/pubchem_tutorial.md

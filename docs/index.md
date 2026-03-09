@@ -1,125 +1,75 @@
 # PROVESID
 
-A comprehensive Python package for chemical identifier resolution and experimental property extraction from multiple chemical databases and APIs.
+PROVESID is a Python package for chemical identifier resolution, property retrieval, and local dataset lookup across multiple chemistry data systems.
 
-## Overview
+## What PROVESID Covers
 
-PROVESID (PROVenance and Experimental Structuring of Identifier Data) provides unified interfaces to access chemical information from various sources including:
+PROVESID includes interfaces for online APIs and local/offline databases.
 
-- **PubChem**: Comprehensive chemical database with compound, substance, and bioassay information
-- **PubChem PUG View**: Experimental property data extraction with full reference information
-- **NCI Chemical Identifier Resolver**: Chemical structure identifier conversion service
-- **CAS Common Chemistry**: Open chemistry database from the Chemical Abstracts Service
-- **ClassyFire**: Chemical taxonomy and classification
-- **OPSIN**: Chemical name to structure conversion
+### Online interfaces
 
-## Key Features
+- `PubChemAPI` for PUG-REST queries (compound, substance, assay, and identifier workflows)
+- `PubChemView` for experimental property extraction with references and tabular outputs
+- `NCIChemicalIdentifierResolver` for identifier conversion through NCI resolver endpoints
+- `CASCommonChem` for CAS Common Chemistry lookups
+- `ChEBI` for ChEBI API access
+- `OPSIN` and `PYOPSIN` for chemical name-to-structure conversion
+- `ClassyFireAPI` for chemical taxonomy/classification
 
-### 🔍 **Multi-Source Chemical Data Access**
-- Unified interfaces to major chemical databases
-- Consistent error handling and response formats
-- Automatic rate limiting and retry mechanisms
+### Offline and local dataset interfaces
 
-### 🧪 **Experimental Property Extraction**
-- Extract experimental properties from PubChem PUG View
-- Parse values, units, and full reference information
-- Generate structured DataFrames for analysis
+- `CheMBL` local SQLite interface (auto-download supported)
+- `PubChemID` local SQLite identifier database (CID/CAS/InChI/InChIKey and metadata)
+- `CompToxID` local SQLite interface (auto-download supported)
+- `ZeroPM` local SQLite interface (auto-download supported)
+- `REACHDossierID` local REACH dossier dataset lookup
+- `ChebiSDF` local ChEBI SDF parser
 
-### 🔄 **Chemical Identifier Conversion**
-- Convert between SMILES, InChI, CAS numbers, and names
-- Resolve chemical identifiers across different formats
-- Validate and standardize chemical structures
+## Recommended Installation Method
 
-### 📊 **Data Processing & Analysis**
-- Batch processing capabilities for large datasets
-- DataFrame output for easy integration with pandas
-- Comprehensive error handling and logging
-
-## Quick Start
-
-### Installation
+Use `uv` as the primary installation workflow:
 
 ```bash
-pip install provesid
+uv pip install provesid
 ```
 
-### Basic Usage
+For development from source:
 
-```python
-from provesid import PubChemAPI, NCIChemicalIdentifierResolver, PubChemView
-
-# Get compound information from PubChem
-api = PubChemAPI()
-compound = api.get_compound_by_cid(2244)  # Aspirin
-properties = api.get_compound_properties([2244], ['MolecularWeight', 'MolecularFormula'])
-
-# Convert chemical identifiers
-resolver = NCIChemicalIdentifierResolver()
-smiles = resolver.resolve('aspirin', 'smiles')
-inchi = resolver.resolve('CCO', 'stdinchi')  # Ethanol SMILES to InChI
-
-# Extract experimental properties
-view = PubChemView()
-melting_points = view.get_experimental_properties(2244, 'Melting Point')
-df = view.experimental_properties_to_dataframe(2244, 'Melting Point')
+```bash
+git clone https://github.com/USEtox/PROVESID.git
+cd PROVESID
+uv pip install -e .
 ```
 
-### Property Extraction Example
+`uv` is recommended because PROVESID can work with large local data files and database assets. Using `uv` helps avoid repeated package/data copies across many environments.
 
-```python
-from provesid.pubchemview import get_experimental_properties_table
+## Start Here
 
-# Get a comprehensive table of experimental properties
-table = get_experimental_properties_table(2244, 'Boiling Point')
-print(table)
-#   CID StringWithMarkup          Value Unit                    Reference
-# 0  2244     139 °C at 760 mmHg  139    °C    J. Chem. Eng. Data 1996, 41, 1190-1193
-# 1  2244     140 °C              140    °C    Lange's Handbook of Chemistry, 1985
-```
+- [Quick Start](quickstart.md)
+- [Online and Offline Data Methods](data_methods.md)
+- [Advanced Caching](advanced_caching.md)
 
-## API Documentation
+## Tutorials
 
-Comprehensive API documentation is available for all modules:
+- [PubChem Tutorial](examples/pubchem/pubchem_tutorial.md)
+- [CAS Common Chemistry Tutorial](examples/CCC/CAS_Common_Chemistry_tutorial.md)
+- [ChEBI Tutorial](examples/ChEBI/ChEBI_tutorial.md)
+- [ChEBI SDF Tutorial](examples/ChEBI/chebi_sdf_tutorial.md)
+- [ClassyFire Tutorial](examples/ClassyFire/classyfire_tutorial.md)
+- [OPSIN Tutorial](examples/OPSIN/opsin_tutorial.md)
+- [Chemical ID Resolver Tutorial](examples/resolver/chem_id_resolver_tutorial.md)
+- [ChEMBL Tutorial](examples/chembl/chembl_tutorial.md)
+- [PubChem View Tutorial](examples/pubchemview/pubchem_view_tutorial.md)
+- [ZeroPM Tutorial](examples/zeropm/zeropm-example.md)
 
-- [PubChem API](api/pubchem.md) - Access to PubChem compound, substance, and bioassay data
-- [PubChem View](api/pubchemview.md) - Experimental property extraction and reference parsing
-- [NCI Resolver](api/nci_resolver.md) - Chemical identifier conversion and validation
-- [Common Chemistry](api/cascommonchem.md) - CAS Common Chemistry database access
-- [ClassyFire](api/classyfire.md) - Chemical classification and taxonomy
-- [OPSIN](api/opsin.md) - Chemical name to structure conversion
+## API Reference
 
-## Examples
-
-Explore comprehensive tutorials for each API:
-
-- [PubChem Tutorial](examples/pubchem/pubchem_tutorial.md) - Complete PubChem API guide with enhanced features
-- [CAS Common Chemistry](examples/CCC/CAS_Common_Chemistry_tutorial.md) - Working with CAS Registry data
-- [ChEBI Tutorial](examples/ChEBI/ChEBI_tutorial.md) - Chemical Entities of Biological Interest database
-- [ClassyFire Tutorial](examples/ClassyFire/classyfire_tutorial.md) - Chemical structure classification
-- [OPSIN Tutorial](examples/OPSIN/opsin_tutorial.md) - IUPAC name to structure conversion
-- [Chemical ID Resolver](examples/resolver/chem_id_resolver_tutorial.md) - NCI chemical identifier resolution
-
-## Development
-
-PROVESID is actively developed and welcomes contributions:
-
-- [Contributing Guidelines](https://github.com/USEtox/PROVESID/blob/main/CONTRIBUTING.md)
-- [Issues and Bug Reports](https://github.com/USEtox/PROVESID/issues)
-- [Source Code](https://github.com/USEtox/PROVESID)
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Citation
-
-If you use PROVESID in your research, please cite:
-
-```bibtex
-@software{provesid,
-  title={PROVESID: A Python Package for Chemical Identifier Resolution and Property Extraction},
-  author={PROVESID Team},
-  year={2024},
-  url={https://github.com/provesid/provesid}
-}
-```
+- [API Overview](api/index.md)
+- [PubChem API](api/pubchem.md)
+- [PubChem View](api/pubchemview.md)
+- [NCI Resolver](api/nci_resolver.md)
+- [CAS Common Chemistry](api/cascommonchem.md)
+- [ChEBI](api/chebi.md)
+- [ClassyFire](api/classyfire.md)
+- [OPSIN](api/opsin.md)
+- [ChEMBL](api/chembl.md)

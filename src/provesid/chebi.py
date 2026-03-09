@@ -230,6 +230,24 @@ class ChEBI:
             self.logger.warning(f"Failed to get compound {chebi_id_str}: {e}")
             return None
 
+    def get_complete_entity(
+        self,
+        chebi_id: Union[int, str],
+        *,
+        only_ontology_parents: bool = False,
+        only_ontology_children: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Backward-compatible alias for :meth:`get_compound`.
+
+        Older examples and user code refer to ``get_complete_entity``. The
+        ChEBI 2.0 client uses ``get_compound`` as the canonical method name.
+        """
+        return self.get_compound(
+            chebi_id,
+            only_ontology_parents=only_ontology_parents,
+            only_ontology_children=only_ontology_children,
+        )
+
     def get_compounds(self, chebi_ids: List[Union[int, str]]) -> Optional[Any]:
         """
         Retrieve information about one or more compounds in a single call.
@@ -252,6 +270,30 @@ class ChEBI:
         except ChEBIError as e:
             self.logger.warning(f"Failed to get compounds: {e}")
             return None
+
+    def batch_get_entities(
+        self,
+        chebi_ids: List[Union[int, str]],
+        pause_time: float = 0.0,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Backward-compatible batch helper for tutorial workflows.
+
+        Args:
+            chebi_ids: List of ChEBI IDs (with or without CHEBI: prefix).
+            pause_time: Optional sleep time between requests in seconds.
+
+        Returns:
+            Mapping of canonical ``CHEBI:<id>`` string to compound payload.
+        """
+        results: Dict[str, Dict[str, Any]] = {}
+        for chebi_id in chebi_ids:
+            canonical_id = self._format_chebi_id(chebi_id)
+            entity = self.get_compound(chebi_id)
+            if entity:
+                results[canonical_id] = entity
+            if pause_time > 0:
+                time.sleep(pause_time)
+        return results
 
     # ------------------------------------------------------------------
     # Search

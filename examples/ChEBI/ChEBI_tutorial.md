@@ -160,7 +160,7 @@ ChEBI provides powerful search capabilities to find compounds by name, synonym, 
 
 ```{code-cell} ipython3
 # Search for compounds containing "ethanol" - Note: API may have issues
-ethanol_results = chebi.search_by_name("ethanol", max_results=10)
+ethanol_results = chebi.search_by_name("ethanol", size=10)
 print(f"Found {len(ethanol_results)} results for 'ethanol':")
 
 if ethanol_results:
@@ -179,7 +179,7 @@ else:
 
 ```{code-cell} ipython3
 # Search for vitamin compounds - Note: API may have issues
-vitamin_results = chebi.search_by_name("vitamin", max_results=8)
+vitamin_results = chebi.search_by_name("vitamin", size=8)
 print(f"Found {len(vitamin_results)} results for 'vitamin':")
 
 if vitamin_results:
@@ -199,24 +199,21 @@ else:
 ChEBI can provide chemical structures in various formats:
 
 ```{code-cell} ipython3
-# Get different structure formats for ethanol (ChEBI:16236)
+# Get structure-related fields for ethanol (ChEBI:16236)
 ethanol_id = 16236
 
 print("Ethanol structure in different formats:")
 
-# Get SMILES
-smiles = chebi.get_structure(ethanol_id, "smiles")
-print(f"  SMILES: {smiles}")
+ethanol = chebi.get_complete_entity(ethanol_id)
+if ethanol:
+    print(f"  SMILES: {ethanol.get('smiles')}")
+    print(f"  InChI: {ethanol.get('inchi')}")
 
-# Get InChI
-inchi = chebi.get_structure(ethanol_id, "inchi")
-print(f"  InChI: {inchi}")
-
-# Get MOL format (first few lines)
-mol_structure = chebi.get_structure(ethanol_id, "mol")
+# Retrieve MOL file content from dedicated endpoint
+mol_structure = chebi.get_molfile(ethanol_id)
 if mol_structure:
     mol_lines = mol_structure.split('\n')[:5]
-    print(f"  MOL format (first 5 lines):")
+    print("  MOL format (first 5 lines):")
     for line in mol_lines:
         print(f"    {line}")
 ```
@@ -229,15 +226,30 @@ ChEBI organizes compounds in an ontological hierarchy. You can explore parent-ch
 # Get ontology parents for ethanol
 ethanol_parents = chebi.get_ontology_parents(16236)
 print("Ethanol ontology parents:")
-for parent in ethanol_parents[:5]:
+
+parent_items = ethanol_parents if isinstance(ethanol_parents, list) else []
+if isinstance(ethanol_parents, dict):
+    for key in ("items", "results", "data"):
+        if isinstance(ethanol_parents.get(key), list):
+            parent_items = ethanol_parents[key]
+            break
+
+for parent in parent_items[:5]:
     print(f"  • {parent.get('chebiId')}: {parent.get('chebiName')} ({parent.get('type')})")
 ```
 
 ```{code-cell} ipython3
 # Get ontology children for alcohols (ChEBI:30879)
 alcohol_children = chebi.get_ontology_children(30879)
-print(f"Found {len(alcohol_children)} children for 'alcohol' (first 5):")
-for child in alcohol_children[:5]:
+child_items = alcohol_children if isinstance(alcohol_children, list) else []
+if isinstance(alcohol_children, dict):
+    for key in ("items", "results", "data"):
+        if isinstance(alcohol_children.get(key), list):
+            child_items = alcohol_children[key]
+            break
+
+print(f"Found {len(child_items)} children for 'alcohol' (first 5):")
+for child in child_items[:5]:
     print(f"  • {child.get('chebiId')}: {child.get('chebiName')} ({child.get('type')})")
 ```
 
@@ -302,7 +314,8 @@ Let's explore the comprehensive information available for a complex biological m
 ```{code-cell} ipython3
 # Remove the problematic line that tries to access vitamin_c["Formulae"]["data"] directly
 
-# This was causing an error since we should use .get() for safe accessvitamin_c = chebi.get_complete_entity(29073)
+# This was causing an error since we should use .get() for safe access
+vitamin_c = chebi.get_complete_entity(29073)
 
 if vitamin_c:
     print("Vitamin C (CHEBI:29073) - Detailed Information:")
@@ -335,7 +348,7 @@ if vitamin_c:
 ```
 
 ```{code-cell} ipython3
-vitamin_c["Formulae"]["data"]
+print(vitamin_c.get("Formulae", {}).get("data", "N/A"))
 ```
 
 ## 9. Practical Applications
@@ -476,7 +489,7 @@ The `ChEBI` class and convenience functions provide comprehensive access to the 
 1. **`get_complete_entity(chebi_id)`**: Get detailed information for a ChEBI ID
 2. **`get_lite_entity(chebi_id)`**: Get basic information only
 3. **`search_by_name(search_text)`**: Search compounds by name
-4. **`get_structure(chebi_id, format)`**: Get chemical structures (SMILES, InChI, MOL)
+4. **`get_complete_entity(chebi_id)` + `get_molfile(compound_id)`**: Get structure fields and MOL data
 5. **`get_ontology_parents(chebi_id)`**: Get parent entities in ontology
 6. **`get_ontology_children(chebi_id)`**: Get child entities in ontology
 7. **`batch_get_entities(chebi_ids)`**: Process multiple IDs efficiently

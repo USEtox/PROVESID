@@ -236,7 +236,11 @@ for i, compound in enumerate(results, 1):
     print(f"{i}. {compound['pref_name']} ({compound['chembl_id']})")
     props = chembl.get_properties(compound['molregno'])
     if props:
-        print(f"   MW: {props['mw_freebase']:.1f}, LogP: {props['alogp']:.2f}")
+        mw = props.get('mw_freebase')
+        alogp = props.get('alogp')
+        mw_str = f"{mw:.1f}" if isinstance(mw, (int, float)) else "N/A"
+        alogp_str = f"{alogp:.2f}" if isinstance(alogp, (int, float)) else "N/A"
+        print(f"   MW: {mw_str}, LogP: {alogp_str}")
     print()
 ```
 

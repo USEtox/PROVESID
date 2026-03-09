@@ -5,7 +5,7 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-PROVESID is a member of the family of PROVES packages that provides Pythonic access to online services of chemical identifiers and data. The goal is to have a clean interface to the most important online databases with a simple, intuitive (and documented), up-to-date, and extendable interface. We offer interfaces to [PubChem](https://pubchem.ncbi.nlm.nih.gov/), [NCI chemical identifier resolver](https://cactus.nci.nih.gov/chemical/structure), [CAS Common Chemistry](https://commonchemistry.cas.org/), [IUPAC OPSIN](https://www.ebi.ac.uk/opsin/), [ChEBI](https://www.ebi.ac.uk/chebi/beta/), and [ClassyFire](http://classyfire.wishartlab.com/). We highly recommend the new users to jump head-first into [examples folder](./examples/) and get started by playing with the code. We also keep documenting the old and new functionalities [here](https://usetox.github.io/PROVESID/).
+PROVESID is a member of the family of pre**PRO**cessing and **VE**rification of **S**ubstance data `PROVES`. `PROVESID` provides Pythonic access to online services of chemical identifiers and data. The goal is to have a clean interface to the most important online databases with a simple, intuitive (and documented), up-to-date, and extendable interface. We offer interfaces to [PubChem](https://pubchem.ncbi.nlm.nih.gov/), [NCI chemical identifier resolver](https://cactus.nci.nih.gov/chemical/structure), [CAS Common Chemistry](https://commonchemistry.cas.org/), [IUPAC OPSIN](https://www.ebi.ac.uk/opsin/), [ChEBI](https://www.ebi.ac.uk/chebi/beta/), and [ClassyFire](http://classyfire.wishartlab.com/). We highly recommend the new users to jump head-first into [examples folder](./examples/) and get started by playing with the code. We also keep documenting the old and new functionalities [here](https://usetox.github.io/PROVESID/). The package also aims to provide an offline platform when data files are availbale from the mentioned online tools.
 
 # Installation
 
@@ -15,10 +15,22 @@ The package can be installed from PyPi by running
 pip install provesid
 ```
 
-To install the latest development version (for developers and enthusiasts), clone or download this repository, for to the root folder and install it by
+To install the latest development version (for developers and enthusiasts, and also for the latest features), clone or download this repository, for to the root folder and install it by
 
 ```
 pip install -e .
+```
+
+We very strongly recommend using [uv](https://docs.astral.sh/uv/getting-started/installation/). `PROVESID` is has a small Python codebase but its data files, when fully downloaded by the user's request, can occupy more than 30 Gb of disk space! `uv` makes sure that the package is installed only once and linked in other virtual environments. It  barely changes your `pip` workflow, and is much faster -and more pleasant- to use. After installing `uv`, simply type:
+
+```
+uv pip install provesid
+```
+
+or for the development version (recommended for now):
+
+```
+uv pip install git+https://github.com/USEtox/PROVESID
 ```
 
 # Examples
@@ -187,6 +199,6 @@ Several other Python (and other) packages and sample codes are available. We are
 We will provide Python interfaces to more online services. Please [open an issue](https://github.com/USEtox/PROVESID/issues) and let us know what else you would like to have included.  
 
 Add data and tool for [Chebi ontology](https://ftp.ebi.ac.uk/pub/databases/chebi/ontology/) data using [pronto](https://github.com/althonos/pronto)  
-Add an interface to the [ChEMBL standardization pipeline](https://link.springer.com/article/10.1186/s13321-020-00456-1) using its [Python package](https://github.com/chembl/ChEMBL_Structure_Pipeline)  
+Add an interface to the [ChEMBL standardization pipeline](https://link.springer.com/article/10.1186/s13321-020-00456-1) using its [Python package](https://github.com/chembl/ChEMBL_Structure_Pipeline); this feature may be added to `IMPROVES`.  
 
 Add [UniChem](https://www.ebi.ac.uk/unichem/api/docs) API

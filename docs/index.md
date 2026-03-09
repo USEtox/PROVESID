@@ -92,12 +92,12 @@ Comprehensive API documentation is available for all modules:
 
 Explore comprehensive tutorials for each API:
 
-- [PubChem Tutorial](examples/pubchem/pubchem_tutorial.ipynb) - Complete PubChem API guide with enhanced features
-- [CAS Common Chemistry](examples/CCC/CAS_Common_Chemistry_tutorial.ipynb) - Working with CAS Registry data
-- [ChEBI Tutorial](examples/ChEBI/ChEBI_tutorial.ipynb) - Chemical Entities of Biological Interest database
-- [ClassyFire Tutorial](examples/ClassyFire/classyfire_tutorial.ipynb) - Chemical structure classification
-- [OPSIN Tutorial](examples/OPSIN/opsin_tutorial.ipynb) - IUPAC name to structure conversion
-- [Chemical ID Resolver](examples/resolver/chem_id_resolver_tutorial.ipynb) - NCI chemical identifier resolution
+- [PubChem Tutorial](examples/pubchem/pubchem_tutorial.md) - Complete PubChem API guide with enhanced features
+- [CAS Common Chemistry](examples/CCC/CAS_Common_Chemistry_tutorial.md) - Working with CAS Registry data
+- [ChEBI Tutorial](examples/ChEBI/ChEBI_tutorial.md) - Chemical Entities of Biological Interest database
+- [ClassyFire Tutorial](examples/ClassyFire/classyfire_tutorial.md) - Chemical structure classification
+- [OPSIN Tutorial](examples/OPSIN/opsin_tutorial.md) - IUPAC name to structure conversion
+- [Chemical ID Resolver](examples/resolver/chem_id_resolver_tutorial.md) - NCI chemical identifier resolution
 
 ## Development
 

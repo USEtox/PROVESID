@@ -89,6 +89,8 @@ compound = pc.get_compound_by_cid(cid)
 - Support for "log Kow = 1.19" format
 - Comprehensive solubility pattern matching
 - Improved vapor pressure extraction
+
+```python
     smiles = structure['smiles']
     
     # 2. Get detailed properties

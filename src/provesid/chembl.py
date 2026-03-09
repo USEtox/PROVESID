@@ -369,7 +369,7 @@ class CheMBL:
         >>> results = chembl.search_by_name('aspirin')
         >>> print(len(results))
         1
-        >>> print(results[0]['chembl_id'])
+        >>> print(results[0].get("chembl_id"))
         'CHEMBL25'
         """
         try:
@@ -533,7 +533,7 @@ class CheMBL:
         'ASPIRIN'
         >>> print(compound['canonical_smiles'])
         'CC(=O)Oc1ccccc1C(=O)O'
-        >>> print(compound['synonyms'][:3])
+        >>> print(compound.get("synonyms", [])[:3])
         ['Acetylsalicylic acid', 'Aspirin', '2-Acetoxybenzoic acid']
         """
         try:

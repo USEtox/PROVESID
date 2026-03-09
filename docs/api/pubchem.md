@@ -150,4 +150,4 @@ except PubChemError as e:
 
 ## Tutorial
 
-For a comprehensive tutorial with examples, see: [PubChem Tutorial](../examples/pubchem/pubchem_tutorial.ipynb)
+For a comprehensive tutorial with examples, see: [PubChem Tutorial](../examples/pubchem/pubchem_tutorial.md)

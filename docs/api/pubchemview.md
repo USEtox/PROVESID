@@ -274,4 +274,4 @@ def cached_property_extraction(cid, property_type, cache_dir='cache'):
 ## See Also
 
 - [PubChem API](pubchem.md) - For computed compound properties
-- [PubChem Tutorial](../examples/pubchem/pubchem_tutorial.ipynb) - Complete tutorial with detailed examples
+- [PubChem Tutorial](../examples/pubchem/pubchem_tutorial.md) - Complete tutorial with detailed examples

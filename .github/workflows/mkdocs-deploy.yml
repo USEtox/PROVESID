@@ -65,6 +65,7 @@ jobs:
           mkdocs build --clean --strict
         env:
           SITE_URL: ${{ steps.pages.outputs.origin }}${{ steps.pages.outputs.base_path }}/
+          PROVESID_DOCS_EXECUTE: "true"
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

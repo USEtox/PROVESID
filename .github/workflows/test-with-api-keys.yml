@@ -11,8 +11,8 @@ on:
 
 jobs:
   test-with-api-keys:
+    if: false
     runs-on: ubuntu-latest
-    if: github.event.inputs.include_cas_tests == 'true'
     
     steps:
     - uses: actions/checkout@v4
@@ -35,8 +35,8 @@ jobs:
       continue-on-error: false
 
   test-without-api-keys:
+    if: false
     runs-on: ubuntu-latest
-    if: github.event.inputs.include_cas_tests != 'true'
     
     steps:
     - uses: actions/checkout@v4

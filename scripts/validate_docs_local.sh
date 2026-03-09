@@ -4,7 +4,7 @@ set -euo pipefail
 # Local documentation validation helper:
 # 1) strict MkDocs build (non-executed)
 # 2) MyST tutorial round-trip conversion to .ipynb
-# Optional: execute round-tripped notebooks with nbclient (--execute)
+# Optional: strict MkDocs build with notebook execution enabled (--execute)
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
@@ -28,8 +28,8 @@ TUTORIAL_FILES=(
   "docs/examples/zeropm/zeropm-example.md"
 )
 
-echo "[1/3] Running strict docs build"
-uv run --extra docs mkdocs build --strict
+echo "[1/3] Running strict docs build (non-executed)"
+PROVESID_DOCS_EXECUTE=false uv run --extra docs mkdocs build --strict
 
 mkdir -p /tmp/provesid-docs-validate
 
@@ -41,36 +41,24 @@ for tutorial in "${TUTORIAL_FILES[@]}"; do
 done
 
 if [[ "$EXECUTE_NOTEBOOKS" -eq 1 ]]; then
-  echo "[3/3] Executing round-tripped notebooks with nbclient"
-  uv run --with nbclient --with nbformat python - <<'PY'
-from pathlib import Path
-import os
-import nbformat
-from nbclient import NotebookClient
+  echo "[3/3] Running strict docs build with notebook execution enabled"
+  PROVESID_DOCS_EXECUTE=true uv run --extra docs mkdocs build --strict
 
-tmp_dir = Path("/tmp/provesid-docs-validate")
-cas_key_available = bool(os.getenv("CCC_API_KEY") or os.getenv("CAS_API_KEY"))
-failures = []
+  echo "      Verifying rendered pages contain notebook output blocks"
+  for page in \
+    "site/quickstart/index.html" \
+    "site/examples/pubchem/pubchem_tutorial/index.html" \
+    "site/examples/chembl/chembl_tutorial/index.html"; do
+    if [[ ! -f "$page" ]]; then
+      echo "Missing built page: $page"
+      exit 1
+    fi
 
-for nb_path in sorted(tmp_dir.glob("*.ipynb")):
-  if nb_path.name == "CAS_Common_Chemistry_tutorial.ipynb" and not cas_key_available:
-    print(f"  - skipping {nb_path} (CCC_API_KEY/CAS_API_KEY not set)")
-    continue
-
-  print(f"  - executing {nb_path}")
-  nb = nbformat.read(nb_path, as_version=4)
-  client = NotebookClient(nb, timeout=600, kernel_name="python3", allow_errors=False)
-  try:
-    client.execute()
-  except Exception as exc:
-    failures.append((str(nb_path), str(exc)))
-
-if failures:
-  print("Execution failures detected:")
-  for path, err in failures:
-    print(f"  - {path}: {err}")
-  raise SystemExit(1)
-PY
+    if ! grep -q "jp-OutputArea" "$page"; then
+      echo "Expected executed output block not found in: $page"
+      exit 1
+    fi
+  done
 else
   echo "[3/3] Skipping execution. Re-run with --execute to run code cells locally."
 fi

@@ -94,7 +94,7 @@ markdown_extensions:
 plugins:
   - search
   - mkdocs-jupyter:
-      execute: false
+      execute: !ENV [PROVESID_DOCS_EXECUTE, false]
       allow_errors: false
       include_source: true
       ignore_h1_titles: true

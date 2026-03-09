@@ -84,7 +84,7 @@ One of the main use cases for me was to look up a compound by its CAS number and
 +++
 
 # Synonyms and specific IDs
-After finding the `cid` using "one" identifier, we can obtain a list of synonyms (e.g. chemical name, CAS number, etc.) and also extract certain identifiers from the list: 
+After finding the `cid` using "one" identifier, we can obtain a list of synonyms (e.g. chemical name, CAS number, etc.) and also extract certain identifiers from the list:
 
 ```{code-cell} ipython3
 synonyms = pc.get_compound_synonyms(cids_aspirin[0])
@@ -94,7 +94,7 @@ print(ids)
 ```
 
 # Compound property
-After obtaining the `cid` of a compound, we can obtain [compound properties](https://pubchem.ncbi.nlm.nih.gov/docs/pug-rest#section=Compound-Property-Tables) by calling one of the following functions, that can give basic, selected, or all available properties.  
+After obtaining the `cid` of a compound, we can obtain [compound properties](https://pubchem.ncbi.nlm.nih.gov/docs/pug-rest#section=Compound-Property-Tables) by calling one of the following functions, that can give basic, selected, or all available properties.
 
 ```{code-cell} ipython3
 res_basic = pc.get_basic_compound_info(cids_aspirin[0])
@@ -117,7 +117,7 @@ print(json.dumps(res_all, indent=2))
 ```
 
 # Substance properties
-The substance properties can be found by providing a `sid` to the 
+The substance properties can be found by providing a `sid` to the
 
 ```{code-cell} ipython3
 sids = pc.get_sids_by_name("garlic oil")

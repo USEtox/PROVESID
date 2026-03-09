@@ -22,9 +22,51 @@ This tutorial demonstrates how to use the `CASCommonChem` class from the `proves
 First, import the class and create an instance:
 
 ```{code-cell} ipython3
+import os
 from provesid import CASCommonChem
-ccc = CASCommonChem()
-print("CASCommonChem initialized successfully!")
+
+
+class _CASDemoStub:
+    """Fallback object used when a CAS API key is not available."""
+
+    def __init__(self):
+        self.base_url = "https://commonchemistry.cas.org/api"
+
+    def _result(self, query):
+        return {
+            "status": "Success",
+            "rn": str(query),
+            "name": f"Demo result for {query}",
+            "molecularFormula": "N/A",
+            "molecularMass": "N/A",
+            "smile": "N/A",
+            "canonicalSmile": "N/A",
+            "inchi": "N/A",
+            "inchiKey": "N/A",
+            "hasMolfile": False,
+            "images": [],
+            "experimentalProperties": [],
+            "synonyms": ["N/A"],
+            "uri": "N/A",
+        }
+
+    def cas_to_detail(self, cas_rn):
+        return self._result(cas_rn)
+
+    def name_to_detail(self, name):
+        return self._result(name)
+
+    def smiles_to_detail(self, smiles):
+        return self._result(smiles)
+
+
+if os.getenv("CCC_API_KEY") or os.getenv("CAS_API_KEY"):
+    ccc = CASCommonChem()
+    print("CASCommonChem initialized successfully!")
+else:
+    ccc = _CASDemoStub()
+    print("CAS API key not found. Running tutorial in demo mode.")
+
 print(f"Base URL: {ccc.base_url}")
 ```
 

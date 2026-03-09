@@ -11,7 +11,7 @@ jupytext:
 
 On first initialization, an index will be built (takes ~15 seconds). Subsequent loads use the cached index.
 
-```{code-cell}
+```{code-cell} ipython3
 from provesid.chebi import ChebiSDF
 
 # Initialize (will use cached index if available)
@@ -27,7 +27,7 @@ for key, value in stats.items():
 
 ## 2. Query by ChEBI ID
 
-```{code-cell}
+```{code-cell} ipython3
 # Get water (CHEBI:15377)
 water = chebi_sdf.get_compound_by_id("CHEBI:15377")
 
@@ -43,7 +43,7 @@ print(f"Star Rating: {water.get('STAR', 'N/A')}")
 
 ## 3. Search by Name
 
-```{code-cell}
+```{code-cell} ipython3
 # Exact name search
 results = chebi_sdf.search_by_name("glucose", exact=True)
 print(f"Found {len(results)} compound(s) with exact name 'glucose'")
@@ -61,7 +61,7 @@ for result in results[:5]:
 
 ## 4. Search by CAS Number
 
-```{code-cell}
+```{code-cell} ipython3
 # Search for aspirin (CAS: 50-78-2)
 results = chebi_sdf.search_by_cas("50-78-2")
 
@@ -79,7 +79,7 @@ if results:
 
 ## 5. Search by Structure Identifiers
 
-```{code-cell}
+```{code-cell} ipython3
 # Search by InChIKey (water)
 inchikey = "XLYOFNOQVPJJNP-UHFFFAOYSA-N"
 result = chebi_sdf.search_by_inchikey(inchikey)
@@ -96,7 +96,7 @@ for r in results[:3]:
 
 ## 6. Search by Synonym
 
-```{code-cell}
+```{code-cell} ipython3
 # Search for compounds with "acetylsalicylic acid" as a synonym
 results = chebi_sdf.search_by_synonym("acetylsalicylic acid", exact=False)
 
@@ -109,7 +109,7 @@ for result in results:
 
 ## 7. Batch Operations and DataFrame Export
 
-```{code-cell}
+```{code-cell} ipython3
 # Get multiple compounds at once
 chebi_ids = ["CHEBI:15377", "CHEBI:16236", "CHEBI:17234"]  # water, ethanol, glucose
 
@@ -124,7 +124,7 @@ print(df[['ChEBI ID', 'ChEBI NAME', 'FORMULA', 'MASS', 'STAR']])
 
 ChEBI assigns star ratings (1-3) to compounds, where 3 stars indicates the highest quality/completeness.
 
-```{code-cell}
+```{code-cell} ipython3
 # Note: This will take a few minutes as it scans all compounds
 # Uncomment to run:
 
@@ -138,7 +138,7 @@ ChEBI assigns star ratings (1-3) to compounds, where 3 stars indicates the highe
 
 ## 9. Accessing External Database Links
 
-```{code-cell}
+```{code-cell} ipython3
 # Get water and show all available database links
 water = chebi_sdf.get_compound_by_id("CHEBI:15377")
 

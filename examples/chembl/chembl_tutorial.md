@@ -27,7 +27,7 @@ ChEMBL is a manually curated database of bioactive molecules with drug-like prop
 
 First, import the ChEMBL class. On first run, the database will be automatically downloaded (~5GB compressed, ~29GB uncompressed).
 
-```{code-cell}
+```{code-cell} ipython3
 from provesid import CheMBL
 
 # Initialize ChEMBL (auto-downloads database if needed)
@@ -39,7 +39,7 @@ print("ChEMBL database loaded successfully!")
 
 The most direct way to retrieve a compound is by its ChEMBL ID.
 
-```{code-cell}
+```{code-cell} ipython3
 # Search for aspirin (CHEMBL25)
 aspirin = chembl.search_by_chembl_id('CHEMBL25')
 
@@ -58,7 +58,7 @@ for syn in aspirin['synonyms'][:5]:  # Show first 5 synonyms
 
 Search for compounds by name (partial matching supported).
 
-```{code-cell}
+```{code-cell} ipython3
 # Search for caffeine
 results = chembl.search_by_name('caffeine')
 
@@ -75,7 +75,7 @@ for compound in results[:3]:  # Show first 3 results
 
 Search using InChI, InChI Key, or SMILES.
 
-```{code-cell}
+```{code-cell} ipython3
 # Search by SMILES (aspirin)
 smiles = 'CC(=O)Oc1ccccc1C(=O)O'
 compound = chembl.search_by_smiles(smiles)
@@ -86,7 +86,7 @@ else:
     print("Compound not found")
 ```
 
-```{code-cell}
+```{code-cell} ipython3
 # Search by InChI Key (aspirin)
 inchikey = 'BSYNRYMUTXBXSQ-UHFFFAOYSA-N'
 compound = chembl.search_by_inchikey(inchikey)
@@ -98,7 +98,7 @@ else:
     print("Compound not found")
 ```
 
-```{code-cell}
+```{code-cell} ipython3
 # Search by InChI (aspirin)
 inchi = 'InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)'
 compound = chembl.search_by_inchi(inchi)
@@ -113,7 +113,7 @@ else:
 
 Get calculated molecular properties for a compound.
 
-```{code-cell}
+```{code-cell} ipython3
 # Get aspirin's properties
 aspirin = chembl.search_by_chembl_id('CHEMBL25')
 props = chembl.get_properties(aspirin['molregno'])
@@ -135,7 +135,7 @@ if props:
 
 Convert between ChEMBL IDs and internal molregno identifiers.
 
-```{code-cell}
+```{code-cell} ipython3
 # ChEMBL ID to molregno
 chembl_id = 'CHEMBL25'
 molregno = chembl.chembl_id_to_molregno(chembl_id)
@@ -150,7 +150,7 @@ print(f"molregno {molregno} -> {converted_id}")
 
 Let's search for a drug, retrieve its properties, and analyze them.
 
-```{code-cell}
+```{code-cell} ipython3
 # Search for ibuprofen
 results = chembl.search_by_name('ibuprofen')
 
@@ -188,7 +188,7 @@ if results:
 
 Process multiple compounds at once.
 
-```{code-cell}
+```{code-cell} ipython3
 import pandas as pd
 
 # List of common drugs by ChEMBL ID
@@ -226,7 +226,7 @@ print(df.to_string(index=False))
 
 Compounds can have multiple names and synonyms.
 
-```{code-cell}
+```{code-cell} ipython3
 # Search for compounds with 'acetyl' in the name
 results = chembl.search_by_name('acetyl', limit=5)
 

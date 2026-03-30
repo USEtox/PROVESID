@@ -222,3 +222,6 @@ src/provesid/data/PubChem_CAS_*.csv
 src/provesid/data/recreate_tables.sql
 src/provesid/data/chembl_36.db
 src/provesid/data/comptox_chemicals.db
+
+# identifier files
+*Zone.Identifier

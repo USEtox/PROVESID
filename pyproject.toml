@@ -133,4 +133,5 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = [
     "ipython>=8.12.3",
+    "marimo[recommended]>=0.8.22",
 ]

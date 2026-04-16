@@ -3,7 +3,7 @@ name = "provesid"
 version = "0.2.0"
 description = "A Python package for chemical identifier resolution and experimental property extraction"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 license = {text = "MIT"}
 authors = [
     {name = "Ali A. Eftekhari and USEtox team", email = "e.eftekhari@gmail.com"},
@@ -30,6 +30,7 @@ dependencies = [
     "rapidfuzz>=3.0.0",
     "py2opsin>=1.1.0",
     "chembl-structure-pipeline>=1.2.4",
+    "polars>=1.39.3",
 ]
 
 [project.urls]
@@ -132,6 +133,7 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
-    "ipython>=8.12.3",
-    "marimo[recommended]>=0.8.22",
+    "ipython",
+    "marimo[recommended]>=0.23.1",
+    "pytest>=9.0.2",
 ]

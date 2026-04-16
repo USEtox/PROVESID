@@ -52,3 +52,4 @@ from .resolver import (
 from .utils import check_CASRN
 from .zeropm import ZeroPM
 from .reach import REACHDossierID
+from .search import Search, normalize_structure, strip_salts, OUTPUT_COLUMNS

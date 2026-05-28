@@ -35,13 +35,20 @@ chebi_sdf = ChebiSDF()  # auto_download=True by default
 If you prefer to download manually:
 
 1. Download from: https://ftp.ebi.ac.uk/pub/databases/chebi/SDF/chebi.sdf.gz
-2. Extract and place in: `src/provesid/data/chebi.sdf`
+2. Extract and place in your PROVESID dataset directory (default: platformdirs
+  per-user data folder, or `PROVESID_DATA_DIR` if set)
 
 Or use the download method:
 
 ```python
 chebi_sdf = ChebiSDF(auto_download=False)
 chebi_sdf.download_sdf()  # Downloads and extracts automatically
+```
+
+You can override the default location explicitly:
+
+```python
+chebi_sdf = ChebiSDF(data_dir="/path/to/shared/provesid-data")
 ```
 
 The file contains ~190,807 compounds. On first use, an index will be built (~15 seconds) and cached for faster subsequent loads.

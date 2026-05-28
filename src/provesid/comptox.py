@@ -37,7 +37,7 @@ import logging
 from typing import Dict, List, Optional, Any, Union
 import requests
 from tqdm import tqdm
-from .utils import data_path
+from .utils import user_dataset_path
 
 
 class CompToxID:
@@ -59,17 +59,24 @@ class CompToxID:
         db_path: Optional[str] = None,
         auto_download: bool = True,
         db_url: Optional[str] = None,
+        data_dir: Optional[str] = None,
+        redownload: bool = False,
     ):
         """
         Initialize CompToxID database connection.
 
         Args:
             db_path (str, optional): Path to SQLite database. If None, uses default
-                                    location in data directory.
+                                    location in the persistent user dataset directory.
             auto_download (bool, optional): If True, automatically download the
                 database when missing (default: True).
             db_url (str, optional): Custom URL for database download. If None,
                 uses the default Zenodo URL.
+            data_dir (str, optional): Directory to store the database when
+                ``db_path`` is not provided. If None, uses platformdirs-based
+                user data directory.
+            redownload (bool, optional): If True, force a fresh download when
+                ``auto_download`` is enabled.
 
         Raises:
             FileNotFoundError: If database file doesn't exist and auto_download is False.
@@ -77,15 +84,23 @@ class CompToxID:
         self.logger = logging.getLogger(__name__)
 
         if db_path is None:
-            db_path = os.path.join(data_path(), self.DEFAULT_DB_NAME)
+            base_dir = data_dir or user_dataset_path()
+            db_path = os.path.join(base_dir, self.DEFAULT_DB_NAME)
 
-        self.db_path = db_path
+        self.db_path = os.path.abspath(os.path.expanduser(db_path))
         self.db_url = db_url or self.DEFAULT_DB_URL
 
+        needs_download = redownload or not os.path.exists(self.db_path)
+
         # Check if database exists
-        if not os.path.exists(db_path):
+        if needs_download:
             if auto_download:
-                self.logger.warning(f"CompTox database not found at: {db_path}")
+                if redownload and os.path.exists(self.db_path):
+                    self.logger.warning(
+                        "Forced CompTox redownload requested for: %s", self.db_path
+                    )
+                else:
+                    self.logger.warning(f"CompTox database not found at: {self.db_path}")
                 self.logger.warning(
                     "The CompTox database is large (~856 MB). "
                     "Initial setup may take several minutes depending on your connection."
@@ -93,17 +108,17 @@ class CompToxID:
                 self.logger.warning(
                     f"Downloading CompTox database from: {self.db_url}"
                 )
-                self.download_database(url=self.db_url, force=False)
+                self.download_database(url=self.db_url, force=redownload)
             else:
                 raise FileNotFoundError(
-                    f"CompTox database not found at: {db_path}\n"
+                    f"CompTox database not found at: {self.db_path}\n"
                     "Database size: ~856 MB\n"
                     f"Run CompToxID.download_database() or set auto_download=True\n"
                     f"Download URL: {self.db_url}"
                 )
 
         # Connect to database
-        self.conn = sqlite3.connect(db_path)
+        self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row  # Access columns by name
 
         # Verify the database has the expected table

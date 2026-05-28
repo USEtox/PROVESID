@@ -12,6 +12,7 @@ from functools import lru_cache
 from typing import Dict, List, Union, Optional, Any
 from urllib.parse import quote
 from .cache import cached
+from .utils import user_dataset_path
 
 pugrest_prolog = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
 pause_between_calls = 0.2 # seconds
@@ -1537,39 +1538,69 @@ class PubChemID:
         >>> results = db.batch_cas_to_cid(["50-78-2", "50-00-0"])
     """
     
-    def __init__(self, db_path: Optional[str] = None, auto_download: bool = True):
+    DEFAULT_DB_NAME = "pubchem_id.db"
+    DEFAULT_DB_URL = "https://zenodo.org/records/18173204/files/pubchem_id.db"
+
+    def __init__(
+        self,
+        db_path: Optional[str] = None,
+        auto_download: bool = True,
+        data_dir: Optional[str] = None,
+        db_url: Optional[str] = None,
+        redownload: bool = False,
+    ):
         """
         Initialize PubChemID database connection.
         
         Args:
             db_path (str, optional): Path to SQLite database. If None, uses default
-                                    location in data directory.
+                                    location in the persistent user dataset directory.
             auto_download (bool): If True, automatically download database if not found.
                                  Default is True.
+            data_dir (str, optional): Directory to store the database when
+                ``db_path`` is not provided.
+            db_url (str, optional): Download URL for the database. If None,
+                uses the package default URL.
+            redownload (bool): If True, force re-download when
+                ``auto_download`` is enabled.
         
         Raises:
             FileNotFoundError: If database file doesn't exist and auto_download is False
         """
         import sqlite3
-        from .utils import data_path
+
+        self.logger = logging.getLogger(__name__)
+        self.db_url = db_url or self.DEFAULT_DB_URL
         
         if db_path is None:
-            db_path = os.path.join(data_path(), 'pubchem_id.db')
+            base_dir = data_dir or user_dataset_path()
+            db_path = os.path.join(base_dir, self.DEFAULT_DB_NAME)
         
-        self.db_path = db_path
-        
-        if not os.path.exists(db_path):
+        self.db_path = os.path.abspath(os.path.expanduser(db_path))
+
+        needs_download = redownload or not os.path.exists(self.db_path)
+
+        if needs_download:
             if auto_download:
-                print(f"Database not found at {db_path}")
-                print("Attempting to download from Zenodo...")
-                self.download_database()
+                if redownload and os.path.exists(self.db_path):
+                    self.logger.info(
+                        "Forced PubChemID redownload requested for: %s", self.db_path
+                    )
+                else:
+                    self.logger.info("Database not found at %s", self.db_path)
+                self.logger.info("Attempting to download from configured source...")
+                self.download_database(
+                    db_path=self.db_path,
+                    zenodo_url=self.db_url,
+                    force=redownload,
+                )
             else:
                 raise FileNotFoundError(
-                    f"PubChem ID database not found at {db_path}. "
-                    "Set auto_download=True or run scripts/build_pubchem_id_db.py to create it."
+                    f"PubChem ID database not found at {self.db_path}. "
+                    "Set auto_download=True or run PubChemID.download_database()."
                 )
         
-        self.conn = sqlite3.connect(db_path)
+        self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row  # Access columns by name
     
     def __del__(self):
@@ -1578,15 +1609,20 @@ class PubChemID:
             self.conn.close()
     
     @staticmethod
-    def download_database(db_path: Optional[str] = None, zenodo_url: Optional[str] = None) -> str:
+    def download_database(
+        db_path: Optional[str] = None,
+        zenodo_url: Optional[str] = None,
+        force: bool = False,
+    ) -> str:
         """
         Download PubChem ID database from Zenodo.
         
         Args:
             db_path (str, optional): Path where to save the database. If None, uses default
-                                    location in data directory.
+                                    location in the persistent user dataset directory.
             zenodo_url (str, optional): URL to download from. If None, uses default Zenodo URL.
                                        Format: https://zenodo.org/record/XXXXXX/files/pubchem_id.db
+            force (bool): If True, overwrite an existing local database file.
         
         Returns:
             str: Path to the downloaded database file
@@ -1604,19 +1640,31 @@ class PubChemID:
             The database file is ~2.2 GB, so download may take several minutes.
         """
         import requests
-        from .utils import data_path
         from tqdm import tqdm
+
+        logger = logging.getLogger(__name__)
         
         if db_path is None:
-            db_path = os.path.join(data_path(), 'pubchem_id.db')
+            db_path = os.path.join(
+                user_dataset_path(),
+                PubChemID.DEFAULT_DB_NAME,
+            )
+        else:
+            db_path = os.path.abspath(os.path.expanduser(db_path))
+
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+
+        if os.path.exists(db_path) and not force:
+            raise FileExistsError(
+                f"Database already exists at: {db_path}. Use force=True to overwrite."
+            )
         
         if zenodo_url is None:
-            zenodo_url = "https://zenodo.org/records/18173204/files/pubchem_id.db"
+            zenodo_url = PubChemID.DEFAULT_DB_URL
         
-        print(f"Downloading PubChem ID database from Zenodo...")
-        print(f"URL: {zenodo_url}")
-        print(f"Destination: {db_path}")
-        print("This is a large file (~2.2 GB), please be patient...")
+        logger.info("Downloading PubChem ID database from: %s", zenodo_url)
+        logger.info("Destination: %s", db_path)
+        logger.info("This is a large file (~2.2 GB), please be patient.")
         
         # Create temporary file path
         temp_path = db_path + '.tmp'
@@ -1635,7 +1683,7 @@ class PubChemID:
                             f.write(chunk)
                             pbar.update(len(chunk))
             
-            print("Download complete. Verifying...")
+            logger.info("Download complete. Verifying...")
             
             # Verify it's a valid SQLite database
             import sqlite3
@@ -1645,7 +1693,7 @@ class PubChemID:
                 cursor.execute("SELECT COUNT(*) FROM compounds")
                 count = cursor.fetchone()[0]
                 conn.close()
-                print(f"✓ Database verified: {count:,} compounds")
+                logger.info("Database verified: %s compounds", f"{count:,}")
             except Exception as e:
                 raise RuntimeError(f"Downloaded file is not a valid database: {e}")
             
@@ -1654,7 +1702,7 @@ class PubChemID:
                 os.remove(db_path)
             os.rename(temp_path, db_path)
             
-            print(f"✓ Database ready at {db_path}")
+            logger.info("Database ready at %s", db_path)
             return db_path
             
         except requests.exceptions.RequestException as e:

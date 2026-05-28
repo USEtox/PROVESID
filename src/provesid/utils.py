@@ -1,6 +1,8 @@
 
 import os
 
+from platformdirs import user_data_dir
+
 
 def _has_casrn_format(s: str):
     return len(s.split("-")) == 3 and all([i.isdigit() for i in s.split("-")])
@@ -35,3 +37,32 @@ def data_path():
     Get the path to the data directory
     """
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
+
+def user_dataset_path(*parts: str, ensure_exists: bool = True) -> str:
+    """Return the OS-specific persistent dataset directory for PROVESID.
+
+    The default root comes from :mod:`platformdirs` and resolves to a
+    per-user data directory that is shared across virtual environments
+    on the same machine.
+
+    Power users can override the root directory by setting
+    ``PROVESID_DATA_DIR``.
+
+    Args:
+        *parts: Optional subdirectories appended to the root directory.
+        ensure_exists: When True (default), create the directory.
+
+    Returns:
+        Absolute path to the requested dataset directory.
+    """
+    override = os.environ.get("PROVESID_DATA_DIR")
+    if override:
+        root = os.path.abspath(os.path.expanduser(os.path.expandvars(override)))
+    else:
+        root = user_data_dir(appname="provesid", appauthor="USEtox")
+
+    target = os.path.join(root, *parts) if parts else root
+    if ensure_exists:
+        os.makedirs(target, exist_ok=True)
+    return target

@@ -340,11 +340,19 @@ def _compute_consensus(candidates: Dict[str, Optional[Dict[str, Any]]]) -> Tuple
         support[source] = sum(sims) / len(sims)
 
     priority = ["chebi", "comptox", "pubchem", "zeropm", "chembl"]
-    consensus_source = sorted(
-        support.keys(),
-        key=lambda src: (support[src], -priority.index(src) if src in priority else -99),
-        reverse=True,
-    )[0]
+    # Among sources within _PRIORITY_TOLERANCE of the top support score, prefer
+    # by reputation (priority list).  This prevents a source missing structural
+    # fields (e.g. no SMILES) from artificially inflating its support score
+    # and winning over a more reputable source with essentially the same agreement.
+    _PRIORITY_TOLERANCE = 0.05
+    max_support = max(support.values())
+    top_sources = [
+        src for src in support if max_support - support[src] <= _PRIORITY_TOLERANCE
+    ]
+    top_sources.sort(
+        key=lambda src: priority.index(src) if src in priority else len(priority)
+    )
+    consensus_source = top_sources[0]
 
     consensus_candidate = valid[consensus_source]
     source_match_scores = {

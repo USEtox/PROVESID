@@ -26,7 +26,7 @@ import logging
 from typing import Optional, Dict, List, Any
 import requests
 from tqdm import tqdm
-from .utils import data_path
+from .utils import user_dataset_path
 
 
 class ChEMBLError(Exception):
@@ -80,7 +80,15 @@ class CheMBL:
     
     DEFAULT_DB_URL = "https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/chembl_36_sqlite.tar.gz"
     
-    def __init__(self, db_name: str = 'chembl_36.db', auto_download: bool = True, db_url: Optional[str] = None):
+    def __init__(
+        self,
+        db_name: str = 'chembl_36.db',
+        auto_download: bool = True,
+        db_url: Optional[str] = None,
+        data_dir: Optional[str] = None,
+        db_path: Optional[str] = None,
+        redownload: bool = False,
+    ):
         """
         Initialize ChEMBL database interface.
         
@@ -92,6 +100,12 @@ class CheMBL:
             Auto-download if database missing (default: True)
         db_url : str, optional
             Custom download URL (default: ChEMBL FTP)
+        data_dir : str, optional
+            Directory to store the database when ``db_path`` is not provided.
+        db_path : str, optional
+            Full path to a database file. Overrides ``db_name``/``data_dir``.
+        redownload : bool, optional
+            If True, force re-download when ``auto_download`` is enabled.
         
         Raises
         ------
@@ -100,19 +114,31 @@ class CheMBL:
         ChEMBLError
             If database connection or validation fails
         """
-        self.path = data_path()
-        self.db_path = os.path.join(self.path, db_name)
+        if db_path is None:
+            self.path = data_dir or user_dataset_path()
+            self.db_path = os.path.join(self.path, db_name)
+        else:
+            self.db_path = os.path.abspath(os.path.expanduser(db_path))
+            self.path = os.path.dirname(self.db_path)
+
         self.db_url = db_url or self.DEFAULT_DB_URL
         self.logger = logging.getLogger(__name__)
         
         # Ensure data directory exists
         os.makedirs(self.path, exist_ok=True)
         
+        needs_download = redownload or not os.path.exists(self.db_path)
+
         # Check if database exists
-        if not os.path.exists(self.db_path):
+        if needs_download:
             if auto_download:
-                self.logger.info(f"Database not found at {self.db_path}, downloading...")
-                self.download_database(url=self.db_url, force=False)
+                if redownload and os.path.exists(self.db_path):
+                    self.logger.info(
+                        "Forced ChEMBL redownload requested for: %s", self.db_path
+                    )
+                else:
+                    self.logger.info(f"Database not found at {self.db_path}, downloading...")
+                self.download_database(url=self.db_url, force=redownload)
             else:
                 raise FileNotFoundError(
                     f"ChEMBL database not found at {self.db_path}. "

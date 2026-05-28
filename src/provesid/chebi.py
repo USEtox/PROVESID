@@ -22,7 +22,7 @@ from typing import Dict, List, Optional, Union, Any
 from rdkit import Chem
 import pandas as pd
 from tqdm import tqdm
-from .utils import data_path
+from .utils import user_dataset_path
 
 
 class ChEBIError(Exception):
@@ -875,39 +875,61 @@ class ChebiSDF:
     # Default download URL for ChEBI SDF file
     DEFAULT_SDF_URL = "https://ftp.ebi.ac.uk/pub/databases/chebi/SDF/chebi.sdf.gz"
     
-    def __init__(self, sdf_path: Optional[str] = None, rebuild_index: bool = False, 
-                 auto_download: bool = True, sdf_url: Optional[str] = None):
+    def __init__(
+        self,
+        sdf_path: Optional[str] = None,
+        rebuild_index: bool = False,
+        auto_download: bool = True,
+        sdf_url: Optional[str] = None,
+        data_dir: Optional[str] = None,
+        redownload: bool = False,
+    ):
         """
         Initialize ChebiSDF parser.
         
         Args:
-            sdf_path (str, optional): Path to ChEBI SDF file. If None, uses default location.
+            sdf_path (str, optional): Path to ChEBI SDF file. If None, uses
+                the persistent user dataset directory.
             rebuild_index (bool): If True, rebuild index even if cache exists (default: False)
             auto_download (bool): If True, automatically download SDF file if not found (default: True)
             sdf_url (str, optional): Custom URL to download the SDF from. If None, uses default.
+            data_dir (str, optional): Directory to store the SDF when
+                ``sdf_path`` is not provided.
+            redownload (bool): If True, force re-download when
+                ``auto_download`` is enabled.
         """
         
         if sdf_path is None:
-            data_dir = data_path()
-            sdf_path = os.path.join(data_dir, 'chebi.sdf')
+            base_dir = data_dir or user_dataset_path()
+            sdf_path = os.path.join(base_dir, 'chebi.sdf')
         
-        self.sdf_path = sdf_path
-        self.index_path = sdf_path + '.index.pkl'
+        self.sdf_path = os.path.abspath(os.path.expanduser(sdf_path))
+        self.index_path = self.sdf_path + '.index.pkl'
         self.sdf_url = sdf_url or self.DEFAULT_SDF_URL
         self.logger = logging.getLogger(__name__)
         
+        needs_download = redownload or not os.path.exists(self.sdf_path)
+
         # Check if SDF file exists, download if needed
-        if not os.path.exists(self.sdf_path):
+        if needs_download:
             if auto_download:
-                self.logger.info(f"ChEBI SDF file not found at: {self.sdf_path}")
+                if redownload and os.path.exists(self.sdf_path):
+                    self.logger.info(
+                        "Forced ChEBI SDF redownload requested for: %s", self.sdf_path
+                    )
+                else:
+                    self.logger.info(f"ChEBI SDF file not found at: {self.sdf_path}")
                 self.logger.info("Downloading ChEBI SDF file automatically...")
-                self.download_sdf(url=self.sdf_url, force=False)
+                self.download_sdf(url=self.sdf_url, force=redownload)
             else:
                 raise FileNotFoundError(
                     f"ChEBI SDF file not found at: {self.sdf_path}\n"
                     f"Please run ChebiSDF.download_sdf() or set auto_download=True\n"
                     f"Or download manually from: https://ftp.ebi.ac.uk/pub/databases/chebi/SDF/"
                 )
+
+        if redownload:
+            rebuild_index = True
         
         # Load or build index
         if rebuild_index or not os.path.exists(self.index_path):
@@ -956,6 +978,9 @@ class ChebiSDF:
         self.logger.info(f"Downloading ChEBI SDF from: {download_url}")
         self.logger.info(f"Destination: {self.sdf_path}")
         
+        temp_path = self.sdf_path + '.tmp'
+        gz_path = self.sdf_path + '.gz.tmp'
+
         try:
             # Stream the download with progress bar
             response = requests.get(download_url, stream=True, timeout=60)
@@ -965,7 +990,6 @@ class ChebiSDF:
             total_size = int(response.headers.get('content-length', 0))
             
             # Download gzipped file to temporary location
-            gz_path = self.sdf_path + '.gz.tmp'
             with open(gz_path, 'wb') as f:
                 if total_size > 0:
                     with tqdm(total=total_size, unit='B', unit_scale=True, 
@@ -982,7 +1006,6 @@ class ChebiSDF:
             self.logger.info("Download complete. Extracting gzip archive...")
             
             # Extract gzipped file
-            temp_path = self.sdf_path + '.tmp'
             with gzip.open(gz_path, 'rb') as f_in:
                 with open(temp_path, 'wb') as f_out:
                     # Copy with progress bar

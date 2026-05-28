@@ -382,6 +382,8 @@ class Search:
         inchikey_skeleton: bool = False,
         show_progress: bool = True,
         salt_smarts: Optional[List[str]] = None,
+        data_dir: Optional[Union[str, Path]] = None,
+        redownload: bool = False,
         chebi: Optional[ChebiSDF] = None,
         comptox: Optional[CompToxID] = None,
         pubchem: Optional[PubChemID] = None,
@@ -407,6 +409,10 @@ class Search:
             show_progress: Display a tqdm progress bar during batch queries.
             salt_smarts: Additional SMARTS patterns passed to
                 :func:`strip_salts` when ``strip_salts=True``.
+            data_dir: Optional shared data root used when lazily initialising
+                source clients.
+            redownload: If True, lazily initialised source clients force a
+                fresh dataset download.
             chebi: Pre-initialised :class:`~provesid.ChebiSDF` client.  When
                 ``None`` the client is created lazily on first use.
             comptox: Pre-initialised :class:`~provesid.CompToxID` client.
@@ -431,6 +437,8 @@ class Search:
         self.inchikey_skeleton = inchikey_skeleton
         self.show_progress = show_progress
         self.salt_smarts: List[str] = list(salt_smarts or [])
+        self.data_dir = str(data_dir) if data_dir is not None else None
+        self.redownload = redownload
 
         # Client references — may be None until _ensure_clients() is called.
         self._chebi = chebi
@@ -465,7 +473,11 @@ class Search:
         ]:
             if getattr(self, attr) is None:
                 try:
-                    setattr(self, attr, factory())
+                    setattr(
+                        self,
+                        attr,
+                        factory(data_dir=self.data_dir, redownload=self.redownload),
+                    )
                 except Exception as exc:
                     log.warning("Could not initialise offline source %s: %s", attr[1:], exc)
 
@@ -1503,6 +1515,9 @@ class Search:
         Returns:
             Confidence value in [0, 1].
         """
+        if consensus_score == 0.0:
+            return 0.0
+
         base = _BASE_CONFIDENCE.get(match_method, 0.5)
 
         if match_method == "fuzzy_name":

@@ -179,6 +179,18 @@ zpm = ZeroPM(auto_download=False)  # Skip auto-download
 zpm.download_database()  # Manually trigger download
 ```
 
+Large offline datasets are now stored in a shared per-user data directory
+(platform-specific via `platformdirs`) instead of inside each virtual
+environment. This avoids repeated downloads when you use multiple environments.
+
+Power-user controls:
+
+- Set `PROVESID_DATA_DIR` to override the default dataset directory.
+- Pass `data_dir=...` to `ChebiSDF`, `CheMBL`, `CompToxID`, `PubChemID`,
+  `ZeroPM`, or `Search`.
+- Use `redownload=True` in constructors, or `download_database(..., force=True)` /
+  `download_sdf(..., force=True)` to force a fresh download.
+
 See the [ZeroPM tutorial notebook](./examples/zeropm/zeropm-example.ipynb) for more examples.
 
 **ClassyFire**

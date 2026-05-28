@@ -6,9 +6,10 @@ from rapidfuzz import process, fuzz, utils
 import requests
 from tqdm import tqdm
 import pandas as pd
+from typing import Optional
 
 # Try relative import first, fall back to direct import for testing
-from .utils import data_path as ZeroPM_path
+from .utils import user_dataset_path
 
 
 class ZeroPM:
@@ -23,7 +24,15 @@ class ZeroPM:
     # Default download URL for the ZeroPM database
     DEFAULT_DB_URL = "https://github.com/ZeroPM-H2020/global-chemical-inventory-database/raw/refs/heads/main/zeropm-v0-0-4.sqlite"
     
-    def __init__(self, db_name='zeropm-v0-0-4.sqlite', auto_download=True, db_url=None):
+    def __init__(
+        self,
+        db_name: str = 'zeropm-v0-0-4.sqlite',
+        auto_download: bool = True,
+        db_url: Optional[str] = None,
+        data_dir: Optional[str] = None,
+        db_path: Optional[str] = None,
+        redownload: bool = False,
+    ):
         """
         Initialize connection to the ZeroPM SQLite database.
         
@@ -35,17 +44,36 @@ class ZeroPM:
             If True, automatically download the database if not found (default: True)
         db_url : str, optional
             Custom URL to download the database from. If None, uses the default GitHub URL.
+        data_dir : str, optional
+            Directory to store the database when ``db_path`` is not provided.
+        db_path : str, optional
+            Full path to a database file. Overrides ``db_name``/``data_dir``.
+        redownload : bool, optional
+            If True, force re-download when ``auto_download`` is enabled.
         """
-        self.path = ZeroPM_path()
-        self.db_path = os.path.join(self.path, db_name)
+        self.logger = logging.getLogger(__name__)
+        if db_path is None:
+            self.path = data_dir or user_dataset_path()
+            self.db_path = os.path.join(self.path, db_name)
+        else:
+            self.db_path = os.path.abspath(os.path.expanduser(db_path))
+            self.path = os.path.dirname(self.db_path)
+
         self.db_url = db_url or self.DEFAULT_DB_URL
-        
+
+        needs_download = redownload or not os.path.exists(self.db_path)
+
         # Check if database exists, download if needed
-        if not os.path.exists(self.db_path):
+        if needs_download:
             if auto_download:
-                logging.info(f"Database not found at: {self.db_path}")
-                logging.info("Downloading database automatically...")
-                self.download_database(url=self.db_url, force=False)
+                if redownload and os.path.exists(self.db_path):
+                    self.logger.info(
+                        "Forced ZeroPM redownload requested for: %s", self.db_path
+                    )
+                else:
+                    self.logger.info(f"Database not found at: {self.db_path}")
+                self.logger.info("Downloading database automatically...")
+                self.download_database(url=self.db_url, force=redownload)
             else:
                 raise FileNotFoundError(
                     f"Database not found at: {self.db_path}\n"
@@ -102,11 +130,13 @@ class ZeroPM:
             )
         
         # Create data directory if it doesn't exist
-        os.makedirs(self.path, exist_ok=True)
-        
-        logging.info(f"Downloading ZeroPM database from: {download_url}")
-        logging.info(f"Destination: {self.db_path}")
-        
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+
+        self.logger.info(f"Downloading ZeroPM database from: {download_url}")
+        self.logger.info(f"Destination: {self.db_path}")
+
+        temp_path = self.db_path + '.tmp'
+
         try:
             # Stream the download with progress bar
             response = requests.get(download_url, stream=True, timeout=30)
@@ -116,7 +146,6 @@ class ZeroPM:
             total_size = int(response.headers.get('content-length', 0))
             
             # Download with progress bar
-            temp_path = self.db_path + '.tmp'
             with open(temp_path, 'wb') as f:
                 if total_size > 0:
                     # Show progress bar
@@ -137,7 +166,7 @@ class ZeroPM:
                 os.remove(self.db_path)
             os.rename(temp_path, self.db_path)
             
-            logging.info(f"✓ Database downloaded successfully to: {self.db_path}")
+            self.logger.info(f"✓ Database downloaded successfully to: {self.db_path}")
             
             # Verify the database is valid
             try:
@@ -146,7 +175,7 @@ class ZeroPM:
                 test_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1")
                 test_cursor.fetchone()
                 test_conn.close()
-                logging.info("✓ Database verified successfully")
+                self.logger.info("✓ Database verified successfully")
             except sqlite3.Error as e:
                 os.remove(self.db_path)
                 raise RuntimeError(f"Downloaded database is corrupted: {e}")
@@ -157,7 +186,7 @@ class ZeroPM:
             # Clean up temp file if it exists
             if os.path.exists(temp_path):
                 os.remove(temp_path)
-            logging.error(f"Failed to download database: {e}")
+            self.logger.error(f"Failed to download database: {e}")
             raise
     
     def _get_chemical_names_cache(self):

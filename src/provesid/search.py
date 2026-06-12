@@ -49,6 +49,7 @@ from tqdm import tqdm
 from .chebi import ChebiSDF
 from .chembl import CheMBL
 from .comptox import CompToxID
+from .opsin import PYOPSIN
 from .pubchem import PubChemID
 from .zeropm import ZeroPM
 from .tools import (
@@ -111,6 +112,7 @@ _BASE_CONFIDENCE: Dict[str, float] = {
     "inchi": 0.95,
     "exact_cas": 0.90,
     "dtxsid": 0.90,
+    "opsin": 0.97,
     "exact_name": 0.80,
     "inchikey_skeleton": 0.75,
     "tanimoto": 0.0,   # filled dynamically from Tanimoto score
@@ -144,6 +146,9 @@ OUTPUT_COLUMNS: List[str] = [
     "match_score",
     "consensus_source",
     "source_match_scores",
+    "hit_rank",
+    "n_source_support",
+    "opsin_smiles",
 ]
 
 # Name-normalization: prefixes to strip before fuzzy matching.
@@ -333,6 +338,18 @@ class Search:
     - **Salt/solvent stripping**: RDKit SaltRemover + largest-fragment picker
       (enabled with ``strip_salts=True``); ``parent_smiles`` and
       ``parent_inchikey`` populated in results.
+    - **Candidate pooling + structure clustering**: the top-``k`` candidates from
+      every source are pooled and clustered into distinct compounds by InChIKey
+      (skeleton-aware), so a wrong top hit from one source no longer dominates.
+    - **Query-aware ranking**: clusters are ranked by a confidence that combines
+      the method base, how well each candidate matches the *query itself*
+      (name similarity / Tanimoto), and cross-source support.
+    - **Multi-hit output**: ``n_hits`` returns the best ``N`` (or ``"all"``)
+      distinct compounds per query, ranked with a ``hit_rank`` column.  Default
+      is one row per query.
+    - **PYOPSIN structure anchoring** (opt-in, ``use_opsin=True``): IUPAC names
+      are converted to SMILES offline and used as a high-confidence anchor;
+      requires a Java runtime.
     - **Traceability**: ``source_details`` field records which sources were
       queried, whether they matched, and which output fields they contributed.
 
@@ -346,6 +363,16 @@ class Search:
         show_progress (bool): Display tqdm progress bar during batch queries.
         salt_smarts (list[str]): Additional SMARTS patterns to remove during
             salt stripping.
+        n_hits (int | str): Default hits to return per query (int or ``"all"``).
+        min_confidence (float): Confidence floor applied before truncation.
+        use_opsin (bool): Enable PYOPSIN IUPAC→structure anchoring (needs Java).
+        top_k_per_source (int): Candidates pulled per source before pooling.
+        cluster_by_skeleton (bool): Merge stereo/charge variants when clustering.
+        fuzzy_score_cutoff (float): Fuzzy score cut-off in [0, 100].
+        fuzzy_scorer (str): rapidfuzz scorer name.
+        consensus_compat_threshold (float): Min similarity to merge with anchor.
+        query_weight (float): Weight of query agreement in the confidence score.
+        return_alternatives (bool): Attach runner-up summaries when ``n_hits=1``.
 
     Example::
 
@@ -357,6 +384,13 @@ class Search:
 
         s_fuzzy = Search("name", fuzzy=True)
         df = s_fuzzy.search(["asprin", "paracetamol"])
+
+        # Inspect every plausible interpretation of an ambiguous name
+        df = Search("name").search("xylene", n_hits="all")
+        print(df[["hit_rank", "name", "InChIKey", "confidence"]])
+
+        # Anchor IUPAC names to a real structure via OPSIN (needs Java)
+        df = Search("name", use_opsin=True).search("2-(acetyloxy)benzoic acid")
     """
 
     SUPPORTED_TYPES: frozenset = frozenset(
@@ -372,6 +406,12 @@ class Search:
         "chembl": "ChEMBL",
     }
 
+    # rapidfuzz scorer whitelist (name -> scorer callable resolved lazily).
+    _FUZZY_SCORERS: frozenset = frozenset(
+        ["WRatio", "ratio", "partial_ratio", "token_sort_ratio",
+         "token_set_ratio", "QRatio"]
+    )
+
     def __init__(
         self,
         identifier_type: str = "cas",
@@ -382,6 +422,17 @@ class Search:
         inchikey_skeleton: bool = False,
         show_progress: bool = True,
         salt_smarts: Optional[List[str]] = None,
+        n_hits: Union[int, str] = 1,
+        min_confidence: float = 0.0,
+        use_opsin: bool = False,
+        opsin_jar_fpath: str = "default",
+        top_k_per_source: int = 5,
+        cluster_by_skeleton: bool = True,
+        fuzzy_score_cutoff: float = 80.0,
+        fuzzy_scorer: str = "WRatio",
+        consensus_compat_threshold: float = 0.35,
+        query_weight: float = 0.5,
+        return_alternatives: bool = False,
         data_dir: Optional[Union[str, Path]] = None,
         redownload: bool = False,
         chebi: Optional[ChebiSDF] = None,
@@ -409,6 +460,34 @@ class Search:
             show_progress: Display a tqdm progress bar during batch queries.
             salt_smarts: Additional SMARTS patterns passed to
                 :func:`strip_salts` when ``strip_salts=True``.
+            n_hits: Default number of ranked hits to return per query.  Either a
+                positive integer or the literal ``"all"``.  Defaults to ``1``
+                (one row per query).  Can be overridden per-call in
+                :meth:`search`.
+            min_confidence: Drop hits whose confidence is below this value
+                before truncating to ``n_hits``.  Defaults to ``0.0``.
+            use_opsin: Enable PYOPSIN IUPAC-name → structure anchoring for name
+                queries.  Requires a Java runtime; falls back to plain name
+                matching (with a one-time warning) when unavailable.  Defaults
+                to ``False``.
+            opsin_jar_fpath: ``jar_fpath`` passed to :class:`~provesid.PYOPSIN`.
+            top_k_per_source: Number of candidate rows pulled from each source
+                before pooling / clustering.  Defaults to ``5``.
+            cluster_by_skeleton: Merge stereo/charge/isotope variants when
+                clustering candidates by structure (14-char InChIKey skeleton).
+                Defaults to ``True``.
+            fuzzy_score_cutoff: rapidfuzz / ZeroPM fuzzy score cut-off in
+                [0, 100].  Defaults to ``80.0``.
+            fuzzy_scorer: rapidfuzz scorer name; one of ``WRatio``, ``ratio``,
+                ``partial_ratio``, ``token_sort_ratio``, ``token_set_ratio``,
+                ``QRatio``.  Defaults to ``"WRatio"``.
+            consensus_compat_threshold: Minimum candidate similarity for a
+                candidate to be merged with the consensus anchor.  Defaults to
+                ``0.35``.
+            query_weight: Weight (in [0, 1]) of the query-agreement term versus
+                the method base in the confidence formula.  Defaults to ``0.5``.
+            return_alternatives: When ``n_hits == 1``, attach compact runner-up
+                summaries in an ``alternatives`` column.  Defaults to ``False``.
             data_dir: Optional shared data root used when lazily initialising
                 source clients.
             redownload: If True, lazily initialised source clients force a
@@ -437,8 +516,31 @@ class Search:
         self.inchikey_skeleton = inchikey_skeleton
         self.show_progress = show_progress
         self.salt_smarts: List[str] = list(salt_smarts or [])
+
+        # Multi-hit / tuning attributes
+        self.n_hits = self._validate_n_hits(n_hits)
+        self.min_confidence = float(min_confidence)
+        self.use_opsin = bool(use_opsin)
+        self.opsin_jar_fpath = opsin_jar_fpath
+        self.top_k_per_source = max(1, int(top_k_per_source))
+        self.cluster_by_skeleton = bool(cluster_by_skeleton)
+        self.fuzzy_score_cutoff = float(fuzzy_score_cutoff)
+        if fuzzy_scorer not in self._FUZZY_SCORERS:
+            raise ValueError(
+                f"fuzzy_scorer must be one of {sorted(self._FUZZY_SCORERS)}, "
+                f"got {fuzzy_scorer!r}"
+            )
+        self.fuzzy_scorer = fuzzy_scorer
+        self.consensus_compat_threshold = float(consensus_compat_threshold)
+        self.query_weight = float(query_weight)
+        self.return_alternatives = bool(return_alternatives)
+
         self.data_dir = str(data_dir) if data_dir is not None else None
         self.redownload = redownload
+
+        # OPSIN client — created lazily; disabled for the session on failure.
+        self._opsin: Optional[PYOPSIN] = None
+        self._opsin_available: bool = use_opsin
 
         # Client references — may be None until _ensure_clients() is called.
         self._chebi = chebi
@@ -483,6 +585,79 @@ class Search:
 
         self._clients_initialized = True
 
+    @staticmethod
+    def _validate_n_hits(n_hits: Union[int, str]) -> Union[int, str]:
+        """Validate and normalise the ``n_hits`` argument.
+
+        Args:
+            n_hits: Either a positive integer or the literal ``"all"``.
+
+        Returns:
+            ``"all"`` or a positive ``int``.
+
+        Raises:
+            ValueError: If ``n_hits`` is neither ``"all"`` nor a positive int.
+        """
+        if isinstance(n_hits, str):
+            if n_hits.lower() == "all":
+                return "all"
+            raise ValueError(f"n_hits string must be 'all', got {n_hits!r}")
+        if isinstance(n_hits, bool) or not isinstance(n_hits, int) or n_hits < 1:
+            raise ValueError(f"n_hits must be a positive int or 'all', got {n_hits!r}")
+        return n_hits
+
+    def _get_opsin(self) -> Optional[PYOPSIN]:
+        """Lazily create the PYOPSIN client; disable for the session on failure.
+
+        Returns:
+            A :class:`~provesid.PYOPSIN` instance, or ``None`` when OPSIN is
+            disabled or unavailable (e.g. no Java runtime).
+        """
+        if not self._opsin_available:
+            return None
+        if self._opsin is None:
+            try:
+                self._opsin = PYOPSIN(jar_fpath=self.opsin_jar_fpath)
+            except Exception as exc:  # pragma: no cover - environment dependent
+                log.warning(
+                    "PYOPSIN unavailable (%s); disabling OPSIN anchoring for this "
+                    "session.", exc,
+                )
+                self._opsin_available = False
+                return None
+        return self._opsin
+
+    def _opsin_anchor(self, name: str) -> Optional[Dict[str, Any]]:
+        """Convert an IUPAC name to a normalised structure anchor via PYOPSIN.
+
+        Args:
+            name: Chemical (IUPAC) name.
+
+        Returns:
+            Dict with keys ``smiles``, ``canonical_smiles``, ``inchikey`` when
+            OPSIN parsed the name, else ``None``.
+        """
+        opsin = self._get_opsin()
+        if opsin is None:
+            return None
+        try:
+            smiles = opsin.get_smiles(name)
+        except Exception as exc:  # pragma: no cover - environment dependent
+            log.warning(
+                "PYOPSIN parse failed for %r (%s); disabling OPSIN for session.",
+                name, exc,
+            )
+            self._opsin_available = False
+            return None
+        if _is_missing(smiles) or not str(smiles).strip():
+            return None
+        norm = normalize_structure(str(smiles))
+        return {
+            "smiles": str(smiles),
+            "canonical_smiles": norm["canonical_smiles"] or str(smiles),
+            "inchikey": norm["inchikey"],
+        }
+
     # ── Public entry point ────────────────────────────────────────────────────
 
     def search(
@@ -490,6 +665,8 @@ class Search:
         queries: Union[str, List[str], pd.DataFrame, Path],
         *,
         column: Optional[str] = None,
+        n_hits: Optional[Union[int, str]] = None,
+        min_confidence: Optional[float] = None,
     ) -> pd.DataFrame:
         """Resolve one or more chemical identifiers and return a DataFrame.
 
@@ -500,21 +677,27 @@ class Search:
                 - A list of strings — one row per query.
                 - A :class:`pandas.DataFrame` — the column given by ``column``
                   is used as the query list.  All other columns are preserved
-                  in the output (left-joined on the original index).
+                  in the output (broadcast across the hit rows of each query).
                 - A file path (:class:`pathlib.Path` or string ending in
                   ``.csv`` / ``.parquet``) — read into a DataFrame first;
                   ``column`` must be provided.
 
             column: Column name to read from a DataFrame or file input.
                 Required when ``queries`` is a DataFrame or file path.
+            n_hits: Per-call override of the instance ``n_hits`` (positive int
+                or ``"all"``).  When ``None`` the instance default is used.
+            min_confidence: Per-call override of the instance
+                ``min_confidence``.  When ``None`` the instance default is used.
 
         Returns:
-            DataFrame with columns defined in :data:`OUTPUT_COLUMNS`.  Rows
-            correspond to input queries in the same order.
+            DataFrame with columns defined in :data:`OUTPUT_COLUMNS`.  When
+            ``n_hits == 1`` (the default) there is one row per query; otherwise
+            up to ``n_hits`` ranked rows per query, ordered by descending
+            confidence with a ``hit_rank`` column (0 = best).
 
         Raises:
             ValueError: If a DataFrame/file input is given but ``column`` is
-                not specified.
+                not specified, or if ``n_hits`` is invalid.
             FileNotFoundError: If the given file path does not exist.
 
         Example::
@@ -522,8 +705,19 @@ class Search:
             s = Search("cas")
             df = s.search(["50-00-0", "64-17-5"])
             df = s.search(Path("compounds.csv"), column="CAS")
+
+            # Return every plausible interpretation of an ambiguous name
+            s_name = Search("name")
+            df = s_name.search("xylene", n_hits="all")
         """
         self._ensure_clients()
+
+        effective_n_hits = (
+            self.n_hits if n_hits is None else self._validate_n_hits(n_hits)
+        )
+        effective_min_conf = (
+            self.min_confidence if min_confidence is None else float(min_confidence)
+        )
 
         query_list, extra_df = self._coerce_queries(queries, column)
 
@@ -533,21 +727,33 @@ class Search:
             else query_list
         )
 
-        rows = [self._resolve_single(q) for q in iterator]
+        # Each query yields a list of ranked hit dicts.  Track the source query
+        # index so DataFrame/file extra columns can be broadcast across hits.
+        rows: List[Dict[str, Any]] = []
+        origin_index: List[int] = []
+        for q_idx, q in enumerate(iterator):
+            hits = self._resolve_single(q, effective_n_hits, effective_min_conf)
+            for hit in hits:
+                rows.append(hit)
+                origin_index.append(q_idx)
 
         result_df = pd.DataFrame(rows)
         # Ensure all output columns are present (fill missing with None)
         for col in OUTPUT_COLUMNS:
             if col not in result_df.columns:
                 result_df[col] = None
-        result_df = result_df[OUTPUT_COLUMNS]
+        ordered = list(OUTPUT_COLUMNS)
+        if self.return_alternatives and "alternatives" in result_df.columns:
+            ordered = ordered + ["alternatives"]
+        result_df = result_df[ordered]
 
-        # Merge extra columns from the original DataFrame if provided
-        if extra_df is not None:
+        # Broadcast extra columns from the original DataFrame across hit rows.
+        if extra_df is not None and origin_index:
             extra_cols = [c for c in extra_df.columns if c not in result_df.columns]
             if extra_cols:
+                broadcast = extra_df[extra_cols].iloc[origin_index].reset_index(drop=True)
                 result_df = pd.concat(
-                    [result_df, extra_df[extra_cols].reset_index(drop=True)],
+                    [result_df.reset_index(drop=True), broadcast],
                     axis=1,
                 )
 
@@ -605,14 +811,26 @@ class Search:
 
     # ── Single-query dispatcher ───────────────────────────────────────────────
 
-    def _resolve_single(self, query: str) -> Dict[str, Any]:
-        """Dispatch one query to the appropriate resolver and return a result dict.
+    def _resolve_single(
+        self,
+        query: str,
+        n_hits: Union[int, str],
+        min_confidence: float,
+    ) -> List[Dict[str, Any]]:
+        """Dispatch one query to the appropriate resolver and return ranked hits.
+
+        Each resolver returns ``(base_template, pool, opsin_anchor)``; this
+        method clusters the pool, ranks the clusters, and truncates to
+        ``n_hits``.
 
         Args:
             query: A single identifier string.
+            n_hits: Number of ranked hits to return (positive int or ``"all"``).
+            min_confidence: Drop hits below this confidence before truncation.
 
         Returns:
-            Fully populated result dict matching :data:`OUTPUT_COLUMNS`.
+            List of result dicts matching :data:`OUTPUT_COLUMNS` (length 1 when
+            ``n_hits == 1``).
         """
         dispatch = {
             "cas": self._resolve_cas,
@@ -623,7 +841,8 @@ class Search:
             "dtxsid": self._resolve_dtxsid,
             "formula": self._resolve_formula,
         }
-        return dispatch[self.identifier_type](query)
+        base_template, pool, opsin_anchor = dispatch[self.identifier_type](query)
+        return self._finalise_hits(base_template, pool, n_hits, min_confidence, opsin_anchor)
 
     # ── Empty result template ─────────────────────────────────────────────────
 
@@ -661,11 +880,180 @@ class Search:
             "match_score": 0.0,
             "consensus_source": None,
             "source_match_scores": {},
+            "hit_rank": 0,
+            "n_source_support": 0,
+            "opsin_smiles": None,
         }
+
+    # ── Pool construction helpers ─────────────────────────────────────────────
+
+    @staticmethod
+    def _tag_candidate(
+        cand: Dict[str, Any],
+        source_key: str,
+        origin_rank: int,
+        match_method: str,
+        query_match_score: float,
+    ) -> Dict[str, Any]:
+        """Annotate a candidate record with pool/ranking metadata (in place).
+
+        Args:
+            cand: Candidate record from a ``_candidate_from_*`` helper.
+            source_key: Originating source key (e.g. ``"chebi"``, ``"opsin"``).
+            origin_rank: Rank position within the source's result list (0-based).
+            match_method: How the candidate was found (key into
+                :data:`_BASE_CONFIDENCE`).
+            query_match_score: How well the candidate matches the query in
+                [0, 1].
+
+        Returns:
+            The same candidate dict, mutated with the transient ``_`` keys.
+        """
+        cand["_source_key"] = source_key
+        cand["_origin_rank"] = int(origin_rank)
+        cand["_match_method"] = match_method
+        cand["query_match_score"] = float(query_match_score)
+        return cand
+
+    def _pool_from_candidates_dict(
+        self,
+        candidates: Dict[str, Optional[Dict[str, Any]]],
+        match_method: str,
+        *,
+        default_score: float = 1.0,
+    ) -> List[Dict[str, Any]]:
+        """Convert a per-source ``{key: candidate}`` dict into a tagged pool.
+
+        Args:
+            candidates: Mapping of source key → candidate (or ``None``).
+            match_method: Match method to tag each candidate with.
+            default_score: ``query_match_score`` assigned to every candidate
+                (1.0 for exact-identifier matches; a similarity for fuzzy/
+                Tanimoto matches).
+
+        Returns:
+            List of tagged candidate records.
+        """
+        pool: List[Dict[str, Any]] = []
+        for key in self._SOURCE_KEYS:
+            cand = candidates.get(key)
+            if cand is None:
+                continue
+            self._tag_candidate(cand, key, 0, match_method, default_score)
+            pool.append(cand)
+        return pool
+
+    def _name_score(self, query: str, cand: Dict[str, Any]) -> float:
+        """Best similarity between the query name and a candidate's names.
+
+        Compares the query against the candidate ``name``, ``IUPAC_name`` and
+        each individual synonym using the configured fuzzy scorer (rapidfuzz)
+        when available, falling back to :func:`_text_similarity`.
+
+        Args:
+            query: Query name.
+            cand: Candidate record.
+
+        Returns:
+            Best similarity in [0, 1].
+        """
+        names: List[str] = []
+        for field in ("name", "IUPAC_name"):
+            val = cand.get(field)
+            if not _is_missing(val):
+                names.append(str(val))
+        syn = cand.get("Synonyms")
+        if not _is_missing(syn):
+            names.extend(s.strip() for s in str(syn).split(";") if s.strip())
+        if not names:
+            return 0.0
+
+        if RAPIDFUZZ_AVAILABLE and _fuzz is not None:
+            scorer = getattr(_fuzz, self.fuzzy_scorer, _fuzz.WRatio)
+            try:
+                return max(scorer(query, n) for n in names) / 100.0
+            except Exception:
+                pass
+        return max(_text_similarity(query, n) for n in names)
+
+    @staticmethod
+    def _completeness_score(cand: Dict[str, Any]) -> float:
+        """Fraction of key structural/identifier fields populated in [0, 1].
+
+        Used as the query-agreement signal for formula matches (which have no
+        name to compare against).
+
+        Args:
+            cand: Candidate record.
+
+        Returns:
+            Completeness fraction in [0, 1].
+        """
+        fields = ("SMILES", "InChIKey", "InChI", "molecular_mass", "name", "DTXSID")
+        present = sum(1 for f in fields if not _is_missing(cand.get(f)))
+        present += 1 if (cand.get("CAS_candidates") or []) else 0
+        return present / (len(fields) + 1)
+
+    def _inchikey_pool(
+        self, inchikey: str, match_method: str, query_match_score: float
+    ) -> List[Dict[str, Any]]:
+        """Query every source by InChIKey and return a tagged candidate pool.
+
+        Used by OPSIN anchoring to pull the structurally-correct compound from
+        each source regardless of name spelling.
+
+        Args:
+            inchikey: Full InChIKey to look up.
+            match_method: Match method to tag candidates with.
+            query_match_score: Query-agreement score for the candidates.
+
+        Returns:
+            List of tagged candidate records (one per source that matched).
+        """
+        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
+
+        if self._chebi is not None:
+            try:
+                row = self._chebi.search_by_inchikey(inchikey)
+                if row:
+                    candidates["chebi"] = _candidate_from_chebi_row(row)
+            except Exception as exc:
+                log.warning("ChEBI OPSIN-InChIKey lookup failed: %s", exc)
+        if self._comptox is not None:
+            try:
+                row = self._comptox.get_by_inchikey(inchikey)
+                if row:
+                    candidates["comptox"] = _candidate_from_comptox_row(row)
+            except Exception as exc:
+                log.warning("CompTox OPSIN-InChIKey lookup failed: %s", exc)
+        if self._pubchem is not None:
+            try:
+                row = self._pubchem.get_by_inchikey(inchikey)
+                if row:
+                    candidates["pubchem"] = _candidate_from_pubchem_row(row)
+            except Exception as exc:
+                log.warning("PubChemID OPSIN-InChIKey lookup failed: %s", exc)
+        if self._zeropm is not None:
+            try:
+                table = self._zeropm.get_id_table_from_inchikey(inchikey)
+                candidates["zeropm"] = _candidate_from_zeropm_name_table(inchikey, table)
+            except Exception as exc:
+                log.warning("ZeroPM OPSIN-InChIKey lookup failed: %s", exc)
+        if self._chembl is not None:
+            try:
+                row = self._chembl.search_by_inchikey(inchikey)
+                if row:
+                    candidates["chembl"] = _candidate_from_chembl_row(row, self._chembl)
+            except Exception as exc:
+                log.warning("ChEMBL OPSIN-InChIKey lookup failed: %s", exc)
+
+        return self._pool_from_candidates_dict(
+            candidates, match_method, default_score=query_match_score
+        )
 
     # ── CAS resolver ─────────────────────────────────────────────────────────
 
-    def _resolve_cas(self, cas: str) -> Dict[str, Any]:
+    def _resolve_cas(self, cas: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """Resolve a CAS Registry Number into a unified identifier record.
 
         Queries ChEBI → CompTox → PubChemID → ZeroPM with waterfall priority,
@@ -675,9 +1063,10 @@ class Search:
             cas: CAS Registry Number string.
 
         Returns:
-            Fully populated result dict.
+            Tuple of (base result template, candidate pool, ``None``).
         """
         result = self._empty_result(cas, "CASRN")
+        result["match_method"] = "exact_cas"
         result["CASRN"] = cas
 
         candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
@@ -727,42 +1116,188 @@ class Search:
             except Exception as exc:
                 log.warning("ChEMBL CAS enrichment failed for %r: %s", cas, exc)
 
-        source_details = self._build_source_details(candidates)
-        return self._finalise_result(result, candidates, "exact_cas", source_details)
+        pool = self._pool_from_candidates_dict(candidates, "exact_cas")
+        return result, pool, None
 
     # ── Name resolver ─────────────────────────────────────────────────────────
 
-    def _resolve_name(self, name: str) -> Dict[str, Any]:
-        """Resolve a chemical name into a unified identifier record.
+    def _resolve_name(
+        self, name: str
+    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """Resolve a chemical name into a candidate pool for clustering.
 
-        First attempts exact-name matching across all sources, then falls back
-        to fuzzy matching when ``self.fuzzy`` is True and no exact match is
-        found.
+        Pools the top-``k`` candidates from every source (exact name/synonym
+        matches first; fuzzy-widened when ``self.fuzzy`` is set and exact
+        matches are weak), then adds a PYOPSIN structure anchor and an
+        InChIKey-driven structure lookup when ``self.use_opsin`` is enabled.
 
         Args:
             name: Chemical name string (common or IUPAC).
 
         Returns:
-            Fully populated result dict.
+            Tuple of (base result template, candidate pool, OPSIN anchor dict).
         """
         result = self._empty_result(name, "name")
-        candidates = self._candidates_from_name(name, exact=True)
+        result["match_method"] = "exact_name"
+        pool = self._candidate_pool_from_name(name)
 
-        fuzzy_score: Optional[float] = None
-        match_method = "exact_name"
+        # OPSIN structure anchoring (opt-in; needs Java).
+        opsin_anchor: Optional[Dict[str, Any]] = None
+        if self.use_opsin:
+            opsin_anchor = self._opsin_anchor(name)
+            if opsin_anchor is not None:
+                anchor_cand = _make_candidate(
+                    "OPSIN",
+                    name=name,
+                    smiles=opsin_anchor.get("smiles"),
+                    inchikey=opsin_anchor.get("inchikey"),
+                )
+                self._tag_candidate(anchor_cand, "opsin", 0, "opsin", 1.0)
+                pool.append(anchor_cand)
+                # Pull the *correct* compound from each source by the OPSIN
+                # InChIKey, even when the name spelling differs.
+                if not _is_missing(opsin_anchor.get("inchikey")):
+                    pool.extend(
+                        self._inchikey_pool(str(opsin_anchor["inchikey"]), "opsin", 1.0)
+                    )
 
-        # Fuzzy fallback
-        if not _any_candidate(candidates) and self.fuzzy:
-            candidates, fuzzy_score = self._fuzzy_name_candidates(name)
-            match_method = "fuzzy_name"
+        return result, pool, opsin_anchor
 
-        source_details = self._build_source_details(candidates)
-        result = self._finalise_result(result, candidates, match_method, source_details)
-        if fuzzy_score is not None:
-            result["confidence"] = self._compute_confidence(
-                "fuzzy_name", result["match_score"], fuzzy_score=fuzzy_score
-            )
-        return result
+    def _candidate_pool_from_name(self, name: str) -> List[Dict[str, Any]]:
+        """Build a flat, tagged candidate pool from a name query.
+
+        Pulls up to ``self.top_k_per_source`` candidates from each source.
+        When ``self.fuzzy`` is enabled and the exact pass yields no strong
+        match, the search is widened with non-exact matching and ZeroPM's
+        fuzzy ``query_similar_name``.
+
+        Args:
+            name: Chemical name to search.
+
+        Returns:
+            List of candidate records tagged with ``_source_key``,
+            ``_origin_rank``, ``_match_method`` and ``query_match_score``.
+        """
+        pool: List[Dict[str, Any]] = []
+        k = self.top_k_per_source
+
+        def add(cand, source_key, rank, method):
+            if cand is None:
+                return
+            self._tag_candidate(cand, source_key, rank, method, self._name_score(name, cand))
+            pool.append(cand)
+
+        # ── Exact pass ──────────────────────────────────────────────────────
+        if self._chebi is not None:
+            try:
+                rows = self._chebi.search_by_name(name, exact=True) or []
+                if not rows:
+                    rows = self._chebi.search_by_synonym(name, exact=True) or []
+                for rank, row in enumerate(rows[:k]):
+                    add(_candidate_from_chebi_row(row), "chebi", rank, "exact_name")
+            except Exception as exc:
+                log.warning("ChEBI name lookup failed for %r: %s", name, exc)
+
+        if self._comptox is not None:
+            try:
+                rows = self._comptox.search_by_name(name, exact=True, limit=k) or []
+                if not rows:
+                    row = self._comptox.get_by_name(name)
+                    rows = [row] if row else []
+                for rank, row in enumerate(rows[:k]):
+                    add(_candidate_from_comptox_row(row), "comptox", rank, "exact_name")
+            except Exception as exc:
+                log.warning("CompTox name lookup failed for %r: %s", name, exc)
+
+        if self._pubchem is not None:
+            try:
+                rows = self._pubchem.search_by_name(name, exact=True, limit=k) or []
+                for rank, row in enumerate(rows[:k]):
+                    add(_candidate_from_pubchem_row(row), "pubchem", rank, "exact_name")
+            except Exception as exc:
+                log.warning("PubChemID name lookup failed for %r: %s", name, exc)
+
+        if self._zeropm is not None:
+            try:
+                table = self._zeropm.get_id_table_from_name(name)
+                add(_candidate_from_zeropm_name_table(name, table), "zeropm", 0, "exact_name")
+            except Exception as exc:
+                log.warning("ZeroPM name lookup failed for %r: %s", name, exc)
+
+        if self._chembl is not None:
+            try:
+                rows = self._chembl.search_by_name(name, limit=k) or []
+                for rank, row in enumerate(rows[:k]):
+                    add(_candidate_from_chembl_row(row, self._chembl), "chembl", rank, "exact_name")
+            except Exception as exc:
+                log.warning("ChEMBL name lookup failed for %r: %s", name, exc)
+
+        # ── Fuzzy widening ──────────────────────────────────────────────────
+        cutoff = self.fuzzy_score_cutoff / 100.0
+        strong = any(c["query_match_score"] >= cutoff for c in pool)
+        if self.fuzzy and not strong:
+            norm_name = self._normalize_name(name)
+
+            def add_fuzzy(cand, source_key, rank):
+                if cand is None:
+                    return
+                score = self._name_score(name, cand)
+                if score < cutoff:
+                    return
+                self._tag_candidate(cand, source_key, rank, "fuzzy_name", score)
+                pool.append(cand)
+
+            if self._chebi is not None:
+                try:
+                    rows = self._chebi.search_by_name(norm_name, exact=False) or []
+                    if not rows:
+                        rows = self._chebi.search_by_synonym(norm_name, exact=False) or []
+                    for rank, row in enumerate(rows[:k]):
+                        add_fuzzy(_candidate_from_chebi_row(row), "chebi", rank)
+                except Exception as exc:
+                    log.warning("ChEBI fuzzy name lookup failed for %r: %s", name, exc)
+
+            if self._comptox is not None:
+                try:
+                    rows = self._comptox.search_by_name(norm_name, exact=False, limit=k) or []
+                    for rank, row in enumerate(rows[:k]):
+                        add_fuzzy(_candidate_from_comptox_row(row), "comptox", rank)
+                except Exception as exc:
+                    log.warning("CompTox fuzzy name lookup failed for %r: %s", name, exc)
+
+            if self._pubchem is not None:
+                try:
+                    rows = self._pubchem.search_by_name(norm_name, exact=False, limit=k) or []
+                    for rank, row in enumerate(rows[:k]):
+                        add_fuzzy(_candidate_from_pubchem_row(row), "pubchem", rank)
+                except Exception as exc:
+                    log.warning("PubChemID fuzzy name lookup failed for %r: %s", name, exc)
+
+            if self._zeropm is not None:
+                try:
+                    results = self._zeropm.query_similar_name(
+                        norm_name,
+                        number_of_results=k,
+                        score_cutoff=self.fuzzy_score_cutoff,
+                    )
+                    if isinstance(results, pd.DataFrame) and not results.empty:
+                        add_fuzzy(
+                            _candidate_from_zeropm_name_table(name, results), "zeropm", 0
+                        )
+                except TypeError:
+                    # Stub / older signature without keyword args.
+                    try:
+                        results = self._zeropm.query_similar_name(norm_name)
+                        if isinstance(results, pd.DataFrame) and not results.empty:
+                            add_fuzzy(
+                                _candidate_from_zeropm_name_table(name, results), "zeropm", 0
+                            )
+                    except Exception as exc:
+                        log.warning("ZeroPM fuzzy name lookup failed for %r: %s", name, exc)
+                except Exception as exc:
+                    log.warning("ZeroPM fuzzy name lookup failed for %r: %s", name, exc)
+
+        return pool
 
     def _candidates_from_name(
         self, name: str, exact: bool = True
@@ -826,7 +1361,7 @@ class Search:
 
     # ── SMILES resolver ───────────────────────────────────────────────────────
 
-    def _resolve_smiles(self, smiles: str) -> Dict[str, Any]:
+    def _resolve_smiles(self, smiles: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """Resolve a SMILES string into a unified identifier record.
 
         Canonicalises the input, derives an InChIKey, and queries sources by
@@ -838,9 +1373,10 @@ class Search:
             smiles: SMILES string.
 
         Returns:
-            Fully populated result dict.
+            Tuple of (base result template, candidate pool, ``None``).
         """
         result = self._empty_result(smiles, "SMILES")
+        result["match_method"] = "exact_smiles"
         result["SMILES"] = smiles
 
         norm = normalize_structure(smiles)
@@ -901,21 +1437,18 @@ class Search:
         if not _any_candidate(candidates) and self.similarity_threshold > 0:
             sim_candidates, tanimoto_score = self._tanimoto_candidates(smiles)
             if _any_candidate(sim_candidates):
-                candidates = sim_candidates
-                match_method = "tanimoto"
-                source_details = self._build_source_details(candidates)
-                result = self._finalise_result(result, candidates, match_method, source_details)
-                result["confidence"] = self._compute_confidence(
-                    "tanimoto", result["match_score"], tanimoto=tanimoto_score
+                score = tanimoto_score if tanimoto_score is not None else 0.0
+                pool = self._pool_from_candidates_dict(
+                    sim_candidates, "tanimoto", default_score=score
                 )
-                return result
+                return result, pool, None
 
-        source_details = self._build_source_details(candidates)
-        return self._finalise_result(result, candidates, match_method, source_details)
+        pool = self._pool_from_candidates_dict(candidates, match_method)
+        return result, pool, None
 
     # ── InChI resolver ────────────────────────────────────────────────────────
 
-    def _resolve_inchi(self, inchi: str) -> Dict[str, Any]:
+    def _resolve_inchi(self, inchi: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """Resolve an InChI string into a unified identifier record.
 
         Converts the InChI to InChIKey via RDKit and delegates to
@@ -926,9 +1459,10 @@ class Search:
             inchi: InChI string (must start with ``"InChI="``).
 
         Returns:
-            Fully populated result dict.
+            Tuple of (base result template, candidate pool, ``None``).
         """
         result = self._empty_result(inchi, "InChI")
+        result["match_method"] = "inchi"
         result["InChI"] = inchi
 
         # Derive InChIKey and SMILES via RDKit
@@ -995,12 +1529,12 @@ class Search:
             except Exception as exc:
                 log.warning("ChEMBL InChI lookup failed: %s", exc)
 
-        source_details = self._build_source_details(candidates)
-        return self._finalise_result(result, candidates, "inchi", source_details)
+        pool = self._pool_from_candidates_dict(candidates, "inchi")
+        return result, pool, None
 
     # ── InChIKey resolver ─────────────────────────────────────────────────────
 
-    def _resolve_inchikey(self, inchikey: str) -> Dict[str, Any]:
+    def _resolve_inchikey(self, inchikey: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """Resolve an InChIKey into a unified identifier record.
 
         Queries all offline sources by InChIKey.  Falls back to 14-character
@@ -1012,9 +1546,10 @@ class Search:
                 (``XXXXXXXXXXXXXX-XXXXXXXXXX-X``).
 
         Returns:
-            Fully populated result dict.
+            Tuple of (base result template, candidate pool, ``None``).
         """
         result = self._empty_result(inchikey, "InChIKey")
+        result["match_method"] = "exact_inchikey"
         result["InChIKey"] = inchikey
 
         candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
@@ -1071,12 +1606,12 @@ class Search:
                 candidates = skel_candidates
                 match_method = "inchikey_skeleton"
 
-        source_details = self._build_source_details(candidates)
-        return self._finalise_result(result, candidates, match_method, source_details)
+        pool = self._pool_from_candidates_dict(candidates, match_method)
+        return result, pool, None
 
     # ── DTXSID resolver ───────────────────────────────────────────────────────
 
-    def _resolve_dtxsid(self, dtxsid: str) -> Dict[str, Any]:
+    def _resolve_dtxsid(self, dtxsid: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """Resolve a CompTox DTXSID into a unified identifier record.
 
         Queries CompTox as the primary source, then cross-references other
@@ -1086,9 +1621,10 @@ class Search:
             dtxsid: CompTox DTXSID string (e.g., ``"DTXSID7020182"``).
 
         Returns:
-            Fully populated result dict.
+            Tuple of (base result template, candidate pool, ``None``).
         """
         result = self._empty_result(dtxsid, "DTXSID")
+        result["match_method"] = "dtxsid"
         result["DTXSID"] = dtxsid
 
         candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
@@ -1142,57 +1678,67 @@ class Search:
                 except Exception as exc:
                     log.warning("ChEMBL DTXSID cross-ref failed: %s", exc)
 
-        source_details = self._build_source_details(candidates)
-        return self._finalise_result(result, candidates, "dtxsid", source_details)
+        pool = self._pool_from_candidates_dict(candidates, "dtxsid")
+        return result, pool, None
 
     # ── Formula resolver ──────────────────────────────────────────────────────
 
-    def _resolve_formula(self, formula: str) -> Dict[str, Any]:
-        """Resolve a molecular formula into a unified identifier record.
+    def _resolve_formula(
+        self, formula: str
+    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """Resolve a molecular formula into a candidate pool.
 
-        Returns the most complete match across CompTox, PubChemID, and ChEBI.
-        Formulas are not unique identifiers, so confidence is capped at 0.30.
+        Formulas are not unique identifiers, so all sources may return many
+        rows.  The top-``k`` rows per source are pooled and clustered; distinct
+        compounds are returned ranked by completeness/consensus.  Confidence is
+        capped low (base 0.30) because formula matches are ambiguous.
 
         Args:
             formula: Molecular formula string (e.g., ``"C9H8O4"``).
 
         Returns:
-            Fully populated result dict for the best (most complete) match.
+            Tuple of (base result template, candidate pool, ``None``).
         """
         result = self._empty_result(formula, "formula")
+        result["match_method"] = "formula"
         result["molecular_formula"] = formula
 
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
+        pool: List[Dict[str, Any]] = []
+        k = self.top_k_per_source
+
+        def add(cand, source_key, rank):
+            if cand is None:
+                return
+            # Completeness drives the query_match_score for formula matches.
+            score = self._completeness_score(cand)
+            self._tag_candidate(cand, source_key, rank, "formula", score)
+            pool.append(cand)
 
         if self._chebi is not None:
             try:
-                rows = self._chebi.search_by_formula(formula)
-                if rows:
-                    best = _most_complete_row(rows)
-                    candidates["chebi"] = _candidate_from_chebi_row(best)
+                rows = self._chebi.search_by_formula(formula) or []
+                for rank, row in enumerate(_rank_rows_by_completeness(rows)[:k]):
+                    add(_candidate_from_chebi_row(row), "chebi", rank)
             except Exception as exc:
                 log.warning("ChEBI formula lookup failed for %r: %s", formula, exc)
 
         if self._comptox is not None:
             try:
-                rows = self._comptox.search_by_formula(formula)
-                if rows:
-                    best = _most_complete_row(rows)
-                    candidates["comptox"] = _candidate_from_comptox_row(best)
+                rows = self._comptox.search_by_formula(formula) or []
+                for rank, row in enumerate(_rank_rows_by_completeness(rows)[:k]):
+                    add(_candidate_from_comptox_row(row), "comptox", rank)
             except Exception as exc:
                 log.warning("CompTox formula lookup failed for %r: %s", formula, exc)
 
         if self._pubchem is not None:
             try:
-                rows = self._pubchem.search_by_formula(formula)
-                if rows:
-                    best = _most_complete_row(rows)
-                    candidates["pubchem"] = _candidate_from_pubchem_row(best)
+                rows = self._pubchem.search_by_formula(formula) or []
+                for rank, row in enumerate(_rank_rows_by_completeness(rows)[:k]):
+                    add(_candidate_from_pubchem_row(row), "pubchem", rank)
             except Exception as exc:
                 log.warning("PubChemID formula lookup failed for %r: %s", formula, exc)
 
-        source_details = self._build_source_details(candidates)
-        return self._finalise_result(result, candidates, "formula", source_details)
+        return result, pool, None
 
     # ── Fuzzy name search ─────────────────────────────────────────────────────
 
@@ -1492,17 +2038,25 @@ class Search:
         *,
         fuzzy_score: Optional[float] = None,
         tanimoto: Optional[float] = None,
+        query_score: Optional[float] = None,
     ) -> float:
         """Compute the final confidence score for a result.
 
         The base confidence depends on the match method.  For fuzzy and
-        Tanimoto methods, the raw score is used as the base.  The base is then
-        modulated by the cross-source consensus score so that multi-source
-        agreement boosts confidence.
+        Tanimoto methods, the raw similarity is used as the base.  The base is
+        modulated by a query-agreement term (weighted by ``self.query_weight``)
+        and by the cross-source consensus score, so that both a strong query
+        match and multi-source agreement boost confidence.
 
         Formula::
 
-            final = base × (0.5 + 0.5 × consensus_score)
+            final = base
+                  × (w_q × query_score + (1 − w_q))
+                  × (0.5 + 0.5 × consensus_score)
+
+        For exact-identifier methods ``query_score`` is 1.0, which collapses the
+        middle term to 1.0 and reproduces the original
+        ``base × (0.5 + 0.5 × consensus_score)`` behaviour.
 
         Args:
             match_method: One of the keys in :data:`_BASE_CONFIDENCE`.
@@ -1511,6 +2065,9 @@ class Search:
                 ``match_method == "fuzzy_name"``.
             tanimoto: Tanimoto similarity in [0, 1]; used when
                 ``match_method == "tanimoto"``.
+            query_score: Query-agreement signal in [0, 1] for name/formula
+                methods.  Ignored (treated as 1.0) for fuzzy/Tanimoto where the
+                similarity already lives in the base.
 
         Returns:
             Confidence value in [0, 1].
@@ -1519,58 +2076,174 @@ class Search:
             return 0.0
 
         base = _BASE_CONFIDENCE.get(match_method, 0.5)
+        q = 1.0 if query_score is None else max(0.0, min(1.0, query_score))
 
         if match_method == "fuzzy_name":
             base = fuzzy_score if fuzzy_score is not None else 0.5
+            q = 1.0  # similarity already captured in base
         elif match_method == "tanimoto":
             base = (tanimoto * 0.85) if tanimoto is not None else 0.5
+            q = 1.0
 
-        modulated = base * (0.5 + 0.5 * max(0.0, min(1.0, consensus_score)))
+        w_q = max(0.0, min(1.0, self.query_weight))
+        query_term = w_q * q + (1.0 - w_q)
+        modulated = base * query_term * (0.5 + 0.5 * max(0.0, min(1.0, consensus_score)))
         return round(min(1.0, max(0.0, modulated)), 4)
 
     # ── Result finalisation ───────────────────────────────────────────────────
 
-    def _finalise_result(
+    def _finalise_hits(
         self,
-        result: Dict[str, Any],
-        candidates: Dict[str, Optional[Dict[str, Any]]],
-        match_method: str,
-        source_details: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Apply candidates to result, run consensus, and fill derived fields.
-
-        This method:
-
-        1. Runs :func:`~provesid.tools._compute_consensus` to pick the anchor.
-        2. Applies each compatible candidate to ``result`` via
-           :func:`~provesid.tools._apply_candidate_to_result`.
-        3. Runs :func:`normalize_structure` on the final SMILES to populate
-           ``canonical_smiles``, ``kekulized_smiles``, ``InChIKey``, etc.
-        4. Validates the source-provided InChIKey against the RDKit-derived one.
-        5. Runs salt stripping if ``self.strip_salts`` is True.
-        6. Computes and stores the ``confidence`` score.
+        base_template: Dict[str, Any],
+        pool: List[Dict[str, Any]],
+        n_hits: Union[int, str],
+        min_confidence: float,
+        opsin_anchor: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Cluster a candidate pool, rank the clusters, and return ranked hits.
 
         Args:
-            result: Partially populated result dict.
-            candidates: Per-source candidate records.
-            match_method: How the match was obtained.
-            source_details: Pre-built source traceability dict.
+            base_template: Empty result template (carries query/foundby and any
+                pre-populated query fields).
+            pool: Flat list of tagged candidate records.
+            n_hits: Number of hits to return (positive int or ``"all"``).
+            min_confidence: Drop hits below this confidence before truncation.
+            opsin_anchor: Optional OPSIN structure anchor for this query.
 
         Returns:
-            Fully populated result dict.
+            List of fully-populated result dicts ordered by descending
+            confidence with ``hit_rank`` set.  Always contains at least one row
+            (an empty/no-match row when nothing was found).
         """
-        consensus_source, source_match_scores, match_score = _compute_consensus(candidates)
-        consensus_candidate = candidates.get(consensus_source) if consensus_source else None
+        opsin_smiles = opsin_anchor.get("smiles") if opsin_anchor else None
+
+        if not pool:
+            # No source matched — still finalise structure/salt fields from any
+            # pre-populated query fields (e.g. a SMILES/InChI query) via an empty
+            # cluster, preserving the resolver's default match_method.
+            empty = self._build_result_for_cluster(base_template, {"members": []}, opsin_smiles)
+            empty["hit_rank"] = 0
+            return [empty]
+
+        clusters = _cluster_candidates(pool, by_skeleton=self.cluster_by_skeleton)
+        hits = [
+            self._build_result_for_cluster(base_template, cluster, opsin_smiles)
+            for cluster in clusters
+        ]
+
+        # Rank: OPSIN match first, then confidence, support, query agreement,
+        # and (lower) origin rank as a final tie-break.
+        hits.sort(
+            key=lambda h: (
+                1 if h["_opsin_match"] else 0,
+                h["confidence"],
+                h["n_source_support"],
+                h["_cluster_query_score"],
+                -h["_min_origin_rank"],
+            ),
+            reverse=True,
+        )
+
+        filtered = [h for h in hits if h["confidence"] >= min_confidence]
+        if not filtered:
+            # Everything was below the floor — represent the query with a single
+            # no-match row so it is not silently dropped.
+            empty = self._build_result_for_cluster(base_template, {"members": []}, opsin_smiles)
+            empty["hit_rank"] = 0
+            return [empty]
+
+        if n_hits != "all":
+            filtered = filtered[: int(n_hits)]
+
+        alternatives = None
+        if self.return_alternatives and n_hits == 1 and len(hits) > 1:
+            alternatives = [
+                {
+                    "name": h.get("name"),
+                    "InChIKey": h.get("InChIKey"),
+                    "confidence": h.get("confidence"),
+                    "source": h.get("source"),
+                }
+                for h in hits[1:6]
+            ]
+
+        for rank, hit in enumerate(filtered):
+            hit["hit_rank"] = rank
+            if alternatives is not None and rank == 0:
+                hit["alternatives"] = alternatives
+
+        return filtered
+
+    def _build_result_for_cluster(
+        self,
+        base_template: Dict[str, Any],
+        cluster: Dict[str, Any],
+        opsin_smiles: Optional[str],
+    ) -> Dict[str, Any]:
+        """Build one fully-populated result dict from a single structure cluster.
+
+        All members of a cluster denote the same compound; this picks the best
+        member per source, runs the existing consensus/merge machinery over
+        them, normalises the structure, and computes confidence.
+
+        Args:
+            base_template: Empty result template to populate.
+            cluster: A cluster dict with a ``members`` list of tagged candidates.
+            opsin_smiles: OPSIN SMILES for the query (for the ``opsin_smiles``
+                column), if any.
+
+        Returns:
+            A populated result dict, plus transient ``_``-prefixed ranking keys
+            (dropped before output).
+        """
+        result = dict(base_template)
+        members: List[Dict[str, Any]] = cluster["members"]
+
+        opsin_match = any(m.get("_source_key") == "opsin" for m in members)
+
+        # Best member per data source (lowest origin rank, then best query score).
+        per_source: Dict[str, Dict[str, Any]] = {}
+        for m in members:
+            key = m.get("_source_key")
+            if key in (None, "opsin"):
+                continue
+            cur = per_source.get(key)
+            rank_tuple = (m.get("_origin_rank", 0), -m.get("query_match_score", 0.0))
+            if cur is None or rank_tuple < (
+                cur.get("_origin_rank", 0),
+                -cur.get("query_match_score", 0.0),
+            ):
+                per_source[key] = m
+
+        # Cluster match method = the strongest method among members; fall back
+        # to the resolver's default (carried on the template) for empty clusters.
+        cluster_method = max(
+            (m.get("_match_method", "unknown") for m in members),
+            key=lambda mm: _BASE_CONFIDENCE.get(mm, 0.5),
+            default=base_template.get("match_method", "unknown"),
+        )
+        if opsin_match:
+            cluster_method = "opsin"
+
+        consensus_source, source_match_scores, match_score = _compute_consensus(per_source)
+        consensus_candidate = per_source.get(consensus_source) if consensus_source else None
 
         for source_key in ["chebi", "comptox", "pubchem", "zeropm"]:
-            candidate = candidates.get(source_key)
-            if _candidate_compatible_with_consensus(candidate, consensus_candidate):
+            candidate = per_source.get(source_key)
+            if _candidate_compatible_with_consensus(
+                candidate, consensus_candidate, self.consensus_compat_threshold
+            ):
                 _apply_candidate_to_result(result, candidate)
 
-        # ChEMBL enrichment
-        chembl_cand = candidates.get("chembl")
-        if _candidate_compatible_with_consensus(chembl_cand, consensus_candidate):
+        chembl_cand = per_source.get("chembl")
+        if _candidate_compatible_with_consensus(
+            chembl_cand, consensus_candidate, self.consensus_compat_threshold
+        ):
             _apply_candidate_to_result(result, chembl_cand)
+
+        # OPSIN supplies a structure even when no source row carried one.
+        if opsin_match and _is_missing(result.get("SMILES")) and not _is_missing(opsin_smiles):
+            result["SMILES"] = opsin_smiles
 
         # Structure normalisation
         norm = normalize_structure(result.get("SMILES"))
@@ -1578,43 +2251,49 @@ class Search:
         result["kekulized_smiles"] = norm["kekulized_smiles"]
         result["molecular_mass"] = _pick_first(result.get("molecular_mass"), norm["mol_weight"])
 
-        # InChI / InChIKey — prefer RDKit-derived values; warn on mismatch
         rdkit_inchi = norm["inchi"]
         rdkit_ik = norm["inchikey"]
-
         if not _is_missing(result.get("InChIKey")) and not _is_missing(rdkit_ik):
             if result["InChIKey"] != rdkit_ik:
                 log.debug(
                     "InChIKey mismatch for query %r: source=%r rdkit=%r",
-                    result["query"],
-                    result["InChIKey"],
-                    rdkit_ik,
+                    result["query"], result["InChIKey"], rdkit_ik,
                 )
         result["InChI"] = _pick_first(result.get("InChI"), rdkit_inchi)
         result["InChIKey"] = _pick_first(result.get("InChIKey"), rdkit_ik)
 
-        # Align name / IUPAC_name
         result["name"] = _pick_first(result.get("name"), result.get("IUPAC_name"))
         result["IUPAC_name"] = _pick_first(result.get("IUPAC_name"), result.get("name"))
-
-        # Source
         result["source"] = _pick_first(
             result.get("source"),
             consensus_candidate.get("source") if consensus_candidate else None,
         )
 
-        # Consensus & score metadata
         result["consensus_source"] = (
             consensus_candidate.get("source") if consensus_candidate else None
         )
         result["source_match_scores"] = {
-            (candidates[src].get("source") if candidates.get(src) else src): round(score, 4)
+            (per_source[src].get("source") if per_source.get(src) else src): round(score, 4)
             for src, score in source_match_scores.items()
         }
         result["match_score"] = round(match_score, 4)
-        result["source_details"] = source_details
-        result["match_method"] = match_method
-        result["confidence"] = self._compute_confidence(match_method, match_score)
+        result["source_details"] = self._build_source_details(per_source)
+        result["match_method"] = cluster_method
+
+        cluster_query_score = max(
+            (m.get("query_match_score", 0.0) for m in members), default=0.0
+        )
+        fuzzy_score = cluster_query_score if cluster_method == "fuzzy_name" else None
+        tanimoto = cluster_query_score if cluster_method == "tanimoto" else None
+        result["confidence"] = self._compute_confidence(
+            cluster_method,
+            match_score,
+            fuzzy_score=fuzzy_score,
+            tanimoto=tanimoto,
+            query_score=cluster_query_score,
+        )
+        result["n_source_support"] = len(per_source)
+        result["opsin_smiles"] = opsin_smiles
 
         # Salt stripping
         if self.strip_salts and not _is_missing(result.get("SMILES")):
@@ -1625,12 +2304,124 @@ class Search:
                 parent_norm = normalize_structure(parent)
                 result["parent_inchikey"] = parent_norm["inchikey"]
 
+        # Transient ranking metadata (dropped before DataFrame assembly).
+        result["_opsin_match"] = opsin_match
+        result["_cluster_query_score"] = cluster_query_score
+        result["_min_origin_rank"] = min(
+            (m.get("_origin_rank", 0) for m in members), default=0
+        )
         return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Module-level private helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _rank_rows_by_completeness(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Sort source rows by number of non-null fields (most complete first).
+
+    Args:
+        rows: List of raw source record dicts.
+
+    Returns:
+        New list ordered by descending completeness; stable for ties.
+    """
+    if not rows:
+        return []
+    return sorted(
+        rows,
+        key=lambda r: sum(1 for v in r.values() if not _is_missing(v)),
+        reverse=True,
+    )
+
+
+def _candidate_cluster_keys(cand: Dict[str, Any], by_skeleton: bool) -> set:
+    """Return the set of structure-identity keys a candidate belongs to.
+
+    Two candidates are merged into the same cluster when their key sets
+    intersect.  Priority: full InChIKey (plus 14-char skeleton when
+    ``by_skeleton``) → canonical SMILES → normalised name.
+
+    Args:
+        cand: A tagged candidate record.
+        by_skeleton: Whether to also emit the 14-char InChIKey skeleton key
+            (merging stereo/charge/isotope variants).
+
+    Returns:
+        A set of hashable key tuples (empty when the candidate has no usable
+        identity, signalling a unique singleton cluster).
+    """
+    keys: set = set()
+    ik = cand.get("InChIKey")
+    if not _is_missing(ik):
+        ik_s = str(ik)
+        keys.add(("ik", ik_s))
+        if by_skeleton and len(ik_s) >= 14:
+            keys.add(("skel", ik_s[:14]))
+        return keys
+
+    canon = cand.get("canonical_smiles") or cand.get("SMILES")
+    if not _is_missing(canon):
+        keys.add(("smi", str(canon)))
+        return keys
+
+    name = cand.get("name") or cand.get("IUPAC_name")
+    if not _is_missing(name):
+        keys.add(("name", str(name).strip().lower()))
+    return keys
+
+
+def _cluster_candidates(
+    pool: List[Dict[str, Any]], by_skeleton: bool = True
+) -> List[Dict[str, Any]]:
+    """Group a candidate pool into structure-identity clusters.
+
+    Uses a union-find over candidate identity keys so that, e.g., a candidate
+    carrying a full InChIKey and one carrying only the matching skeleton end up
+    in the same cluster.  Candidates with no usable identity become singletons.
+
+    Args:
+        pool: Flat list of tagged candidate records.
+        by_skeleton: Merge stereo/charge/isotope variants via skeleton keys.
+
+    Returns:
+        List of cluster dicts, each ``{"members": [candidate, ...]}``.
+    """
+    parent: Dict[Any, Any] = {}
+
+    def find(x: Any) -> Any:
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:
+            parent[x], x = root, parent[x]
+        return root
+
+    def union(a: Any, b: Any) -> None:
+        parent.setdefault(a, a)
+        parent.setdefault(b, b)
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    cand_anchor: List[Any] = []
+    for idx, cand in enumerate(pool):
+        keys = _candidate_cluster_keys(cand, by_skeleton)
+        if not keys:
+            keys = {("uniq", idx)}  # unique singleton
+        key_list = list(keys)
+        for k in key_list:
+            parent.setdefault(k, k)
+        for k in key_list[1:]:
+            union(key_list[0], k)
+        cand_anchor.append(key_list[0])
+
+    groups: Dict[Any, List[Dict[str, Any]]] = {}
+    for cand, anchor in zip(pool, cand_anchor):
+        groups.setdefault(find(anchor), []).append(cand)
+
+    return [{"members": members} for members in groups.values()]
+
 
 def _any_candidate(candidates: Dict[str, Optional[Dict[str, Any]]]) -> bool:
     """Return True if at least one candidate is non-None.

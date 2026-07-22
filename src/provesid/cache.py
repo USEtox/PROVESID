@@ -344,7 +344,8 @@ _service_caches = {
     'nci': CacheManager(service_name='nci'),
     'pubchemview': CacheManager(service_name='pubchemview'),
     'classyfire': CacheManager(service_name='classyfire'),
-    'opsin': CacheManager(service_name='opsin')
+    'opsin': CacheManager(service_name='opsin'),
+    'chebifier': CacheManager(service_name='chebifier')
 }
 
 def cached(func: Callable = None, *, service: Optional[str] = None) -> Callable:
@@ -457,6 +458,10 @@ def clear_opsin_cache():
     """Clear only OPSIN cached data."""
     _service_caches['opsin'].clear()
 
+def clear_chebifier_cache():
+    """Clear only chebifier taxonomy cached data."""
+    _service_caches['chebifier'].clear()
+
 def get_pubchem_cache_info() -> Dict[str, Any]:
     """Get information about PubChem cache."""
     return _service_caches['pubchem'].get_cache_info()
@@ -480,6 +485,10 @@ def get_classyfire_cache_info() -> Dict[str, Any]:
 def get_opsin_cache_info() -> Dict[str, Any]:
     """Get information about OPSIN cache."""
     return _service_caches['opsin'].get_cache_info()
+
+def get_chebifier_cache_info() -> Dict[str, Any]:
+    """Get information about the chebifier taxonomy cache."""
+    return _service_caches['chebifier'].get_cache_info()
 
 def export_service_cache(service: str, export_path: str, format: str = 'pickle') -> bool:
     """Export service-specific cache to a file."""

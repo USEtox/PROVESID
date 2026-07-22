@@ -53,3 +53,12 @@ from .utils import check_CASRN
 from .zeropm import ZeroPM
 from .reach import REACHDossierID
 from .search import Search, normalize_structure, strip_salts, OUTPUT_COLUMNS
+from .taxonomy import (
+    ChebifierClassifier,
+    ChebifierError,
+    ChebifierMissingError,
+    classify_chebifier,
+    chebifier_available,
+    ensure_v244_indices,
+    TAXONOMY_COLUMNS,
+)

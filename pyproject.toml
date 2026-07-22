@@ -41,6 +41,13 @@ dependencies = [
 "Bug Tracker" = "https://github.com/USEtox/PROVESID/issues"
 
 [project.optional-dependencies]
+# AI-based ChEBI taxonomy classification (heavy: pulls in PyTorch).
+# The transformer + rule-based models work with just this extra; the graph (GNN)
+# models additionally need the PyG stack + git deps + an index patch — use
+# `bash scripts/install_chebifier.sh`. See docs/chebifier.md.
+chebifier = [
+    "chebifier==1.2.1",
+]
 dev = [
     "pytest>=6.0",
     "black>=21.0",
@@ -107,6 +114,7 @@ markers = [
     "cas: CAS Common Chemistry API specific tests",
     "chebi: ChEBI API specific tests",
     "classyfire: ClassyFire API specific tests",
+    "chebifier: chebifier taxonomy backend tests (requires the chebifier extra)",
     "opsin: OPSIN API specific tests",
     "nci: NCI Chemical Identifier Resolver specific tests",
     "zeropm: ZeroPM database specific tests",

@@ -38,6 +38,7 @@ nav:
     - ChEBI Tutorial: examples/ChEBI/ChEBI_tutorial.md
     - ChEBI SDF Tutorial: examples/ChEBI/chebi_sdf_tutorial.md
     - ClassyFire Tutorial: examples/ClassyFire/classyfire_tutorial.md
+    - Chebifier Taxonomy: chebifier.md
     - OPSIN Tutorial: examples/OPSIN/opsin_tutorial.md
     - Chemical ID Resolver: examples/resolver/chem_id_resolver_tutorial.md
     - ChEMBL Tutorial: examples/chembl/chembl_tutorial.md

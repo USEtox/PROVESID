@@ -37,6 +37,8 @@ Key design points (mirrors the PROVESID conventions):
 
 from __future__ import annotations
 
+import contextlib
+import csv
 import importlib
 import importlib.util
 import logging
@@ -110,6 +112,59 @@ def chebifier_available() -> bool:
     return importlib.util.find_spec("chebifier") is not None
 
 
+#: Modules the *default* chebifier ensemble needs, beyond ``chebifier`` itself.
+#: ``pip install 'provesid[chebifier]'`` installs only some of these; the rest come
+#: from ``scripts/install_chebifier.sh``. Missing any of them makes the default
+#: ensemble fail at predict time with a bare ``ModuleNotFoundError``.
+_DEFAULT_ENSEMBLE_MODULES = (
+    "chebifier",
+    "chebai",         # electra transformer model
+    "chebai_graph",   # graph (GNN) models
+    "chemlog",        # rule-based models
+    "chemlog_extra",  # chemlog_element / chemlog_organox models
+    "c3p",            # c3p model
+)
+
+
+def missing_ensemble_modules() -> List[str]:
+    """Modules required by the default chebifier ensemble that are not installed.
+
+    Use this to decide whether a full classification run can succeed.
+    :func:`chebifier_available` only reports whether ``chebifier`` itself imports,
+    which is not enough: the default ensemble also loads transformer, graph,
+    rule-based and c3p models from separate packages, and a partial install fails
+    only once prediction is attempted.
+
+    Returns:
+        The missing module names, in the order they appear in the ensemble.
+        Empty when the full default ensemble can be constructed.
+
+    Example:
+        >>> from provesid.taxonomy import missing_ensemble_modules
+        >>> missing_ensemble_modules()  # doctest: +SKIP
+        ['c3p']
+    """
+    return [
+        name
+        for name in _DEFAULT_ENSEMBLE_MODULES
+        if importlib.util.find_spec(name) is None
+    ]
+
+
+def default_ensemble_available() -> bool:
+    """Whether every module the default chebifier ensemble needs is installed.
+
+    Returns:
+        ``True`` when :func:`missing_ensemble_modules` is empty.
+
+    Example:
+        >>> from provesid.taxonomy import default_ensemble_available
+        >>> if default_ensemble_available():
+        ...     ...  # a full classify() call can succeed
+    """
+    return not missing_ensemble_modules()
+
+
 def _configure_chebifier_storage(data_dir: Optional[str] = None) -> str:
     """Redirect Hugging Face / torch model caches into the PROVESID dataset dir.
 
@@ -181,6 +236,138 @@ def ensure_v244_indices() -> Dict[str, str]:
         )
         results[prop] = "patched"
     return results
+
+
+def ensure_element_class_mappings(
+    data_dir: Optional[str] = None, chebi_version: int = 244
+) -> Dict[str, str]:
+    """Ensure ``chemlog_extra``'s element-to-ChEBI-class mapping files exist.
+
+    ``chemlog_extra``'s by-element classifiers read
+    ``data/chebi_v<version>/<Classifier>_element_class_mapping.csv`` **relative to
+    the current working directory**, and rebuild it from the ChEBI graph when the
+    file is absent. That rebuild crashes on the current graph — 288 of its 205k
+    nodes carry ``name: None``, and the builder does
+    ``" molecular entity" in properties["name"]`` — so the chemlog models cannot
+    be constructed at all without these files, and the whole ensemble fails with
+    ``TypeError: argument of type 'NoneType' is not iterable``.
+
+    This writes both files into the PROVESID chebifier data directory using
+    upstream's own derivation rules, skipping unnamed nodes.
+    :attr:`ChebifierClassifier.ensemble` then builds the ensemble with that
+    directory as the working directory, so the files are found without writing
+    anything into the caller's working directory.
+
+    Args:
+        data_dir: Base directory for chebifier data. When ``None``, uses
+            ``user_dataset_path("chebifier")``.
+        chebi_version: ChEBI version the mappings are built for. Must match the
+            version chemlog_extra asks for (its default, 244).
+
+    Returns:
+        Mapping of classifier name to a status string: ``"written"``, ``"ok"``
+        (already present), or ``"unavailable"`` (chebifier not installed, so the
+        ChEBI graph could not be loaded).
+
+    Example:
+        >>> from provesid.taxonomy import ensure_element_class_mappings
+        >>> ensure_element_class_mappings()  # doctest: +SKIP
+        {'XMolecularEntityClassifier': 'ok', 'OrganoXCompoundClassifier': 'ok'}
+    """
+    base = data_dir or user_dataset_path("chebifier")
+    target_dir = os.path.join(base, "data", f"chebi_v{chebi_version}")
+
+    paths = {
+        name: os.path.join(target_dir, f"{name}_element_class_mapping.csv")
+        for name in ("XMolecularEntityClassifier", "OrganoXCompoundClassifier")
+    }
+    results = {name: "ok" for name, path in paths.items() if os.path.exists(path)}
+    missing = [name for name in paths if name not in results]
+    if not missing:
+        return results
+
+    try:
+        from chebifier.utils import load_chebi_graph
+    except ImportError:
+        logger.debug("chebifier not installed; skipping element class mappings")
+        return {name: "unavailable" for name in paths}
+
+    chebi_graph = load_chebi_graph()
+    os.makedirs(target_dir, exist_ok=True)
+    for name in missing:
+        mapping = _build_element_class_mapping(chebi_graph, name)
+        with open(paths[name], "w", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["element_num", "chebi_id"])
+            for element_num, chebi_id in mapping.items():
+                writer.writerow([element_num, chebi_id])
+        logger.info(
+            "Wrote %s element class mapping (%d entries) to %s",
+            name, len(mapping), paths[name],
+        )
+        results[name] = "written"
+    return results
+
+
+def _build_element_class_mapping(chebi_graph, classifier_name: str) -> Dict[int, str]:
+    """Derive one element-number to ChEBI-id mapping from the ChEBI graph.
+
+    Mirrors the derivation in ``chemlog_extra.alg_classification``, including its
+    deliberate omissions (hydrogen for molecular entities, phosphorus for organo-X
+    compounds — both handled by chemlog's own modules), but skips nodes whose
+    ``name`` is missing or ``None`` instead of raising on them.
+
+    Args:
+        chebi_graph: The ChEBI ontology graph loaded by chebifier.
+        classifier_name: ``"XMolecularEntityClassifier"`` or
+            ``"OrganoXCompoundClassifier"``.
+
+    Returns:
+        Mapping of atomic number to ChEBI id (as a string).
+
+    Raises:
+        ValueError: If ``classifier_name`` is not one of the two supported names.
+    """
+    from rdkit import Chem
+
+    table = Chem.GetPeriodicTable()
+
+    if classifier_name == "XMolecularEntityClassifier":
+        # Skips hydrogen: ChemLog's atom formalisation has no explicit hydrogens.
+        elements = {table.GetElementName(i).lower(): i for i in range(2, 119)}
+
+        def element_of(name: str) -> Optional[str]:
+            if " molecular entity" not in name:
+                return None
+            element = name.split(" ")[0]
+            return "carbon" if element == "organic" else element
+
+    elif classifier_name == "OrganoXCompoundClassifier":
+        # Skips phosphorus: organophosphorus uses a broader definition upstream.
+        elements = {
+            table.GetElementName(i).lower(): i for i in range(1, 119) if i != 15
+        }
+
+        def element_of(name: str) -> Optional[str]:
+            if not name.startswith("organo") or " compound" not in name:
+                return None
+            return name[len("organo"):].split(" ")[0]
+
+    else:
+        raise ValueError(
+            "classifier_name must be 'XMolecularEntityClassifier' or "
+            f"'OrganoXCompoundClassifier', got {classifier_name!r}"
+        )
+
+    mapping: Dict[int, str] = {}
+    for chebi_id, properties in chebi_graph.nodes.items():
+        name = properties.get("name")
+        if not name:
+            continue
+        element = element_of(name)
+        if element in elements:
+            mapping[elements[element]] = str(chebi_id)
+    return mapping
 
 
 def _load_chebifier():
@@ -266,20 +453,30 @@ class ChebifierClassifier:
 
     @property
     def ensemble(self):
-        """The lazily-constructed, reused ``BaseEnsemble`` instance."""
+        """The lazily-constructed, reused ``BaseEnsemble`` instance.
+
+        Note:
+            The ensemble is built with :attr:`data_dir` as the working directory,
+            because ``chemlog_extra`` resolves its element-class mapping files
+            relative to the working directory (see
+            :func:`ensure_element_class_mappings`). The previous directory is
+            always restored.
+        """
         if self._ensemble is None:
             base_ensemble_cls = _load_chebifier()
             if self.patch_indices:
                 ensure_v244_indices()
+            ensure_element_class_mappings(self.data_dir)
             logger.info(
                 "Loading chebifier ensemble (weights cache: %s). First run "
                 "downloads model weights.",
                 os.environ.get("HF_HOME", "<default>"),
             )
-            if self.model_configs is not None:
-                self._ensemble = base_ensemble_cls(model_configs=self.model_configs)
-            else:
-                self._ensemble = base_ensemble_cls()
+            with contextlib.chdir(self.data_dir):
+                if self.model_configs is not None:
+                    self._ensemble = base_ensemble_cls(model_configs=self.model_configs)
+                else:
+                    self._ensemble = base_ensemble_cls()
         return self._ensemble
 
     def _get_chebi(self):

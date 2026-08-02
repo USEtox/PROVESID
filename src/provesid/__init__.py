@@ -52,13 +52,23 @@ from .resolver import (
 from .utils import check_CASRN
 from .zeropm import ZeroPM
 from .reach import REACHDossierID
-from .search import Search, normalize_structure, strip_salts, OUTPUT_COLUMNS
+from .search import (
+    Search,
+    normalize_structure,
+    strip_salts,
+    resolve_cascade,
+    mw_within,
+    OUTPUT_COLUMNS,
+)
 from .taxonomy import (
     ChebifierClassifier,
     ChebifierError,
     ChebifierMissingError,
     classify_chebifier,
     chebifier_available,
+    default_ensemble_available,
+    missing_ensemble_modules,
     ensure_v244_indices,
+    ensure_element_class_mappings,
     TAXONOMY_COLUMNS,
 )

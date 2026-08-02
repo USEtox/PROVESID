@@ -314,10 +314,122 @@ class ZeroPM:
                         query_ids.append(query_id)
             return query_ids if query_ids else None
     
+    def match_similar_name(self, name, number_of_results=5, score_cutoff=80,
+                           scorer=None):
+        """
+        Fuzzy-match a chemical name and return the matches with their scores.
+
+        Same purpose as :meth:`query_similar_name`, but keeps the matched name
+        and the similarity score instead of discarding them, so callers can tell
+        *what* matched and *how well*.
+
+        Uses ``rapidfuzz.fuzz.ratio`` rather than the ``WRatio`` used by
+        :meth:`query_similar_name`. ``WRatio`` includes a partial-ratio term
+        that scores a short name highly whenever it appears anywhere inside the
+        query, which over a list of millions of chemical names is a reliable
+        source of nonsense: ``WRatio("caffiene", "ne")`` is 90 and
+        ``WRatio("zzzznotachemical", "Mica")`` is also 90, while ``ratio`` puts
+        both at 40 and still scores the genuine typo
+        ``ratio("caffiene", "caffeine")`` at 87.5.
+
+        Parameters
+        ----------
+        name : str
+            Chemical name to search for.
+        number_of_results : int, optional
+            Maximum number of matches to return (default: 5).
+        score_cutoff : int, optional
+            Minimum similarity score, 0-100 (default: 80).
+        scorer : callable, optional
+            A ``rapidfuzz.fuzz`` scorer. Defaults to ``fuzz.ratio``. Pass
+            ``fuzz.token_sort_ratio`` when word order may differ; avoid
+            ``fuzz.WRatio`` for the reason above.
+
+        Returns
+        -------
+        list of tuple
+            ``(matched_name, query_id, score)`` tuples, best first. Empty when
+            nothing scores at or above ``score_cutoff``.
+
+        Examples
+        --------
+        >>> zpm = ZeroPM()
+        >>> name, query_id, score = zpm.match_similar_name("formaldehyd")[0]
+        >>> name, round(score, 1)
+        ('Formaldehyde', 95.7)
+        >>> zpm.match_similar_name("zzzznotachemical")
+        []
+        """
+        names_cache = self._get_chemical_names_cache()
+        query_id_of = {row[0]: row[1] for row in names_cache}
+
+        matches = process.extract(
+            name,
+            list(query_id_of),
+            scorer=scorer or fuzz.ratio,
+            limit=number_of_results,
+            processor=utils.default_process,
+        )
+
+        return [
+            (matched_name, query_id_of[matched_name], score)
+            for matched_name, score, _ in matches
+            if score >= score_cutoff
+        ]
+
+    def get_id_table_from_similar_name(self, name, number_of_results=5, score_cutoff=80):
+        """
+        Returns identifiers for the chemical whose name best fuzzy-matches *name*.
+
+        The fuzzy counterpart of :meth:`get_id_table_from_name`: use it when the
+        name may be misspelled or formatted differently from the database entry.
+        The table is built for the single best-scoring match.
+
+        Parameters
+        ----------
+        name : str
+            Chemical name, possibly misspelled.
+        number_of_results : int, optional
+            How many fuzzy candidates to consider (default: 5). Only the best
+            one is turned into a table.
+        score_cutoff : int, optional
+            Minimum rapidfuzz WRatio score, 0-100 (default: 80).
+
+        Returns
+        -------
+        pandas.DataFrame or None
+            Same columns as :meth:`get_id_table_from_name`, with an extra
+            ``matched_name`` column recording what actually matched, and
+            ``match_score`` holding its similarity. None when nothing scores at
+            or above ``score_cutoff``.
+
+        Examples
+        --------
+        >>> zpm = ZeroPM()
+        >>> df = zpm.get_id_table_from_similar_name("formaldehyd")
+        >>> df[["name", "matched_name", "match_score", "inchikey"]].iloc[0].tolist()
+        ['formaldehyd', 'formaldehyde', 95.6..., 'WSFSSNUMVMOOMR-UHFFFAOYSA-N']
+        """
+        matches = self.match_similar_name(
+            name, number_of_results=number_of_results, score_cutoff=score_cutoff
+        )
+        if not matches:
+            self.logger.debug("No fuzzy name match for '%s' at cutoff %s", name, score_cutoff)
+            return None
+
+        matched_name, query_id, score = matches[0]
+        table = self._id_table_for_query_id(query_id, name)
+        if table is None or table.empty:
+            return None
+
+        table["matched_name"] = matched_name
+        table["match_score"] = score
+        return table
+
     def get_inchi_id(self, query_id):
         """
         Returns all the inchi_id and ranks of a query with a given query_id.
-        
+
         Parameters
         ----------
         query_id : int
@@ -816,7 +928,7 @@ class ZeroPM:
         query_ids = [row[0] for row in self.cursor.fetchall()]
         
         if not query_ids:
-            logging.warning(f"CAS number {cas} not found in database")
+            self.logger.debug("CAS number %s not found in database", cas)
             return None
         
         # Get synonyms for this CAS
@@ -919,7 +1031,7 @@ class ZeroPM:
         result = self.cursor.fetchone()
         
         if not result:
-            logging.warning(f"zeropm_id {zeropm_id} not found in database")
+            self.logger.debug("zeropm_id %s not found in database", zeropm_id)
             return None
         
         inchi_id = result[0]
@@ -1117,7 +1229,7 @@ class ZeroPM:
         result = self.cursor.fetchone()
         
         if not result:
-            logging.warning(f"InChI {inchi} not found in database")
+            self.logger.debug("InChI %s not found in database", inchi)
             return None
         
         inchi_id, inchikey = result
@@ -1265,7 +1377,7 @@ class ZeroPM:
         result = self.cursor.fetchone()
         
         if not result:
-            logging.warning(f"InChIKey {inchikey} not found in database")
+            self.logger.debug("InChIKey %s not found in database", inchikey)
             return None
         
         inchi_id, inchi = result
@@ -1406,11 +1518,34 @@ class ZeroPM:
         """
         # Get query_id for this name
         query_id = self.query_name(name)
-        
+
         if query_id is None:
-            logging.warning(f"Chemical name '{name}' not found in database")
+            self.logger.debug("Chemical name '%s' not found in database", name)
             return None
-        
+
+        return self._id_table_for_query_id(query_id, name)
+
+    def _id_table_for_query_id(self, query_id, name):
+        """
+        Build the identifier table for one already-resolved query_id.
+
+        This is the shared body of :meth:`get_id_table_from_name` and
+        :meth:`get_id_table_from_similar_name`; the only difference between them
+        is how the ``query_id`` was found.
+
+        Parameters
+        ----------
+        query_id : int
+            An ``api_ready_query`` id.
+        name : str
+            Name to record in the ``name`` column of the result.
+
+        Returns
+        -------
+        pandas.DataFrame
+            DataFrame with columns: 'name', 'query_id', 'inchi_id', 'rank',
+            'inchi', 'inchikey', 'cas', 'sources'.
+        """
         # Get sources for this query_id
         self.cursor.execute("""
             SELECT DISTINCT s.source_name
@@ -2448,26 +2583,70 @@ class ZeroPM:
         """
         if cas is None and inchi_id is None:
             raise ValueError("Either cas or inchi_id must be provided")
-        
+
         if inchi_id is None:
-            # Get inchi_id from CAS
-            query_id = self.query_cas(cas)
-            if query_id is None:
+            inchi_id = self._inchi_id_from_cas(cas)
+            if inchi_id is None:
                 return None
-            inchi_ids, _ = self.get_inchi_id(query_id)
-            if not inchi_ids:
-                return None
-            inchi_id = inchi_ids[0]
-        
+
         # Get zeropm_id from inchi_id
         self.cursor.execute("""
-            SELECT zeropm_id 
-            FROM zeropm_chemicals 
+            SELECT zeropm_id
+            FROM zeropm_chemicals
             WHERE inchi_id = ?
         """, (inchi_id,))
         result = self.cursor.fetchone()
         return result[0] if result else None
-    
+
+    def zeropm_id_to_inchi_id(self, zeropm_id):
+        """
+        Get the inchi_id for a zeropm_id — the reverse of :meth:`get_zeropm_id`.
+
+        Parameters
+        ----------
+        zeropm_id : int
+            ZeroPM identifier.
+
+        Returns
+        -------
+        int or None
+            The inchi_id, or None when the zeropm_id is not in the database.
+
+        Examples
+        --------
+        >>> zpm = ZeroPM()
+        >>> zpm.zeropm_id_to_inchi_id(1)
+        6210
+        """
+        self.cursor.execute("""
+            SELECT inchi_id
+            FROM zeropm_chemicals
+            WHERE zeropm_id = ?
+        """, (zeropm_id,))
+        result = self.cursor.fetchone()
+        return result[0] if result else None
+
+    def _inchi_id_from_cas(self, cas):
+        """
+        Resolve a CAS number to its first inchi_id.
+
+        Parameters
+        ----------
+        cas : str
+            CAS Registry Number.
+
+        Returns
+        -------
+        int or None
+            The first inchi_id for the CAS, or None when it is not found.
+        """
+        query_id = self.query_cas(cas)
+        if query_id is None:
+            return None
+        inchi_ids, _ = self.get_inchi_id(query_id)
+        return inchi_ids[0] if inchi_ids else None
+
+
     def get_pm_probabilities(self, cas=None, inchi_id=None, zeropm_id=None):
         """
         Get P/M (Persistent/Mobile) probability data for a chemical.
@@ -2495,18 +2674,41 @@ class ZeroPM:
             - probability_of_vm: Probability of very mobile
             - n: Sample size
             Returns None if not found.
+
+        Raises
+        ------
+        ValueError
+            If none of ``cas``, ``inchi_id`` or ``zeropm_id`` is provided.
+
+        Examples
+        --------
+        >>> zpm = ZeroPM()
+        >>> probs = zpm.get_pm_probabilities(inchi_id=6210)
+        >>> round(probs["probability_of_p"], 3)
+        0.4
+
+        Note
+        ----
+        ``pm_probabilities`` is keyed on ``inchi_id``, so a ``zeropm_id`` is
+        translated first via :meth:`zeropm_id_to_inchi_id`.
         """
-        if zeropm_id is None:
-            zeropm_id = self.get_zeropm_id(cas=cas, inchi_id=inchi_id)
-            if zeropm_id is None:
+        if cas is None and inchi_id is None and zeropm_id is None:
+            raise ValueError("One of cas, inchi_id or zeropm_id must be provided")
+
+        if inchi_id is None:
+            if zeropm_id is not None:
+                inchi_id = self.zeropm_id_to_inchi_id(zeropm_id)
+            else:
+                inchi_id = self._inchi_id_from_cas(cas)
+            if inchi_id is None:
                 return None
-        
+
         self.cursor.execute("""
             SELECT probability_of_not_p, probability_of_p_or_vp, probability_of_p, probability_of_vp,
                    probability_of_not_m, probability_of_m_or_vm, probability_of_m, probability_of_vm, n
             FROM pm_probabilities
-            WHERE zeropm_id = ?
-        """, (zeropm_id,))
+            WHERE inchi_id = ?
+        """, (inchi_id,))
         result = self.cursor.fetchone()
         
         if not result:
@@ -2797,7 +2999,7 @@ class ZeroPM:
                        pm.probability_of_m, pm.probability_of_vm, pm.n
                 FROM zeropm_chemicals zc
                 JOIN substances s ON zc.inchi_id = s.inchi_id
-                LEFT JOIN pm_probabilities pm ON zc.zeropm_id = pm.zeropm_id
+                LEFT JOIN pm_probabilities pm ON zc.inchi_id = pm.inchi_id
             """
             columns = ['zeropm_id', 'inchi_id', 'inchi', 'inchikey',
                       'probability_of_not_p', 'probability_of_p_or_vp',
@@ -2893,7 +3095,7 @@ class ZeroPM:
                    pm.probability_of_m, pm.probability_of_vm, pm.n
             FROM zeropm_chemicals zc
             JOIN substances s ON zc.inchi_id = s.inchi_id
-            LEFT JOIN pm_probabilities pm ON zc.zeropm_id = pm.zeropm_id
+            LEFT JOIN pm_probabilities pm ON zc.inchi_id = pm.inchi_id
             WHERE zc.inchi_id IN ({placeholders})
         """
         

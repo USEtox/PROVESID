@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-08-02
 
 ### Added
 - **`Search.enrich(df, column)`** — attach resolved identifier columns to a
@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ZeroPM.match_similar_name()` and `ZeroPM.get_id_table_from_similar_name()` —
   fuzzy name matching that reports *what* matched and *how well*, instead of
   discarding it.
+- `ZeroPM.zeropm_id_to_inchi_id()` — the reverse of `get_zeropm_id`.
+- `taxonomy.ensure_element_class_mappings()`, `default_ensemble_available()` and
+  `missing_ensemble_modules()`. The last two report on the *whole* default
+  ensemble (transformer, graph, rule-based and c3p models each live in a separate
+  package), so a partial install can be detected up front instead of failing with
+  a bare `ModuleNotFoundError` at predict time.
 
 ### Fixed
 - **`Search` resolved misspelled names to unrelated compounds and labelled them
@@ -65,15 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (skipping unnamed nodes), and the ensemble is now constructed with that
   directory as the working directory.
 
-### Added (continued)
-- `ZeroPM.zeropm_id_to_inchi_id()` — the reverse of `get_zeropm_id`.
-- `taxonomy.ensure_element_class_mappings()`, `default_ensemble_available()` and
-  `missing_ensemble_modules()`. The last two report on the *whole* default
-  ensemble (transformer, graph, rule-based and c3p models each live in a separate
-  package), so a partial install can be detected up front instead of failing with
-  a bare `ModuleNotFoundError` at predict time.
-
-### Fixed (tests)
+### Fixed — tests
 - `test_pubchem_id.py::test_init_nonexistent_path` omitted `auto_download=False`,
   so instead of asserting `FileNotFoundError` it **downloaded the ~2.3 GB
   database into the repository root** on every run. It now passes the flag and
@@ -97,7 +95,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (one source scores 1.0; two fully disagreeing sources score 0.5), so 0.0 is
   correct and the test encoded the un-special-cased formula. Replaced with tests
   for both the zero and the partial-agreement cases.
-### Removed (tests)
+
+### Removed — tests
 - The end-to-end chebifier classification tests (`TestLiveClassification`).
   chebifier stays an optional extra, and its full model stack (transformer,
   graph/GNN, rule-based and c3p models — separate packages, some git-only) is

@@ -43,11 +43,19 @@ class TestPubChemIDInitialization:
         db = PubChemID(db_path=db_path)
         assert db.db_path == db_path
     
-    def test_init_nonexistent_path(self):
-        """Test initialization with non-existent database path."""
+    def test_init_nonexistent_path(self, tmp_path):
+        """A missing database with auto_download off raises FileNotFoundError.
+
+        ``auto_download=False`` is essential: it defaults to True, so without it
+        this call downloads the whole ~2.3 GB database to the given path instead
+        of raising. ``tmp_path`` keeps any such accident out of the repository.
+        """
         from provesid import PubChemID
+
+        missing = tmp_path / "nonexistent.db"
         with pytest.raises(FileNotFoundError):
-            PubChemID(db_path='nonexistent.db')
+            PubChemID(db_path=str(missing), auto_download=False)
+        assert not missing.exists()
     
     def test_get_stats(self, pubchem_id):
         """Test database statistics."""

@@ -173,3 +173,128 @@ def test_name_resolution_has_zero_wrong_hits(comptox, synonym_sample):
         f"{len(wrong_hits)} wrong hit(s) out of {len(synonym_sample)} "
         f"(correct={correct}, not_found={not_found}). Examples: {wrong_hits[:5]}"
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Misspelled-name regression
+#
+# A typo used to resolve to an unrelated compound, labelled as an *exact* match:
+#
+#   Search("name", fuzzy=True).search("asprin")
+#     -> PHENYRAMIDOL, match_method="exact_name", confidence=0.74
+#
+# Three defects combined to produce that:
+#   1. CheMBL.search_by_name had no exact mode, so Search's exact pass got a
+#      substring match -- PHENYRAMIDOL carries the synonym "Evasprin", which
+#      contains "asprin" -- and tagged it "exact_name".
+#   2. The "is the exact pass strong?" test used a fuzzy score, and
+#      WRatio("asprin", "Evasprin") == 85.7 cleared the 80 cut-off, so the fuzzy
+#      widening that would have found aspirin never ran.
+#   3. A fuzzy match's confidence base was the raw similarity (up to 1.0) while
+#      an exact name match was pinned at 0.80, so a typo could outrank the
+#      correctly spelled name.
+# ─────────────────────────────────────────────────────────────────────────────
+
+ASPIRIN_SKELETON = "BSYNRYMUTXBXSQ"
+CAFFEINE_SKELETON = "RYYVLZVUVIJVGH"
+
+# (query, expected skeleton) -- common misspellings of well-known compounds.
+MISSPELLINGS = [
+    ("asprin", ASPIRIN_SKELETON),
+    ("caffiene", CAFFEINE_SKELETON),
+]
+
+
+@pytest.fixture(scope="module")
+def all_sources_available():
+    """Skip unless every offline source Search needs is present."""
+    s = Search("name", fuzzy=True, show_progress=False)
+    s._ensure_clients()
+    missing = [
+        key
+        for key, client in [
+            ("chebi", s._chebi),
+            ("comptox", s._comptox),
+            ("pubchem", s._pubchem),
+            ("zeropm", s._zeropm),
+            ("chembl", s._chembl),
+        ]
+        if client is None
+    ]
+    if missing:  # pragma: no cover - environment dependent
+        pytest.skip(f"Offline sources unavailable: {', '.join(missing)}")
+    return True
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize("query,expected_skeleton", MISSPELLINGS)
+def test_misspelled_name_resolves_to_the_right_compound(
+    all_sources_available, query, expected_skeleton
+):
+    """A misspelled name must resolve to the intended compound, or to nothing."""
+    row = Search("name", fuzzy=True, show_progress=False).search(query).iloc[0]
+
+    got = row["InChIKey"]
+    assert isinstance(got, str), f"{query!r} resolved to nothing"
+    assert _skeleton(got) == expected_skeleton, (
+        f"{query!r} resolved to {row['name']!r} ({got}), "
+        f"expected skeleton {expected_skeleton}"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize("query,_expected", MISSPELLINGS)
+def test_misspelling_is_not_labelled_an_exact_match(
+    all_sources_available, query, _expected
+):
+    """A typo must never be reported as ``exact_name``."""
+    row = Search("name", fuzzy=True, show_progress=False).search(query).iloc[0]
+    assert row["match_method"] != "exact_name", (
+        f"{query!r} was labelled an exact name match "
+        f"(resolved to {row['name']!r})"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_misspelling_scores_below_correct_spelling(all_sources_available):
+    """The correctly spelled name must be the more confident of the two."""
+    s = Search("name", fuzzy=True, show_progress=False)
+    res = s.search(["asprin", "aspirin"]).set_index("query")
+
+    typo, correct = res.loc["asprin"], res.loc["aspirin"]
+    assert _skeleton(typo["InChIKey"]) == _skeleton(correct["InChIKey"])
+    assert typo["confidence"] < correct["confidence"], (
+        f"typo confidence {typo['confidence']} >= "
+        f"correct-spelling confidence {correct['confidence']}"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_nonsense_name_resolves_to_nothing(all_sources_available):
+    """A string that is not a chemical name must not match anything.
+
+    Guards the fuzzy *retrieval* scorer: rapidfuzz ``WRatio`` scores a short
+    candidate name highly whenever it appears inside the query, so
+    ``"zzzznotachemical"`` matched "Mica" and ``"caffiene"`` matched a compound
+    named "ne". ``ratio`` puts both at 40.
+    """
+    row = Search("name", fuzzy=True, show_progress=False).search(
+        "zzzznotachemical"
+    ).iloc[0]
+    assert not isinstance(row["InChIKey"], str), (
+        f"nonsense query matched {row['name']!r} ({row['InChIKey']})"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_typo_needs_fuzzy_enabled(all_sources_available):
+    """Without ``fuzzy=True`` a typo must return nothing, not a guess."""
+    row = Search("name", show_progress=False).search("asprin").iloc[0]
+    assert not isinstance(row["InChIKey"], str), (
+        f"non-fuzzy search matched {row['name']!r} for a misspelling"
+    )

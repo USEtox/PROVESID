@@ -161,6 +161,28 @@ class TestChEMBLSearch:
         """Test search result limiting"""
         results = chembl.search_by_name('a', limit=10)
         assert len(results) <= 10
+
+    def test_search_by_name_exact_finds_the_compound(self, chembl):
+        """exact=True still finds a compound by its real name."""
+        results = chembl.search_by_name('aspirin', exact=True)
+        assert 'CHEMBL25' in [r['chembl_id'] for r in results]
+
+    def test_search_by_name_exact_rejects_substring_matches(self, chembl):
+        """exact=True must not match a name merely *contained* in a synonym.
+
+        Regression: PHENYRAMIDOL has the synonym 'Evasprin', so the substring
+        search matches the misspelling 'asprin'. Search's exact pass relied on
+        this method and tagged the result 'exact_name'.
+        """
+        assert chembl.search_by_name('asprin') != []       # substring: matches
+        assert chembl.search_by_name('asprin', exact=True) == []
+
+    def test_search_by_name_exact_is_case_insensitive(self, chembl):
+        """exact=True compares case-insensitively, like the substring mode."""
+        lower = chembl.search_by_name('aspirin', exact=True)
+        upper = chembl.search_by_name('ASPIRIN', exact=True)
+        assert lower != []
+        assert len(lower) == len(upper)
     
     def test_search_by_inchikey(self, chembl):
         """Test searching by InChI Key"""

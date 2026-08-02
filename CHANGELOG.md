@@ -5,6 +5,126 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`Search.enrich(df, column)`** — attach resolved identifier columns to a
+  DataFrame, searching each *distinct* value once and broadcasting the result to
+  every row that carries it. Row order and index are preserved; added columns are
+  namespaced with a configurable `prefix` (default `provesid_`).
+- **`resolve_cascade(df, stages, ...)`** — resolve rows through an ordered list of
+  `Search` stages, passing each stage only the rows still unresolved, so every row
+  is resolved by the most reliable identifier it actually has. Records
+  `resolved_by` and `validated_by` per row, with an optional RDKit fallback that
+  derives identifiers from the row's own structure.
+- **`mw_within(tolerance, reference_column=...)`** — validator factory for
+  `resolve_cascade`'s `accept` argument: accepts a hit only when its molecular
+  weight agrees with the structure the dataset already carried, and reports any
+  additional SMILES/name agreement. This is what stops a confident-but-wrong
+  identifier match from ending a cascade.
+- `CheMBL.search_by_name(..., exact=True)` for exact (case-insensitive) name and
+  synonym matching.
+- `ZeroPM.match_similar_name()` and `ZeroPM.get_id_table_from_similar_name()` —
+  fuzzy name matching that reports *what* matched and *how well*, instead of
+  discarding it.
+
+### Fixed
+- **`Search` resolved misspelled names to unrelated compounds and labelled them
+  exact matches.** `Search("name", fuzzy=True).search("asprin")` returned
+  PHENYRAMIDOL with `match_method="exact_name"`. Three defects combined:
+  - `CheMBL.search_by_name` had no exact mode, so `Search`'s exact pass received a
+    substring match — PHENYRAMIDOL carries the synonym `"Evasprin"`, which
+    contains `"asprin"` — and tagged it `exact_name`.
+  - The "did the exact pass find a strong match?" test used a fuzzy score, and
+    `WRatio("asprin", "Evasprin")` is 85.7, clearing the cut-off. That suppressed
+    the fuzzy widening which would have found aspirin. The test now requires an
+    actual (case- and whitespace-insensitive) name equality.
+  - A fuzzy match's confidence base was the raw similarity (up to 1.0) while an
+    exact name match was pinned at 0.80, so **a typo could score higher than the
+    correct spelling**. The fuzzy base is now scaled by the exact-name base, so an
+    approximate match can never outrank an exact one.
+- `Search`'s ZeroPM fuzzy branch was dead code: it acted only on a `DataFrame`,
+  but `query_similar_name` returns a list of ids, so ZeroPM — the only source
+  doing true fuzzy *retrieval* — never contributed to fuzzy name search.
+- ChEMBL was queried in `Search`'s exact name pass but omitted from the fuzzy
+  widening pass; it now participates in both.
+- **`ZeroPM.get_pm_probabilities`, `batch_get_pm_probabilities` and
+  `get_all_zeropm_chemicals` could never return P/M probability data.** All three
+  keyed `pm_probabilities` on `zeropm_id`, but that table is keyed on `inchi_id`,
+  so every call raised `sqlite3.OperationalError: no such column: zeropm_id`.
+  `get_pm_probabilities` now translates a `zeropm_id` via the new
+  `zeropm_id_to_inchi_id`, and the two joins use `inchi_id`.
+- **`ChebifierClassifier` could not build the default ensemble at all.**
+  `chemlog_extra` reads its element-class mapping files from a *working-directory
+  relative* path and rebuilds them from the ChEBI graph when absent — but that
+  rebuild crashes, because 288 of the graph's 205k nodes carry `name: None` and
+  the builder does `" molecular entity" in properties["name"]`. Every
+  `classify()` call failed with `TypeError: argument of type 'NoneType' is not
+  iterable`. The new `ensure_element_class_mappings` writes both files into the
+  PROVESID chebifier data directory using upstream's own derivation rules
+  (skipping unnamed nodes), and the ensemble is now constructed with that
+  directory as the working directory.
+
+### Added (continued)
+- `ZeroPM.zeropm_id_to_inchi_id()` — the reverse of `get_zeropm_id`.
+- `taxonomy.ensure_element_class_mappings()`, `default_ensemble_available()` and
+  `missing_ensemble_modules()`. The last two report on the *whole* default
+  ensemble (transformer, graph, rule-based and c3p models each live in a separate
+  package), so a partial install can be detected up front instead of failing with
+  a bare `ModuleNotFoundError` at predict time.
+
+### Fixed (tests)
+- `test_pubchem_id.py::test_init_nonexistent_path` omitted `auto_download=False`,
+  so instead of asserting `FileNotFoundError` it **downloaded the ~2.3 GB
+  database into the repository root** on every run. It now passes the flag and
+  uses `tmp_path`.
+- `test_zeropm.py::test_get_cas_from_name_integration` asserted a
+  name → CAS → same-CAS round trip that the data model does not support (names
+  are many-to-many with CAS numbers), and its fallback clause compared a CAS
+  against a list of *names*, so it could never hold. It passed only because its
+  `SELECT ... LIMIT 1` had no `ORDER BY`: creating indexes — which another test in
+  the file does to the shared database — changed which row came back and broke
+  it. Replaced with a deterministic test of the guarantee that does hold.
+- The three P/M probability tests repeated the same wrong join key in their own
+  SQL, and their `else: pytest.skip(...)` branches turned the resulting error
+  into a silent skip — which is how the production bug survived. They now assert
+  that the fixture query found data, and check the returned values against the
+  database so a wrong join cannot pass again.
+- `test_zeropm.py` asserted `dtype == object` for string columns; pandas 3 gives
+  `StringDtype`. Now uses `pandas.api.types.is_string_dtype`.
+- `test_search.py::test_exact_inchikey_with_low_consensus` expected 0.5 for a
+  zero consensus score. Zero consensus only occurs when no source matched at all
+  (one source scores 1.0; two fully disagreeing sources score 0.5), so 0.0 is
+  correct and the test encoded the un-special-cased formula. Replaced with tests
+  for both the zero and the partial-agreement cases.
+### Removed (tests)
+- The end-to-end chebifier classification tests (`TestLiveClassification`).
+  chebifier stays an optional extra, and its full model stack (transformer,
+  graph/GNN, rule-based and c3p models — separate packages, some git-only) is
+  awkward enough to install that the test suite should not depend on it. The
+  remaining `test_taxonomy.py` tests all pass with the extra absent, verified by
+  running them with the stack made unimportable. The now-unused `chebifier`
+  pytest marker was dropped from `pyproject.toml`.
+
+### Changed
+- **`Search`'s default `fuzzy_scorer` is now `"ratio"`, was `"WRatio"`.** `WRatio`
+  includes a partial-ratio term that scores a short name highly whenever it
+  appears anywhere inside the query, which makes `fuzzy_score_cutoff` stop
+  discriminating: `WRatio("caffiene", "ne")` and
+  `WRatio("zzzznotachemical", "Mica")` are both 90, while `ratio` puts both at 40
+  and still scores the genuine typo `ratio("caffiene", "caffeine")` at 87.5. Pass
+  `fuzzy_scorer="WRatio"` to restore the old behaviour.
+  Confidence values for `fuzzy_name` matches change as a result.
+- `ZeroPM` "not found in database" messages moved from `WARNING` to `DEBUG` and
+  onto the instance logger. They fired on the root logger during successful
+  `Search` runs.
+
+### Removed
+- GitHub Actions workflows for running tests (`test.yml`,
+  `test-with-api-keys.yml`) and for releasing (`release.yml`). Tests are run
+  locally; releases are made manually with `twine`. Only the documentation
+  deploy workflow remains.
+
 ## [0.3.0] - 2026-04-16
 
 ### Added

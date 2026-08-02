@@ -134,8 +134,20 @@ class _ZeroPMStub:
     def get_cas_from_formula(self, formula):
         return self._cas_list
 
-    def query_similar_name(self, name):
+    def query_similar_name(self, name, number_of_results=5, score_cutoff=80):
         return self._table
+
+    def match_similar_name(self, name, number_of_results=5, score_cutoff=80, scorer=None):
+        return []
+
+    def get_id_table_from_similar_name(self, name, number_of_results=5, score_cutoff=80):
+        """Mimic the real method, which annotates the table with what matched."""
+        if self._table.empty:
+            return None
+        table = self._table.copy()
+        table["matched_name"] = name
+        table["match_score"] = 100.0
+        return table
 
 
 class _ChEMBLStub:
@@ -148,7 +160,7 @@ class _ChEMBLStub:
     def search_by_smiles(self, smiles):
         return self._compound
 
-    def search_by_name(self, name, limit=100):
+    def search_by_name(self, name, limit=100, exact=False):
         return [self._compound] if self._compound else []
 
     def search_by_inchikey(self, ik):
@@ -838,9 +850,26 @@ class TestConfidenceScoring:
         c = self._search_with_method("exact_inchikey", consensus=1.0)
         assert c == 1.0
 
-    def test_exact_inchikey_with_low_consensus(self):
-        c = self._search_with_method("exact_inchikey", consensus=0.0)
-        assert c == pytest.approx(0.5)
+    def test_zero_consensus_gives_zero_confidence(self):
+        """Zero consensus means no source matched at all, so confidence is 0.
+
+        ``_compute_consensus`` only returns 0.0 when there are no candidates —
+        a single source scores 1.0 and even two fully disagreeing sources score
+        0.5 — so this is the no-match case and must not be reported as a
+        half-confident hit. (This test previously expected 0.5, the value the
+        confidence formula gives if the no-candidates case is not special-cased.)
+        """
+        for method in ("exact_inchikey", "exact_cas", "exact_name", "formula"):
+            assert self._search_with_method(method, consensus=0.0) == 0.0
+
+    def test_low_but_nonzero_consensus_reduces_confidence(self):
+        """Partial cross-source agreement scales the confidence down, not to 0."""
+        c_full = self._search_with_method("exact_inchikey", consensus=1.0)
+        c_half = self._search_with_method("exact_inchikey", consensus=0.5)
+
+        assert c_full == pytest.approx(1.0)
+        assert c_half == pytest.approx(0.75)   # 1.0 * (0.5 + 0.5 * 0.5)
+        assert 0.0 < c_half < c_full
 
     def test_exact_cas_confidence(self):
         c = self._search_with_method("exact_cas", consensus=1.0)
@@ -851,12 +880,31 @@ class TestConfidenceScoring:
         assert c == pytest.approx(0.3)
 
     def test_fuzzy_name_uses_fuzzy_score(self):
+        # The fuzzy similarity is scaled by the exact_name base (0.80), so a
+        # fuzzy match can never outrank an exact one.
         c = self._search_with_method("fuzzy_name", consensus=1.0, fuzzy_score=0.8)
-        assert c == pytest.approx(0.8)
+        assert c == pytest.approx(0.8 * 0.8)
 
     def test_fuzzy_name_low_score(self):
         c = self._search_with_method("fuzzy_name", consensus=1.0, fuzzy_score=0.2)
-        assert c == pytest.approx(0.2)
+        assert c == pytest.approx(0.2 * 0.8)
+
+    def test_perfect_fuzzy_never_beats_exact_name(self):
+        """A fuzzy name match is capped at the value of an exact name match.
+
+        Regression: a typo used to score *higher* than the correct spelling,
+        because the raw rapidfuzz similarity (up to 1.0) was used as the base
+        while an exact name match was pinned at 0.80.
+        """
+        exact = self._search_with_method("exact_name", consensus=1.0)
+        perfect_fuzzy = self._search_with_method(
+            "fuzzy_name", consensus=1.0, fuzzy_score=1.0
+        )
+        assert perfect_fuzzy == pytest.approx(exact)
+        for score in (0.99, 0.9, 0.85, 0.8):
+            assert self._search_with_method(
+                "fuzzy_name", consensus=1.0, fuzzy_score=score
+            ) < exact
 
     def test_tanimoto_scaled(self):
         c = self._search_with_method("tanimoto", consensus=1.0, tanimoto=1.0)

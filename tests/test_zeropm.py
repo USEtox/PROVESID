@@ -442,10 +442,12 @@ class TestZeroPMCASMethods:
         # Check that we have at least one row
         assert len(df) > 0
         
-        # Check data types
-        assert df['cas'].dtype == object  # string
-        assert df['inchi'].dtype == object  # string
-        assert df['inchikey'].dtype == object  # string
+        # Check data types. Test for "holds strings" rather than for a specific
+        # dtype: pandas < 3 gives these columns `object`, pandas >= 3 gives
+        # `StringDtype`, and both are correct here.
+        assert pd.api.types.is_string_dtype(df['cas'])
+        assert pd.api.types.is_string_dtype(df['inchi'])
+        assert pd.api.types.is_string_dtype(df['inchikey'])
         
         # Check that InChI and InChIKey are not None for rows with inchi_id
         rows_with_inchi = df[df['inchi_id'].notna()]
@@ -1572,42 +1574,54 @@ class TestZeroPMCASConversionMethods:
         assert isinstance(results, dict)
         assert len(results) == 0
     
-    def test_get_cas_from_name_integration(self, zpm):
-        """Integration test: name -> CAS -> back to name"""
-        # Get a CAS number with known names
+    def test_get_cas_from_name_returns_valid_cas_numbers(self, zpm):
+        """Every CAS returned for a known name is itself a CAS in the database.
+
+        This used to assert a name -> CAS -> same-CAS round trip, which the data
+        model does not support: names are many-to-many with CAS numbers, so a
+        name listed under one CAS often resolves to its own. For example
+        ``get_names("121-20-0")`` includes ``"Jasmolin II"``, and
+        ``get_cas_from_name("Jasmolin II")`` correctly returns ``"1172-63-0"``.
+        Sampling 25 CAS numbers, even the weaker "at least one of its names maps
+        back" only holds for 23. The old test passed only because its
+        ``SELECT ... LIMIT 1`` had no ``ORDER BY``, so which CAS it picked
+        depended on the query plan -- and creating indexes (another test in this
+        file does) changed the answer and broke it.
+
+        What is actually guaranteed, and is tested here, is that the lookup is
+        well-formed: a name known to the database resolves to CAS numbers that
+        exist in the database.
+        """
+        # ORDER BY makes the sample deterministic regardless of the query plan.
         zpm.cursor.execute("""
-            SELECT query 
-            FROM api_ready_query 
+            SELECT query
+            FROM api_ready_query
             WHERE type = 'CAS Registry Number'
-            LIMIT 1
+            ORDER BY query_id
+            LIMIT 5
         """)
-        result = zpm.cursor.fetchone()
-        
-        if result:
-            original_cas = result[0]
-            # Get names for this CAS
-            names = zpm.get_names(original_cas)
-            
-            if names:
-                # Try to get CAS back from the first name
-                first_name = names[0]
-                
-                # First check if this name exists as a query
-                query_id = zpm.query_name(first_name)
-                if query_id:
-                    retrieved_cas = zpm.get_cas_from_name(first_name)
-                    
-                    # The retrieved CAS should either be the original or in a list containing it
-                    if isinstance(retrieved_cas, str):
-                        assert retrieved_cas == original_cas or original_cas in names
-                    elif isinstance(retrieved_cas, list):
-                        assert original_cas in retrieved_cas or any(cas in names for cas in retrieved_cas)
-                else:
-                    pytest.skip(f"Name '{first_name}' not found as a query in database")
-            else:
-                pytest.skip("No names found for CAS")
-        else:
-            pytest.skip("No CAS numbers found in database")
+        cas_numbers = [row[0] for row in zpm.cursor.fetchall()]
+        assert cas_numbers, "No CAS numbers found in database"
+
+        checked = 0
+        for cas in cas_numbers:
+            for name in zpm.get_names(cas) or []:
+                if zpm.query_name(name) is None:
+                    continue          # name is not itself a queryable entry
+                retrieved = zpm.get_cas_from_name(name)
+                if retrieved is None:
+                    continue
+                found = [retrieved] if isinstance(retrieved, str) else retrieved
+                for value in found:
+                    assert isinstance(value, str) and value
+                    # A returned CAS must be resolvable in the database.
+                    assert zpm.query_cas(value) is not None, (
+                        f"get_cas_from_name({name!r}) returned {value!r}, "
+                        f"which is not a CAS in the database"
+                    )
+                    checked += 1
+
+        assert checked > 0, "No name resolved to a CAS; the lookup did nothing"
 
 
 class TestZeroPMv004Features:
@@ -1689,93 +1703,135 @@ class TestZeroPMv004Features:
     
     # ==================== P/M Probability Tests ====================
     
-    def test_get_pm_probabilities(self, zpm):
-        """Test getting P/M probabilities"""
-        # Find a chemical with PM probabilities
+    # NOTE: `pm_probabilities` is keyed on `inchi_id`, not `zeropm_id`. Queries
+    # here used the wrong key and raised OperationalError, which the old
+    # `else: pytest.skip(...)` branches turned into a silent skip -- which is how
+    # the same bug survived in `get_pm_probabilities`,
+    # `batch_get_pm_probabilities` and `get_all_zeropm_chemicals`. These tests
+    # now assert that the fixture query found data instead of skipping.
+
+    PM_KEYS = [
+        'probability_of_not_p', 'probability_of_p_or_vp',
+        'probability_of_p', 'probability_of_vp',
+        'probability_of_not_m', 'probability_of_m_or_vm',
+        'probability_of_m', 'probability_of_vm', 'n',
+    ]
+
+    def _pm_sample(self, zpm, limit=1):
+        """Rows of (zeropm_id, inchi_id) that actually have P/M probabilities."""
         zpm.cursor.execute("""
-            SELECT zeropm_id 
-            FROM pm_probabilities 
-            LIMIT 1
-        """)
-        result = zpm.cursor.fetchone()
-        
-        if result:
-            zeropm_id = result[0]
-            probs = zpm.get_pm_probabilities(zeropm_id=zeropm_id)
-            
-            assert probs is not None
-            assert isinstance(probs, dict)
-            
-            # Check all expected keys
-            expected_keys = [
-                'probability_of_not_p', 'probability_of_p_or_vp',
-                'probability_of_p', 'probability_of_vp',
-                'probability_of_not_m', 'probability_of_m_or_vm',
-                'probability_of_m', 'probability_of_vm', 'n'
-            ]
-            for key in expected_keys:
-                assert key in probs
-                # n should be an integer, others should be numeric or None
-                if key == 'n':
-                    assert isinstance(probs[key], (int, type(None)))
-                else:
-                    assert isinstance(probs[key], (int, float, type(None)))
-        else:
-            pytest.skip("No P/M probabilities found in database")
-    
+            SELECT zc.zeropm_id, zc.inchi_id
+            FROM zeropm_chemicals zc
+            JOIN pm_probabilities pm ON zc.inchi_id = pm.inchi_id
+            LIMIT ?
+        """, (limit,))
+        rows = zpm.cursor.fetchall()
+        assert rows, (
+            "No chemical in zeropm_chemicals has P/M probabilities. Either the "
+            "database is not the expected v0-0-4 build or the join key is wrong."
+        )
+        return rows
+
+    def test_get_pm_probabilities_by_zeropm_id(self, zpm):
+        """P/M probabilities are reachable via a zeropm_id."""
+        zeropm_id, _ = self._pm_sample(zpm)[0]
+        probs = zpm.get_pm_probabilities(zeropm_id=zeropm_id)
+
+        assert isinstance(probs, dict)
+        for key in self.PM_KEYS:
+            assert key in probs
+            assert isinstance(probs[key], (int, float, type(None)))
+
+    def test_get_pm_probabilities_by_inchi_id(self, zpm):
+        """P/M probabilities are reachable via an inchi_id, the table's own key."""
+        _, inchi_id = self._pm_sample(zpm)[0]
+        probs = zpm.get_pm_probabilities(inchi_id=inchi_id)
+
+        assert isinstance(probs, dict)
+        assert all(key in probs for key in self.PM_KEYS)
+
+    def test_get_pm_probabilities_agrees_with_the_database(self, zpm):
+        """The returned values are the row the database holds.
+
+        Guards against a wrong join silently returning another chemical's data.
+        """
+        zeropm_id, inchi_id = self._pm_sample(zpm)[0]
+        zpm.cursor.execute(
+            "SELECT probability_of_p, probability_of_m, n FROM pm_probabilities "
+            "WHERE inchi_id = ?",
+            (inchi_id,),
+        )
+        expected_p, expected_m, expected_n = zpm.cursor.fetchone()
+
+        probs = zpm.get_pm_probabilities(zeropm_id=zeropm_id)
+
+        assert probs['probability_of_p'] == expected_p
+        assert probs['probability_of_m'] == expected_m
+        assert probs['n'] == expected_n
+
+    def test_get_pm_probabilities_both_id_routes_agree(self, zpm):
+        """Looking up by zeropm_id and by inchi_id gives the same answer."""
+        zeropm_id, inchi_id = self._pm_sample(zpm)[0]
+        assert zpm.get_pm_probabilities(zeropm_id=zeropm_id) == \
+               zpm.get_pm_probabilities(inchi_id=inchi_id)
+
     def test_get_pm_probabilities_not_found(self, zpm):
         """Test getting P/M probabilities for non-existent zeropm_id"""
         probs = zpm.get_pm_probabilities(zeropm_id=999999999)
         assert probs is None
-    
+
+    def test_get_pm_probabilities_requires_an_identifier(self, zpm):
+        """Calling with no identifier at all is an error, not a silent None."""
+        with pytest.raises(ValueError):
+            zpm.get_pm_probabilities()
+
+    def test_zeropm_id_to_inchi_id_round_trips(self, zpm):
+        """zeropm_id_to_inchi_id is the inverse of get_zeropm_id."""
+        zeropm_id, inchi_id = self._pm_sample(zpm)[0]
+        assert zpm.zeropm_id_to_inchi_id(zeropm_id) == inchi_id
+        assert zpm.get_zeropm_id(inchi_id=inchi_id) == zeropm_id
+
+    def test_zeropm_id_to_inchi_id_unknown_id(self, zpm):
+        assert zpm.zeropm_id_to_inchi_id(999999999) is None
+
     def test_batch_get_pm_probabilities_with_cas(self, zpm):
         """Test batch getting P/M probabilities from CAS list"""
         # Find CAS numbers with PM data
         zpm.cursor.execute("""
-            SELECT DISTINCT aq.query 
+            SELECT DISTINCT aq.query
             FROM api_ready_query aq
             JOIN api_results ar ON aq.query_id = ar.query_id
             JOIN zeropm_chemicals zc ON ar.inchi_id = zc.inchi_id
-            JOIN pm_probabilities pm ON zc.zeropm_id = pm.zeropm_id
+            JOIN pm_probabilities pm ON zc.inchi_id = pm.inchi_id
             WHERE aq.type = 'CAS Registry Number'
             LIMIT 3
         """)
         results = zpm.cursor.fetchall()
-        
-        if results:
-            cas_list = [row[0] for row in results]
-            df = zpm.batch_get_pm_probabilities(cas_list=cas_list)
-            
-            assert df is not None
-            assert not df.empty
-            assert 'cas' in df.columns
-            assert 'probability_of_p' in df.columns
-            assert 'probability_of_m' in df.columns
-            assert len(df) > 0
-        else:
-            pytest.skip("No CAS with P/M probabilities found")
-    
+        assert results, "No CAS number in the database has P/M probabilities."
+
+        cas_list = [row[0] for row in results]
+        df = zpm.batch_get_pm_probabilities(cas_list=cas_list)
+
+        assert not df.empty
+        assert 'cas' in df.columns
+        assert 'probability_of_p' in df.columns
+        assert 'probability_of_m' in df.columns
+        # The join must actually populate the probabilities, not just the columns.
+        assert df['probability_of_p'].notna().any()
+
     def test_batch_get_pm_probabilities_with_inchi_ids(self, zpm):
         """Test batch getting P/M probabilities from inchi_id list"""
-        zpm.cursor.execute("""
-            SELECT zc.inchi_id 
-            FROM zeropm_chemicals zc
-            JOIN pm_probabilities pm ON zc.zeropm_id = pm.zeropm_id
-            LIMIT 3
-        """)
-        results = zpm.cursor.fetchall()
-        
-        if results:
-            inchi_id_list = [row[0] for row in results]
-            df = zpm.batch_get_pm_probabilities(inchi_id_list=inchi_id_list)
-            
-            assert df is not None
-            assert not df.empty
-            assert 'inchi_id' in df.columns
-            assert len(df) > 0
-        else:
-            pytest.skip("No inchi_ids with P/M probabilities found")
-    
+        rows = self._pm_sample(zpm, limit=3)
+        inchi_id_list = [inchi_id for _, inchi_id in rows]
+
+        df = zpm.batch_get_pm_probabilities(inchi_id_list=inchi_id_list)
+
+        assert not df.empty
+        assert 'inchi_id' in df.columns
+        assert sorted(df['inchi_id'].tolist()) == sorted(inchi_id_list)
+        assert df['probability_of_p'].notna().all()
+
+
     def test_get_all_zeropm_chemicals(self, zpm):
         """Test getting all ZeroPM chemicals"""
         df = zpm.get_all_zeropm_chemicals(limit=10)

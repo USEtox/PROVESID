@@ -371,44 +371,71 @@ class CheMBL:
             return None
         return self.get_compound(molregno)
     
-    def search_by_name(self, name: str, limit: int = 100) -> List[Dict[str, Any]]:
+    def search_by_name(
+        self, name: str, limit: int = 100, exact: bool = False
+    ) -> List[Dict[str, Any]]:
         """
-        Search for compounds by name (case-insensitive partial match).
-        
+        Search for compounds by name, case-insensitively.
+
         Searches both preferred names and synonyms.
-        
+
         Parameters
         ----------
         name : str
-            Compound name or partial name to search
+            Compound name, or partial name when ``exact`` is False.
         limit : int, optional
             Maximum number of results (default: 100)
-        
+        exact : bool, optional
+            If True, the name must equal a preferred name or synonym exactly
+            (ignoring case). If False (the default), any compound whose
+            preferred name or synonym *contains* ``name`` is returned.
+
+            Substring matching is deliberately permissive and will surface
+            unrelated compounds for short queries: ``'asprin'`` matches
+            PHENYRAMIDOL via its synonym ``'Evasprin'``. Pass ``exact=True``
+            when you need the name to actually be the compound's name.
+
         Returns
         -------
         list of dict
-            List of matching compounds with structure information
-        
+            List of matching compounds with structure information.
+
         Examples
         --------
         >>> chembl = CheMBL()
-        >>> results = chembl.search_by_name('aspirin')
-        >>> print(len(results))
-        1
-        >>> print(results[0].get("chembl_id"))
+        >>> results = chembl.search_by_name('aspirin', exact=True)
+        >>> results[0].get("chembl_id")
         'CHEMBL25'
+
+        A substring search matches more broadly:
+
+        >>> [r["pref_name"] for r in chembl.search_by_name('asprin')]
+        ['PHENYRAMIDOL']
+        >>> chembl.search_by_name('asprin', exact=True)
+        []
         """
         try:
-            # Search in preferred names and synonyms
-            query = """
-            SELECT DISTINCT md.molregno
-            FROM molecule_dictionary md
-            LEFT JOIN molecule_synonyms ms ON md.molregno = ms.molregno
-            WHERE LOWER(md.pref_name) LIKE LOWER(?) 
-               OR LOWER(ms.synonyms) LIKE LOWER(?)
-            LIMIT ?
-            """
-            search_term = f"%{name}%"
+            if exact:
+                query = """
+                SELECT DISTINCT md.molregno
+                FROM molecule_dictionary md
+                LEFT JOIN molecule_synonyms ms ON md.molregno = ms.molregno
+                WHERE LOWER(md.pref_name) = LOWER(?)
+                   OR LOWER(ms.synonyms) = LOWER(?)
+                LIMIT ?
+                """
+                search_term = name
+            else:
+                query = """
+                SELECT DISTINCT md.molregno
+                FROM molecule_dictionary md
+                LEFT JOIN molecule_synonyms ms ON md.molregno = ms.molregno
+                WHERE LOWER(md.pref_name) LIKE LOWER(?)
+                   OR LOWER(ms.synonyms) LIKE LOWER(?)
+                LIMIT ?
+                """
+                search_term = f"%{name}%"
+
             self.cursor.execute(query, (search_term, search_term, limit))
             results = self.cursor.fetchall()
             

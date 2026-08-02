@@ -329,7 +329,7 @@ class Search:
       InChIKey always derived and reported.
     - **Confidence scoring**: each result carries a ``confidence`` score in
       [0, 1] based on the match method and cross-source consensus.
-    - **Fuzzy name matching**: rapidfuzz WRatio scorer with configurable
+    - **Fuzzy name matching**: rapidfuzz ``ratio`` scorer with configurable
       cut-off (enabled with ``fuzzy=True``).
     - **Tanimoto similarity search**: Morgan-fingerprint-based fallback when
       ``similarity_threshold > 0``.
@@ -429,7 +429,7 @@ class Search:
         top_k_per_source: int = 5,
         cluster_by_skeleton: bool = True,
         fuzzy_score_cutoff: float = 80.0,
-        fuzzy_scorer: str = "WRatio",
+        fuzzy_scorer: str = "ratio",
         consensus_compat_threshold: float = 0.35,
         query_weight: float = 0.5,
         return_alternatives: bool = False,
@@ -480,7 +480,11 @@ class Search:
                 [0, 100].  Defaults to ``80.0``.
             fuzzy_scorer: rapidfuzz scorer name; one of ``WRatio``, ``ratio``,
                 ``partial_ratio``, ``token_sort_ratio``, ``token_set_ratio``,
-                ``QRatio``.  Defaults to ``"WRatio"``.
+                ``QRatio``.  Defaults to ``"ratio"``.  Avoid ``WRatio`` and
+                ``partial_ratio``: their partial-ratio term scores a short
+                name highly whenever it appears anywhere inside the query, so
+                ``fuzzy_score_cutoff`` stops discriminating (see
+                :meth:`_name_score`).
             consensus_compat_threshold: Minimum candidate similarity for a
                 candidate to be merged with the consensus anchor.  Defaults to
                 ``0.35``.
@@ -759,6 +763,104 @@ class Search:
 
         return result_df
 
+    # ── Dataset enrichment ────────────────────────────────────────────────────
+
+    def enrich(
+        self,
+        df: pd.DataFrame,
+        column: str,
+        *,
+        prefix: str = "provesid_",
+        n_hits: Optional[Union[int, str]] = None,
+    ) -> pd.DataFrame:
+        """Add resolved identifier columns to a DataFrame, searching each value once.
+
+        Every *distinct* value in ``column`` is resolved once and the result is
+        merged back onto every row that carries it. For measurement tables — where
+        the same compound appears in many rows — this is far cheaper than
+        resolving row by row, and it is the usual way to attach identifiers to an
+        experimental dataset.
+
+        Rows whose ``column`` value is empty, or which do not resolve, keep their
+        original data and get empty identifier columns.
+
+        Args:
+            df: Input DataFrame. Returned unmodified; the result is a copy.
+            column: Column holding the identifier to resolve. Its values are
+                compared as stripped strings.
+            prefix: Prepended to every added column, so the frame's own columns
+                are never overwritten. Defaults to ``"provesid_"``.
+            n_hits: Per-call override of the instance ``n_hits``. Leave at
+                ``None`` (the default) unless you want more than one hit per
+                query — with more than one, a query's rows are duplicated once
+                per hit.
+
+        Returns:
+            A copy of ``df`` with the :data:`OUTPUT_COLUMNS` added under
+            ``prefix``, in the original row order and with the original index.
+            When ``n_hits`` yields more than one row per query the index is a
+            fresh ``RangeIndex``, since rows no longer correspond one-to-one.
+
+        Raises:
+            KeyError: If ``column`` is not in ``df``.
+            ValueError: If ``df`` already has columns starting with ``prefix``
+                that would collide with the added ones.
+
+        Example::
+
+            import pandas as pd
+            from provesid import Search
+
+            #    8 rows, 3 distinct CAS numbers -> only 3 searches
+            df = pd.DataFrame({
+                "CAS": ["64-17-5", "64-17-5", "50-00-0", "50-78-2"],
+                "boiling_point_C": [78.4, 78.2, -19.0, 140.0],
+            })
+            out = Search("cas").enrich(df, "CAS")
+            out[["CAS", "boiling_point_C", "provesid_name", "provesid_InChIKey"]]
+        """
+        if column not in df.columns:
+            raise KeyError(f"Column {column!r} is not in the DataFrame.")
+
+        added = [f"{prefix}{c}" for c in OUTPUT_COLUMNS]
+        collisions = [c for c in added if c in df.columns]
+        if collisions:
+            raise ValueError(
+                f"DataFrame already has column(s) {collisions} that enrich() would "
+                f"overwrite. Pass a different prefix."
+            )
+
+        # Normalise to stripped strings, with every missing form ("", None, NaN,
+        # the literal "nan") collapsed to "" so it is never searched.
+        key = df[column].map(lambda v: "" if _is_missing(v) else str(v).strip())
+        queries = [q for q in key.unique().tolist() if q]
+
+        if not queries:
+            log.warning("Column %r has no non-empty values; nothing to resolve.", column)
+            out = df.copy()
+            for col in added:
+                out[col] = None
+            return out
+
+        results = self.search(queries, n_hits=n_hits)
+
+        lookup = results.add_prefix(prefix)
+        lookup.insert(0, "_enrich_key", lookup[f"{prefix}query"].astype(str))
+        if n_hits is None and self.n_hits == 1:
+            # One row per query: guarantee a unique merge key so a left merge
+            # cannot fan out the caller's rows.
+            lookup = lookup.drop_duplicates(subset="_enrich_key", keep="first")
+
+        out = df.copy()
+        out["_enrich_key"] = key
+        out = out.merge(lookup, on="_enrich_key", how="left").drop(columns="_enrich_key")
+
+        # merge() returns a fresh RangeIndex; restore the caller's index unless
+        # multi-hit results changed the row count.
+        if len(out) == len(df):
+            out.index = df.index
+        return out
+
     # ── Input normalisation ───────────────────────────────────────────────────
 
     def _coerce_queries(
@@ -950,6 +1052,14 @@ class Search:
         each individual synonym using the configured fuzzy scorer (rapidfuzz)
         when available, falling back to :func:`_text_similarity`.
 
+        Note:
+            This is a ranking signal, not evidence of an exact match — use
+            :func:`_matches_name_exactly` for that. The default scorer is
+            ``ratio``; scorers with a partial-ratio term (``WRatio``,
+            ``partial_ratio``) score a short name highly whenever it appears
+            anywhere inside the query (``WRatio("caffiene", "ne") == 90``),
+            which lets unrelated compounds past ``fuzzy_score_cutoff``.
+
         Args:
             query: Query name.
             cand: Candidate record.
@@ -957,19 +1067,12 @@ class Search:
         Returns:
             Best similarity in [0, 1].
         """
-        names: List[str] = []
-        for field in ("name", "IUPAC_name"):
-            val = cand.get(field)
-            if not _is_missing(val):
-                names.append(str(val))
-        syn = cand.get("Synonyms")
-        if not _is_missing(syn):
-            names.extend(s.strip() for s in str(syn).split(";") if s.strip())
+        names = _candidate_names(cand)
         if not names:
             return 0.0
 
         if RAPIDFUZZ_AVAILABLE and _fuzz is not None:
-            scorer = getattr(_fuzz, self.fuzzy_scorer, _fuzz.WRatio)
+            scorer = getattr(_fuzz, self.fuzzy_scorer, _fuzz.ratio)
             try:
                 return max(scorer(query, n) for n in names) / 100.0
             except Exception:
@@ -1226,22 +1329,33 @@ class Search:
 
         if self._chembl is not None:
             try:
-                rows = self._chembl.search_by_name(name, limit=k) or []
+                rows = self._chembl.search_by_name(name, limit=k, exact=True) or []
                 for rank, row in enumerate(rows[:k]):
                     add(_candidate_from_chembl_row(row, self._chembl), "chembl", rank, "exact_name")
             except Exception as exc:
                 log.warning("ChEMBL name lookup failed for %r: %s", name, exc)
 
         # ── Fuzzy widening ──────────────────────────────────────────────────
+        # "Strong" means a candidate is genuinely *called* the query name, not
+        # merely that it scored highly: WRatio gives a substring hit 85.7, so a
+        # score-based test lets one spurious synonym match suppress the widening
+        # that would find the right compound.
         cutoff = self.fuzzy_score_cutoff / 100.0
-        strong = any(c["query_match_score"] >= cutoff for c in pool)
+        strong = any(_matches_name_exactly(name, c) for c in pool)
         if self.fuzzy and not strong:
             norm_name = self._normalize_name(name)
 
-            def add_fuzzy(cand, source_key, rank):
+            def add_fuzzy(cand, source_key, rank, score=None):
+                """Add a fuzzy candidate, keeping only those at or above cutoff.
+
+                ``score`` overrides the name-similarity estimate; pass it when
+                the source already reported a true similarity, so it is not
+                re-derived from a candidate whose recorded name is the query.
+                """
                 if cand is None:
                     return
-                score = self._name_score(name, cand)
+                if score is None:
+                    score = self._name_score(name, cand)
                 if score < cutoff:
                     return
                 self._tag_candidate(cand, source_key, rank, "fuzzy_name", score)
@@ -1273,29 +1387,37 @@ class Search:
                 except Exception as exc:
                     log.warning("PubChemID fuzzy name lookup failed for %r: %s", name, exc)
 
+            # ZeroPM is the only source that does true fuzzy *retrieval* (the
+            # others are substring-matched with exact=False), so it is the one
+            # that can reach a typo like "asprin" -> "aspirin".
             if self._zeropm is not None:
                 try:
-                    results = self._zeropm.query_similar_name(
+                    table = self._zeropm.get_id_table_from_similar_name(
                         norm_name,
                         number_of_results=k,
                         score_cutoff=self.fuzzy_score_cutoff,
                     )
-                    if isinstance(results, pd.DataFrame) and not results.empty:
+                    if table is not None and not table.empty:
+                        # Label the candidate with what ZeroPM actually matched,
+                        # not with the query, and use its reported similarity.
+                        matched_name = str(table["matched_name"].iloc[0])
+                        matched_score = float(table["match_score"].iloc[0]) / 100.0
                         add_fuzzy(
-                            _candidate_from_zeropm_name_table(name, results), "zeropm", 0
+                            _candidate_from_zeropm_name_table(matched_name, table),
+                            "zeropm",
+                            0,
+                            score=matched_score,
                         )
-                except TypeError:
-                    # Stub / older signature without keyword args.
-                    try:
-                        results = self._zeropm.query_similar_name(norm_name)
-                        if isinstance(results, pd.DataFrame) and not results.empty:
-                            add_fuzzy(
-                                _candidate_from_zeropm_name_table(name, results), "zeropm", 0
-                            )
-                    except Exception as exc:
-                        log.warning("ZeroPM fuzzy name lookup failed for %r: %s", name, exc)
                 except Exception as exc:
                     log.warning("ZeroPM fuzzy name lookup failed for %r: %s", name, exc)
+
+            if self._chembl is not None:
+                try:
+                    rows = self._chembl.search_by_name(norm_name, limit=k, exact=False) or []
+                    for rank, row in enumerate(rows[:k]):
+                        add_fuzzy(_candidate_from_chembl_row(row, self._chembl), "chembl", rank)
+                except Exception as exc:
+                    log.warning("ChEMBL fuzzy name lookup failed for %r: %s", name, exc)
 
         return pool
 
@@ -2058,11 +2180,19 @@ class Search:
         middle term to 1.0 and reproduces the original
         ``base × (0.5 + 0.5 × consensus_score)`` behaviour.
 
+        A ``consensus_score`` of exactly 0.0 short-circuits to 0.0 rather than
+        following the formula. :func:`~provesid.tools._compute_consensus` only
+        returns 0.0 when there were no candidates at all — one source scores 1.0,
+        and even two fully disagreeing sources score 0.5 — so a zero consensus
+        means nothing matched, and the formula's floor of ``0.5 × base`` would
+        report a no-match row as half-confident.
+
         Args:
             match_method: One of the keys in :data:`_BASE_CONFIDENCE`.
             consensus_score: Cross-source consensus agreement in [0, 1].
             fuzzy_score: rapidfuzz similarity in [0, 1]; used when
-                ``match_method == "fuzzy_name"``.
+                ``match_method == "fuzzy_name"``, scaled by the ``exact_name``
+                base so a fuzzy match never outranks an exact one.
             tanimoto: Tanimoto similarity in [0, 1]; used when
                 ``match_method == "tanimoto"``.
             query_score: Query-agreement signal in [0, 1] for name/formula
@@ -2079,7 +2209,14 @@ class Search:
         q = 1.0 if query_score is None else max(0.0, min(1.0, query_score))
 
         if match_method == "fuzzy_name":
-            base = fuzzy_score if fuzzy_score is not None else 0.5
+            # Scaled by the exact-name base so an approximate name match can
+            # never outrank an exact one: a perfect fuzzy score is worth exactly
+            # as much as an exact name, and anything less is worth less.
+            base = (
+                fuzzy_score * _BASE_CONFIDENCE["exact_name"]
+                if fuzzy_score is not None
+                else 0.5
+            )
             q = 1.0  # similarity already captured in base
         elif match_method == "tanimoto":
             base = (tanimoto * 0.85) if tanimoto is not None else 0.5
@@ -2314,8 +2451,291 @@ class Search:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Cascade resolution for experimental datasets
+# ─────────────────────────────────────────────────────────────────────────────
+
+def mw_within(
+    tolerance: float = 0.5,
+    *,
+    reference_column: str = "SMILES",
+    name_column: Optional[str] = None,
+):
+    """Build an ``accept`` predicate that validates a hit by molecular weight.
+
+    Most experimental datasets already carry *some* structure, which makes
+    molecular weight a cheap and strict way to tell a correct identifier lookup
+    from a plausible-looking wrong one: the same compound gives an exact match,
+    so the default tolerance can be tight.
+
+    The returned predicate accepts a hit only when the RDKit molecular weight of
+    the hit's structure is within ``tolerance`` of the weight computed from the
+    row's own ``reference_column``. It additionally *reports* — without requiring
+    — agreement of the canonical SMILES and, when ``name_column`` is given, of
+    the name, so :func:`resolve_cascade` can record how much evidence backed
+    each row in its ``validated_by`` column.
+
+    Args:
+        tolerance: Maximum absolute difference in Da. Defaults to ``0.5``.
+        reference_column: Column holding the row's own SMILES, used as the
+            reference structure. Defaults to ``"SMILES"``.
+        name_column: Optional column holding the row's own name. When given, a
+            matching name is reported as an extra ``"name"`` check.
+
+    Returns:
+        A callable ``(hit, row) -> list[str]`` suitable for
+        :func:`resolve_cascade`'s ``accept`` argument: the names of the checks
+        that passed, or an empty list to reject the hit.
+
+    Example::
+
+        accept = mw_within(0.5, reference_column="canonical_SMILES", name_column="name")
+        out = resolve_cascade(df, stages, accept=accept)
+        out["provesid_validated_by"].value_counts()
+        # mw+smiles+name    311
+        # mw+smiles          64
+        # mw                 12
+    """
+    def accept(hit: Dict[str, Any], row: Dict[str, Any]) -> List[str]:
+        reference = normalize_structure(row.get(reference_column))
+        hit_structure = normalize_structure(hit.get("SMILES"))
+
+        reference_mass = reference["mol_weight"]
+        hit_mass = hit_structure["mol_weight"]
+        if reference_mass is None or hit_mass is None:
+            return []
+        if abs(hit_mass - reference_mass) > tolerance:
+            return []
+
+        passed = ["mw"]
+
+        reference_smiles = reference["canonical_smiles"]
+        hit_smiles = hit_structure["canonical_smiles"]
+        if reference_smiles and hit_smiles and reference_smiles == hit_smiles:
+            passed.append("smiles")
+
+        if name_column is not None:
+            wanted = row.get(name_column)
+            if not _is_missing(wanted) and _matches_name_exactly(
+                str(wanted), {"name": hit.get("name"), "IUPAC_name": hit.get("IUPAC_name")}
+            ):
+                passed.append("name")
+
+        return passed
+
+    return accept
+
+
+def resolve_cascade(
+    df: pd.DataFrame,
+    stages: List[Tuple[str, "Search", str]],
+    *,
+    accept=None,
+    fallback_column: Optional[str] = None,
+    prefix: str = "provesid_",
+) -> pd.DataFrame:
+    """Resolve each row through a series of Search stages; the first hit wins.
+
+    Experimental datasets are annotated unevenly — some rows have a CAS number,
+    some only a name, some only a structure. This runs several
+    :class:`Search` instances in order, passing to each stage only the rows that
+    are still unresolved, so every row is resolved by the most reliable
+    identifier it actually has.
+
+    Each hit is checked with ``accept`` before it counts as resolved. A hit that
+    fails leaves its row pending for the next stage, which is what stops a
+    confident-but-wrong match from ending the cascade. Use :func:`mw_within` for
+    the usual molecular-weight check.
+
+    Args:
+        df: Input DataFrame. Returned unmodified; the result is a copy.
+        stages: Ordered list of ``(label, search, column)`` triples. ``label``
+            names the stage in the output, ``search`` is a :class:`Search`
+            instance, and ``column`` is the column it reads. Rows with an empty
+            value in ``column`` skip that stage.
+        accept: Optional ``(hit, row) -> bool | list[str]`` predicate, where
+            ``hit`` is the Search result row and ``row`` the input row, both as
+            dicts. Return ``True``, or the names of the checks that passed (they
+            are joined into ``validated_by``); return ``False`` or an empty list
+            to reject. When ``None``, any hit carrying an InChIKey is accepted.
+
+            Both dicts come from DataFrame rows, so a missing field is ``NaN``
+            rather than ``None`` — and ``bool(NaN)`` is ``True``. Test emptiness
+            with :func:`pandas.isna` (or reuse :func:`mw_within`) rather than
+            truthiness.
+        fallback_column: Column holding a SMILES from which to derive identifiers
+            for rows no stage resolved. Those rows get ``resolved_by="rdkit"``.
+            When ``None``, unresolved rows are left empty.
+        prefix: Prepended to every added column. Defaults to ``"provesid_"``.
+
+    Returns:
+        A copy of ``df`` with the :data:`OUTPUT_COLUMNS` added under ``prefix``,
+        plus ``<prefix>resolved_by`` (the stage that resolved the row,
+        ``"rdkit"``, or ``"none"``) and ``<prefix>validated_by``.
+
+    Raises:
+        KeyError: If a stage names a column that is not in ``df``.
+        ValueError: If ``stages`` is empty.
+
+    Example::
+
+        from provesid import Search, resolve_cascade, mw_within
+
+        out = resolve_cascade(
+            df,
+            stages=[
+                ("cas",    Search("cas"),                  "CASRN"),
+                ("name",   Search("name", use_opsin=True), "name"),
+                ("smiles", Search("smiles"),               "SMILES"),
+            ],
+            accept=mw_within(0.5, reference_column="SMILES"),
+            fallback_column="SMILES",
+        )
+        out["provesid_resolved_by"].value_counts()
+        # cas       412
+        # name       98
+        # smiles     31
+        # rdkit      14
+        # none        2
+    """
+    if not stages:
+        raise ValueError("stages must contain at least one (label, search, column).")
+    for label, _, column in stages:
+        if column not in df.columns:
+            raise KeyError(f"Stage {label!r} reads column {column!r}, which is not in the DataFrame.")
+
+    rows = df.reset_index(drop=True)
+    pending = list(range(len(rows)))
+    resolved: Dict[int, Dict[str, Any]] = {}
+
+    def verdict(hit: Dict[str, Any], row: Dict[str, Any]) -> Optional[str]:
+        """Run ``accept`` and return the validated_by text, or None to reject."""
+        if accept is None:
+            return "inchikey" if not _is_missing(hit.get("InChIKey")) else None
+        outcome = accept(hit, row)
+        if isinstance(outcome, bool):
+            return "accept" if outcome else None
+        checks = list(outcome or [])
+        return "+".join(checks) if checks else None
+
+    for label, searcher, column in stages:
+        if not pending:
+            break
+
+        eligible = [i for i in pending if not _is_missing(rows.at[i, column])]
+        if not eligible:
+            continue
+
+        queries = [str(rows.at[i, column]).strip() for i in eligible]
+        hits = searcher.search(queries, n_hits=1).reset_index(drop=True)
+
+        still_pending = []
+        for position, i in enumerate(eligible):
+            hit = hits.iloc[position].to_dict()
+            validated_by = verdict(hit, rows.iloc[i].to_dict())
+            if validated_by is None:
+                still_pending.append(i)
+                continue
+            hit["resolved_by"] = label
+            hit["validated_by"] = validated_by
+            resolved[i] = hit
+
+        eligible_set = set(eligible)
+        pending = [i for i in pending if i not in eligible_set] + still_pending
+        log.debug(
+            "cascade stage %r: %d eligible, %d resolved, %d still pending",
+            label, len(eligible), len(eligible) - len(still_pending), len(pending),
+        )
+
+    # Terminal RDKit fallback: derive what we can from the row's own structure.
+    for i in list(pending):
+        structure = (
+            normalize_structure(rows.at[i, fallback_column])
+            if fallback_column is not None
+            else None
+        )
+        if structure is not None and structure["inchikey"] is not None:
+            resolved[i] = {
+                "SMILES": structure["canonical_smiles"],
+                "canonical_smiles": structure["canonical_smiles"],
+                "kekulized_smiles": structure["kekulized_smiles"],
+                "InChI": structure["inchi"],
+                "InChIKey": structure["inchikey"],
+                "molecular_mass": structure["mol_weight"],
+                "source": "RDKit",
+                "resolved_by": "rdkit",
+                "validated_by": "self (rdkit from the given structure)",
+            }
+        else:
+            resolved[i] = {"resolved_by": "none", "validated_by": ""}
+
+    enriched = pd.DataFrame(
+        [resolved[i] for i in range(len(rows))],
+        columns=OUTPUT_COLUMNS + ["resolved_by", "validated_by"],
+    ).add_prefix(prefix)
+
+    out = pd.concat([rows, enriched], axis=1)
+    out.index = df.index
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Module-level private helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _candidate_names(cand: Dict[str, Any]) -> List[str]:
+    """Every name a candidate is known by: name, IUPAC name and each synonym.
+
+    Args:
+        cand: Candidate record.
+
+    Returns:
+        List of non-empty name strings (may be empty).
+
+    Example::
+
+        _candidate_names({"name": "aspirin", "Synonyms": "ASA; 2-acetoxybenzoic acid"})
+        # ["aspirin", "ASA", "2-acetoxybenzoic acid"]
+    """
+    names: List[str] = []
+    for field in ("name", "IUPAC_name"):
+        value = cand.get(field)
+        if not _is_missing(value):
+            names.append(str(value))
+    synonyms = cand.get("Synonyms")
+    if not _is_missing(synonyms):
+        names.extend(s.strip() for s in str(synonyms).split(";") if s.strip())
+    return names
+
+
+def _matches_name_exactly(query: str, cand: Dict[str, Any]) -> bool:
+    """Whether the query equals one of the candidate's names.
+
+    Comparison ignores case, leading/trailing whitespace and repeated internal
+    whitespace, but nothing else — this is an equality test, not a similarity
+    test. It answers "is this actually what the compound is called?", which a
+    fuzzy score cannot: ``WRatio("asprin", "Evasprin")`` is 85.7 even though
+    the two are different compounds.
+
+    Args:
+        query: Query name.
+        cand: Candidate record.
+
+    Returns:
+        True when one of the candidate's names equals the query.
+
+    Example::
+
+        _matches_name_exactly("Aspirin", {"name": "aspirin"})            # True
+        _matches_name_exactly("asprin", {"Synonyms": "Evasprin"})        # False
+    """
+    def normalise(text: str) -> str:
+        return re.sub(r"\s+", " ", str(text).strip().lower())
+
+    target = normalise(query)
+    if not target:
+        return False
+    return any(normalise(name) == target for name in _candidate_names(cand))
+
 
 def _rank_rows_by_completeness(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Sort source rows by number of non-null fields (most complete first).

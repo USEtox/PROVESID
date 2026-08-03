@@ -121,6 +121,25 @@ _BASE_CONFIDENCE: Dict[str, float] = {
     "unknown": 0.50,
 }
 
+# Corroboration factor applied to the confidence, keyed by the number of
+# *independent* databases that carry the same structure for the query.
+#
+# Cross-source agreement (``consensus_score``) cannot express this on its own: a
+# lone source trivially agrees with itself and scores a perfect 1.0, so without
+# this factor an uncorroborated hit outranks a structure that three databases
+# agree on.  That is how a single ChEBI row used to beat a CompTox/PubChem/ZeroPM
+# consensus and return the wrong compound for a CAS lookup.
+#
+# ``0`` sources means the cluster came from OPSIN alone (a deterministic
+# name-to-structure parse rather than a database record), which is not a
+# corroboration question and is left unpenalised.
+_SUPPORT_FACTOR: Dict[int, float] = {
+    0: 1.00,   # OPSIN-only cluster
+    1: 0.85,   # single database, nothing corroborates it
+    2: 0.95,   # two databases agree
+}
+_SUPPORT_FACTOR_MAX = 1.00  # three or more databases agree
+
 # Canonical column order for the output DataFrame.
 OUTPUT_COLUMNS: List[str] = [
     "query",
@@ -328,7 +347,8 @@ class Search:
     - **Structure-aware matching**: canonicalisation and kekulisation via RDKit;
       InChIKey always derived and reported.
     - **Confidence scoring**: each result carries a ``confidence`` score in
-      [0, 1] based on the match method and cross-source consensus.
+      [0, 1] based on the match method, cross-source consensus, and how many
+      independent databases corroborate the structure.
     - **Fuzzy name matching**: rapidfuzz ``ratio`` scorer with configurable
       cut-off (enabled with ``fuzzy=True``).
     - **Tanimoto similarity search**: Morgan-fingerprint-based fallback when
@@ -365,6 +385,8 @@ class Search:
             salt stripping.
         n_hits (int | str): Default hits to return per query (int or ``"all"``).
         min_confidence (float): Confidence floor applied before truncation.
+        min_source_support (int): Minimum number of databases that must carry a
+            structure for it to be returned (0 disables the filter).
         use_opsin (bool): Enable PYOPSIN IUPAC→structure anchoring (needs Java).
         top_k_per_source (int): Candidates pulled per source before pooling.
         cluster_by_skeleton (bool): Merge stereo/charge variants when clustering.
@@ -424,6 +446,7 @@ class Search:
         salt_smarts: Optional[List[str]] = None,
         n_hits: Union[int, str] = 1,
         min_confidence: float = 0.0,
+        min_source_support: int = 0,
         use_opsin: bool = False,
         opsin_jar_fpath: str = "default",
         top_k_per_source: int = 5,
@@ -466,6 +489,12 @@ class Search:
                 :meth:`search`.
             min_confidence: Drop hits whose confidence is below this value
                 before truncating to ``n_hits``.  Defaults to ``0.0``.
+            min_source_support: Minimum number of independent databases that
+                must carry a structure for it to be returned.  ``0`` (the
+                default) accepts uncorroborated hits; ``2`` requires at least
+                two databases to agree, trading recall for precision.  OPSIN-only
+                clusters have no database support and are dropped by any value
+                above ``0``.
             use_opsin: Enable PYOPSIN IUPAC-name → structure anchoring for name
                 queries.  Requires a Java runtime; falls back to plain name
                 matching (with a one-time warning) when unavailable.  Defaults
@@ -524,6 +553,7 @@ class Search:
         # Multi-hit / tuning attributes
         self.n_hits = self._validate_n_hits(n_hits)
         self.min_confidence = float(min_confidence)
+        self.min_source_support = max(0, int(min_source_support))
         self.use_opsin = bool(use_opsin)
         self.opsin_jar_fpath = opsin_jar_fpath
         self.top_k_per_source = max(1, int(top_k_per_source))
@@ -671,6 +701,7 @@ class Search:
         column: Optional[str] = None,
         n_hits: Optional[Union[int, str]] = None,
         min_confidence: Optional[float] = None,
+        min_source_support: Optional[int] = None,
     ) -> pd.DataFrame:
         """Resolve one or more chemical identifiers and return a DataFrame.
 
@@ -692,6 +723,9 @@ class Search:
                 or ``"all"``).  When ``None`` the instance default is used.
             min_confidence: Per-call override of the instance
                 ``min_confidence``.  When ``None`` the instance default is used.
+            min_source_support: Per-call override of the instance
+                ``min_source_support``.  When ``None`` the instance default is
+                used.
 
         Returns:
             DataFrame with columns defined in :data:`OUTPUT_COLUMNS`.  When
@@ -722,6 +756,11 @@ class Search:
         effective_min_conf = (
             self.min_confidence if min_confidence is None else float(min_confidence)
         )
+        effective_min_support = (
+            self.min_source_support
+            if min_source_support is None
+            else max(0, int(min_source_support))
+        )
 
         query_list, extra_df = self._coerce_queries(queries, column)
 
@@ -736,7 +775,9 @@ class Search:
         rows: List[Dict[str, Any]] = []
         origin_index: List[int] = []
         for q_idx, q in enumerate(iterator):
-            hits = self._resolve_single(q, effective_n_hits, effective_min_conf)
+            hits = self._resolve_single(
+                q, effective_n_hits, effective_min_conf, effective_min_support
+            )
             for hit in hits:
                 rows.append(hit)
                 origin_index.append(q_idx)
@@ -918,6 +959,7 @@ class Search:
         query: str,
         n_hits: Union[int, str],
         min_confidence: float,
+        min_source_support: int = 0,
     ) -> List[Dict[str, Any]]:
         """Dispatch one query to the appropriate resolver and return ranked hits.
 
@@ -929,6 +971,8 @@ class Search:
             query: A single identifier string.
             n_hits: Number of ranked hits to return (positive int or ``"all"``).
             min_confidence: Drop hits below this confidence before truncation.
+            min_source_support: Drop hits corroborated by fewer than this many
+                databases before truncation.
 
         Returns:
             List of result dicts matching :data:`OUTPUT_COLUMNS` (length 1 when
@@ -944,7 +988,14 @@ class Search:
             "formula": self._resolve_formula,
         }
         base_template, pool, opsin_anchor = dispatch[self.identifier_type](query)
-        return self._finalise_hits(base_template, pool, n_hits, min_confidence, opsin_anchor)
+        return self._finalise_hits(
+            base_template,
+            pool,
+            n_hits,
+            min_confidence,
+            opsin_anchor,
+            min_source_support=min_source_support,
+        )
 
     # ── Empty result template ─────────────────────────────────────────────────
 
@@ -2161,24 +2212,34 @@ class Search:
         fuzzy_score: Optional[float] = None,
         tanimoto: Optional[float] = None,
         query_score: Optional[float] = None,
+        n_source_support: int = 0,
     ) -> float:
         """Compute the final confidence score for a result.
 
         The base confidence depends on the match method.  For fuzzy and
         Tanimoto methods, the raw similarity is used as the base.  The base is
-        modulated by a query-agreement term (weighted by ``self.query_weight``)
-        and by the cross-source consensus score, so that both a strong query
-        match and multi-source agreement boost confidence.
+        modulated by a query-agreement term (weighted by ``self.query_weight``),
+        by the cross-source consensus score, and by how many independent
+        databases carry the structure, so that a strong query match, agreement
+        between sources, and corroboration all raise confidence.
 
         Formula::
 
             final = base
                   × (w_q × query_score + (1 − w_q))
                   × (0.5 + 0.5 × consensus_score)
+                  × support_factor(n_source_support)
 
         For exact-identifier methods ``query_score`` is 1.0, which collapses the
-        middle term to 1.0 and reproduces the original
-        ``base × (0.5 + 0.5 × consensus_score)`` behaviour.
+        middle term to 1.0.
+
+        The ``support_factor`` (:data:`_SUPPORT_FACTOR`) is what keeps an
+        uncorroborated hit from winning on provenance alone.  ``consensus_score``
+        measures *how well* the sources that answered agree, not *how many*
+        answered, and a lone source agrees with itself perfectly — so before this
+        factor existed a single ChEBI row (0.90) outranked a structure that
+        CompTox, PubChem and ZeroPM all agreed on (0.8777) and the resolver
+        returned the wrong compound.
 
         A ``consensus_score`` of exactly 0.0 short-circuits to 0.0 rather than
         following the formula. :func:`~provesid.tools._compute_consensus` only
@@ -2198,6 +2259,9 @@ class Search:
             query_score: Query-agreement signal in [0, 1] for name/formula
                 methods.  Ignored (treated as 1.0) for fuzzy/Tanimoto where the
                 similarity already lives in the base.
+            n_source_support: Number of independent databases carrying this
+                structure.  ``0`` means the cluster came from OPSIN alone and is
+                left unpenalised.
 
         Returns:
             Confidence value in [0, 1].
@@ -2224,7 +2288,13 @@ class Search:
 
         w_q = max(0.0, min(1.0, self.query_weight))
         query_term = w_q * q + (1.0 - w_q)
-        modulated = base * query_term * (0.5 + 0.5 * max(0.0, min(1.0, consensus_score)))
+        support_term = _SUPPORT_FACTOR.get(max(0, int(n_source_support)), _SUPPORT_FACTOR_MAX)
+        modulated = (
+            base
+            * query_term
+            * (0.5 + 0.5 * max(0.0, min(1.0, consensus_score)))
+            * support_term
+        )
         return round(min(1.0, max(0.0, modulated)), 4)
 
     # ── Result finalisation ───────────────────────────────────────────────────
@@ -2236,6 +2306,7 @@ class Search:
         n_hits: Union[int, str],
         min_confidence: float,
         opsin_anchor: Optional[Dict[str, Any]] = None,
+        min_source_support: int = 0,
     ) -> List[Dict[str, Any]]:
         """Cluster a candidate pool, rank the clusters, and return ranked hits.
 
@@ -2246,6 +2317,8 @@ class Search:
             n_hits: Number of hits to return (positive int or ``"all"``).
             min_confidence: Drop hits below this confidence before truncation.
             opsin_anchor: Optional OPSIN structure anchor for this query.
+            min_source_support: Drop hits carried by fewer than this many
+                databases before truncation.  ``0`` disables the filter.
 
         Returns:
             List of fully-populated result dicts ordered by descending
@@ -2253,6 +2326,12 @@ class Search:
             (an empty/no-match row when nothing was found).
         """
         opsin_smiles = opsin_anchor.get("smiles") if opsin_anchor else None
+
+        # Drop group records (SMILES with an attachment point): they are never
+        # the substance a query denotes.  A query that is itself a group SMILES
+        # is exempt, since there the group *is* what was asked for.
+        if not _has_attachment_point(base_template.get("query")):
+            pool = [c for c in pool if not _has_attachment_point(c.get("SMILES"))]
 
         if not pool:
             # No source matched — still finalise structure/salt fields from any
@@ -2269,7 +2348,10 @@ class Search:
         ]
 
         # Rank: OPSIN match first, then confidence, support, query agreement,
-        # and (lower) origin rank as a final tie-break.
+        # and (lower) origin rank as a final tie-break.  Corroboration is folded
+        # into ``confidence`` itself (see :data:`_SUPPORT_FACTOR`), so
+        # ``n_source_support`` here only breaks ties between equally confident
+        # clusters.
         hits.sort(
             key=lambda h: (
                 1 if h["_opsin_match"] else 0,
@@ -2281,7 +2363,12 @@ class Search:
             reverse=True,
         )
 
-        filtered = [h for h in hits if h["confidence"] >= min_confidence]
+        filtered = [
+            h
+            for h in hits
+            if h["confidence"] >= min_confidence
+            and h["n_source_support"] >= min_source_support
+        ]
         if not filtered:
             # Everything was below the floor — represent the query with a single
             # no-match row so it is not silently dropped.
@@ -2422,14 +2509,15 @@ class Search:
         )
         fuzzy_score = cluster_query_score if cluster_method == "fuzzy_name" else None
         tanimoto = cluster_query_score if cluster_method == "tanimoto" else None
+        result["n_source_support"] = len(per_source)
         result["confidence"] = self._compute_confidence(
             cluster_method,
             match_score,
             fuzzy_score=fuzzy_score,
             tanimoto=tanimoto,
             query_score=cluster_query_score,
+            n_source_support=result["n_source_support"],
         )
-        result["n_source_support"] = len(per_source)
         result["opsin_smiles"] = opsin_smiles
 
         # Salt stripping
@@ -2753,6 +2841,26 @@ def _rank_rows_by_completeness(rows: List[Dict[str, Any]]) -> List[Dict[str, Any
         key=lambda r: sum(1 for v in r.values() if not _is_missing(v)),
         reverse=True,
     )
+
+
+def _has_attachment_point(smiles: Any) -> bool:
+    """Whether a SMILES describes a *group* rather than a whole compound.
+
+    An asterisk in SMILES is a dummy atom — an open valence where the group
+    attaches to something else.  ChEBI indexes such groups (for example
+    ``*C(=O)CCCC=CCC=CCCCCC``, "cis,cis-tetradeca-5,8-dienoyl group") alongside
+    real compounds, and one of them being returned as the structure for a CAS
+    lookup is always wrong: a registry number identifies a substance, never a
+    substituent.  RDKit also cannot compute descriptors for these
+    (``Unsupported in this mode element '*'``).
+
+    Args:
+        smiles: A SMILES string, or any missing-like value.
+
+    Returns:
+        True when the SMILES contains an attachment point.
+    """
+    return not _is_missing(smiles) and "*" in str(smiles)
 
 
 def _candidate_cluster_keys(cand: Dict[str, Any], by_skeleton: bool) -> set:

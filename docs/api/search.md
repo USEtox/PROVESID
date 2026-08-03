@@ -54,15 +54,22 @@ Every row returned by `Search.search()` contains the following columns:
 | `match_score` | float | Cross-source consensus score [0, 1] |
 | `consensus_source` | str \| None | Source chosen by consensus algorithm |
 | `source_match_scores` | dict | Per-source agreement scores |
+| `hit_rank` | int | Rank among the hits for this query (0 = best) |
+| `n_source_support` | int | Independent databases carrying this structure |
 
 ---
 
 ## Confidence scoring
 
-Confidence is computed as:
+Confidence combines four signals: how strong the match method is, how well the
+candidate matches the query itself, how well the databases that answered agree
+with each other, and how many of them carried the structure at all:
 
 $$
-\text{confidence} = \text{base} \times (0.5 + 0.5 \times \text{consensus\_score})
+\text{confidence} = \text{base}
+\times (w_q \times \text{query\_score} + (1 - w_q))
+\times (0.5 + 0.5 \times \text{consensus\_score})
+\times \text{support}(n)
 $$
 
 | Match method | Base confidence |
@@ -75,5 +82,30 @@ $$
 | Exact name | 0.80 |
 | InChIKey skeleton | 0.75 |
 | Tanimoto similarity | tanimoto × 0.85 |
-| Fuzzy name | rapidfuzz ratio |
+| Fuzzy name | rapidfuzz ratio × 0.80 |
 | Formula | 0.30 |
+
+For exact-identifier methods `query_score` is 1.0, which collapses the second
+term. `w_q` is the `query_weight` argument (default 0.5).
+
+### Corroboration
+
+`support(n)` scales the score by the number of *independent* databases carrying
+the structure (`n_source_support` in the output):
+
+| Databases agreeing | Factor |
+|---|---|
+| 0 (OPSIN-only parse) | 1.00 |
+| 1 | 0.85 |
+| 2 | 0.95 |
+| 3 or more | 1.00 |
+
+This term is what keeps provenance from beating evidence. `consensus_score`
+measures how well the sources that answered agree — but a lone source agrees
+with itself perfectly, so without `support(n)` a single database hit (0.90)
+outranks a structure that three databases all carry (0.8777), and the resolver
+returns the compound nothing corroborates.
+
+Use `min_source_support=` (on the constructor or per call) to require
+corroboration outright: `Search("cas", min_source_support=2)` returns only
+structures that at least two databases agree on.

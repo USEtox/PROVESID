@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-08-04
+
+### Fixed
+- **ChEBI record lookups returned a *neighbouring* compound.** `ChebiSDF` built
+  its index with file offsets counted in text mode, where universal-newline
+  translation collapses `\r\n` to `\n`. The ChEBI SDF mixes line endings
+  (~59 000 CRLF lines in the 2026 release), so every one of them under-counted a
+  byte and the drift grew to ~59 kB by the end of the file. `get_compound_by_id`
+  then seeked into an adjacent record and returned it — silently, since a
+  neighbouring record parses perfectly well. Offsets are now computed and
+  consumed in binary. The ChEBI *data* was never wrong; only the offsets were.
+
+  This is what made `Search("cas")` return the wrong structure for 18 of 65
+  pesticide CAS numbers (ChEBI answered "Mefluidide" for metaldehyde's
+  108-62-3). All 18 now resolve correctly.
+- **A cached ChEBI index is now validated against the SDF** (format version +
+  file size) and rebuilt when it does not match, instead of being trusted
+  blindly. Without this, an index written by an affected release keeps returning
+  wrong compounds after the code is fixed.
+- **Corroboration now counts in `Search`'s confidence.** The score was driven by
+  *which* database answered rather than *how many* agreed: a lone ChEBI hit
+  scored a flat 0.90 while a structure CompTox, PubChem and ZeroPM all carried
+  scored 0.8777, so an uncorroborated hit outranked a three-source consensus.
+  `consensus_score` cannot express this on its own — a single source agrees with
+  itself perfectly — so confidence is now multiplied by a corroboration factor
+  (1 source ×0.85, 2 ×0.95, 3+ ×1.0).
+- **Group records are no longer returned as compounds.** A SMILES with an
+  attachment point (`*C(=O)CCCC=CCC=CCCCCC`, a ChEBI *group*) is a substituent,
+  never the substance a CAS or name denotes; such candidates are dropped unless
+  the query is itself a group SMILES. RDKit could not process them either
+  (`Unsupported in this mode element '*'`).
+
+### Added
+- **`Search(min_source_support=...)`** (also a per-call `search()` override) —
+  require a structure to be carried by at least this many independent databases
+  before it is returned, trading recall for precision.
+- `tests/test_search_scoring_truth.py` — scoring-system regression suite: unit
+  tests for the confidence rules, ChEBI record round-trip tests that would have
+  caught the offset drift, and CompTox-truth samples for every identifier type
+  (CAS, name, InChIKey, DTXSID, SMILES, InChI) plus `enrich()` and
+  `resolve_cascade()`. Measured on 1500 sampled CompTox CASRNs: 1498 correct,
+  2 disagreements (both genuine cross-database structure differences, not
+  ranking defects).
+- `examples/search/confidence_and_corroboration_demo.py`.
+
 ## [0.5.0] - 2026-08-02
 
 ### Added

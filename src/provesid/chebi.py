@@ -1056,9 +1056,19 @@ class ChebiSDF:
     def _build_index(self) -> Dict:
         """
         Build index from SDF file for fast lookups.
-        
+
+        The file is read in **binary** mode and each line decoded individually,
+        so the recorded offsets are exact byte positions.  Text mode must not be
+        used here: universal-newline translation collapses ``\\r\\n`` to ``\\n``,
+        which under-counts one byte per CRLF line.  The ChEBI SDF mixes line
+        endings (~59 000 CRLF lines in the 2026 release), so a text-mode offset
+        drifts steadily and ``get_compound_by_id`` ends up seeking into a
+        *neighbouring* record — silently returning another compound's data.
+
         Returns:
-            dict: Index containing mappings for various query types
+            dict: Index containing mappings for various query types, plus a
+            ``_meta`` entry recording the SDF the index was built from (see
+            :meth:`_index_meta`).
         """
         index = {
             'id_to_offset': {},           # ChEBI ID -> file offset
@@ -1068,40 +1078,42 @@ class ChebiSDF:
             'formula_to_ids': {},         # formula -> list of ChEBI IDs
             'cas_to_ids': {},             # CAS number -> list of ChEBI IDs
             'synonym_to_ids': {},         # lowercase synonym -> list of ChEBI IDs
+            '_meta': self._index_meta(),  # provenance/validity of this index
         }
-        
+
         # Parse SDF file and build index
-        with open(self.sdf_path, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(self.sdf_path, 'rb') as f:
             file_offset = 0
             current_mol_offset = 0
             in_mol = False
             current_data = {}
-            
+
             # Use tqdm for progress bar
             file_size = os.path.getsize(self.sdf_path)
             pbar = tqdm(total=file_size, unit='B', unit_scale=True, desc="Indexing ChEBI SDF")
-            
-            for line in f:
+
+            for raw_line in f:
+                line = raw_line.decode('utf-8', errors='ignore')
+
                 if not in_mol and line.strip():
                     # Start of a new molecule
                     in_mol = True
                     current_mol_offset = file_offset
                     current_data = {}
-                
+
                 # Check for property tags
                 if line.startswith('> <'):
                     field_name = line.strip()[3:-1]  # Extract field name
-                    value_line = next(f, '')
-                    file_offset += len(line.encode('utf-8'))
-                    file_offset += len(value_line.encode('utf-8'))
-                    current_data[field_name] = value_line.strip()
-                    pbar.update(len(line.encode('utf-8')) + len(value_line.encode('utf-8')))
+                    raw_value = next(f, b'')
+                    file_offset += len(raw_line) + len(raw_value)
+                    current_data[field_name] = raw_value.decode('utf-8', errors='ignore').strip()
+                    pbar.update(len(raw_line) + len(raw_value))
                     continue
-                
+
                 # Check for end of molecule
                 if line.startswith('$$$$'):
                     in_mol = False
-                    
+
                     # Index this molecule
                     if 'ChEBI ID' in current_data:
                         chebi_id = current_data['ChEBI ID']
@@ -1148,15 +1160,36 @@ class ChebiSDF:
                                     if syn_lower not in index['synonym_to_ids']:
                                         index['synonym_to_ids'][syn_lower] = []
                                     index['synonym_to_ids'][syn_lower].append(chebi_id)
-                
-                file_offset += len(line.encode('utf-8'))
-                pbar.update(len(line.encode('utf-8')))
-            
+
+                file_offset += len(raw_line)
+                pbar.update(len(raw_line))
+
             pbar.close()
-        
+
         self.logger.info(f"Index built: {len(index['id_to_offset'])} compounds indexed")
         return index
     
+    # Bumped whenever the offset convention or index layout changes, so a stale
+    # cached index is rebuilt rather than silently mis-read.
+    INDEX_FORMAT_VERSION = 2
+
+    def _index_meta(self) -> Dict[str, Any]:
+        """Describe the SDF this index belongs to.
+
+        The index stores raw byte offsets into the SDF, so it is only valid for
+        the exact file it was built from.  Recording the file's size and the
+        index format version lets :meth:`_load_index` detect a stale cache — for
+        instance one written by an older release whose offsets were computed in
+        text mode and are silently wrong.
+
+        Returns:
+            dict: ``format_version`` and ``sdf_size`` (bytes) of the SDF file.
+        """
+        return {
+            'format_version': self.INDEX_FORMAT_VERSION,
+            'sdf_size': os.path.getsize(self.sdf_path),
+        }
+
     def _save_index(self):
         """Save index to disk for faster subsequent loads."""
         try:
@@ -1165,52 +1198,80 @@ class ChebiSDF:
             self.logger.info(f"Index saved to {self.index_path}")
         except Exception as e:
             self.logger.warning(f"Failed to save index: {e}")
-    
+
     def _load_index(self) -> Dict:
-        """Load index from disk."""
+        """Load index from disk, rebuilding it when it does not match the SDF.
+
+        Returns:
+            dict: A validated index for the current SDF file.  When the cached
+            index is missing, unreadable, written by an older format version, or
+            was built from a differently sized SDF, it is rebuilt and re-saved.
+        """
         try:
             with open(self.index_path, 'rb') as f:
                 index = pickle.load(f)
-            self.logger.info(f"Index loaded: {len(index['id_to_offset'])} compounds")
-            return index
         except Exception as e:
             self.logger.warning(f"Failed to load index: {e}. Rebuilding...")
-            return self._build_index()
-    
+            index = self._build_index()
+            self.index = index
+            self._save_index()
+            return index
+
+        expected = self._index_meta()
+        meta = index.get('_meta') if isinstance(index, dict) else None
+        if meta != expected:
+            self.logger.warning(
+                "Cached ChEBI index does not match %s (cached meta: %s, expected: %s). "
+                "Rebuilding — the stale index would return the wrong compound.",
+                self.sdf_path, meta, expected,
+            )
+            index = self._build_index()
+            self.index = index
+            self._save_index()
+            return index
+
+        self.logger.info(f"Index loaded: {len(index['id_to_offset'])} compounds")
+        return index
+
     def _read_mol_at_offset(self, offset: int) -> Dict[str, str]:
         """
         Read a molecule entry from the SDF file at a specific offset.
-        
+
+        Reads in binary and decodes per line so that ``offset`` is interpreted
+        as the exact byte position recorded by :meth:`_build_index`.
+
         Args:
             offset (int): File offset where molecule starts
-            
+
         Returns:
             dict: Molecule data including molfile and properties
         """
         data = {'molfile': ''}
-        
-        with open(self.sdf_path, 'r', encoding='utf-8', errors='ignore') as f:
+
+        with open(self.sdf_path, 'rb') as f:
             f.seek(offset)
             in_molfile = True
-            
-            for line in f:
+
+            for raw_line in f:
+                line = raw_line.decode('utf-8', errors='ignore')
+
                 if in_molfile:
                     data['molfile'] += line
                     if line.startswith('M  END'):
                         in_molfile = False
                     continue
-                
+
                 # Parse property tags
                 if line.startswith('> <'):
                     field_name = line.strip()[3:-1]
-                    value_line = next(f, '').strip()
+                    value_line = next(f, b'').decode('utf-8', errors='ignore').strip()
                     data[field_name] = value_line
                     continue
-                
+
                 # End of molecule
                 if line.startswith('$$$$'):
                     break
-        
+
         return data
     
     def get_compound_by_id(self, chebi_id: str) -> Optional[Dict[str, str]]:

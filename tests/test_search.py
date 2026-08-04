@@ -1106,3 +1106,105 @@ class TestMultiSourceConsensus:
         s = _make_search(chebi=_ChebiStub(_ASPIRIN_CHEBI))
         df = s.search("50-78-2")
         assert isinstance(df.iloc[0]["source_match_scores"], dict)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Source availability
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSourceAvailability:
+    """A source that fails to initialise must not vanish silently.
+
+    Since 0.6.0 corroboration drives confidence, so a run missing one of the five
+    databases scores every hit lower than a full-source run and is harder to pass
+    through ``min_source_support``.  A degraded run therefore has to stay
+    identifiable after the fact — this went unnoticed when EBI's moving
+    ``latest/`` directory made the pinned ChEMBL archive 404 (2026-08-04).
+    """
+
+    def test_all_sources_reported_available(self):
+        s = _make_search()
+        s.search("50-78-2")
+        assert s.sources_available == list(Search._SOURCE_KEYS)
+        assert s.sources_unavailable == []
+
+    def test_missing_source_is_recorded(self):
+        s = Search(
+            "cas",
+            show_progress=False,
+            chebi=_ChebiStub(_ASPIRIN_CHEBI),
+            comptox=_CompToxStub(_ASPIRIN_COMPTOX),
+            pubchem=_PubChemStub(),
+            zeropm=_ZeroPMStub(),
+            # chembl left out — as when its database cannot be initialised
+        )
+        s.search("50-78-2")
+        assert s.sources_unavailable == ["chembl"]
+        assert "chembl" not in s.sources_available
+
+    def test_availability_is_attached_to_the_result_frame(self):
+        s = _make_search()
+        df = s.search("50-78-2")
+        assert df.attrs["sources_available"] == list(Search._SOURCE_KEYS)
+        assert df.attrs["sources_unavailable"] == []
+
+    def test_availability_survives_enrich(self):
+        """merge() drops DataFrame.attrs, so enrich must re-attach the provenance."""
+        s = Search("cas", show_progress=False, chebi=_ChebiStub(_ASPIRIN_CHEBI))
+        out = s.enrich(pd.DataFrame({"CAS": ["50-78-2"]}), "CAS")
+        assert out.attrs["sources_available"] == ["chebi"]
+        assert "chembl" in out.attrs["sources_unavailable"]
+
+    def test_missing_source_is_warned_about_once(self, caplog):
+        s = Search("cas", show_progress=False, chebi=_ChebiStub(_ASPIRIN_CHEBI))
+        with caplog.at_level("WARNING", logger="provesid.search"):
+            s.search("50-78-2")
+            s.search("50-78-2")
+        degraded = [r for r in caplog.records if "of 5 sources" in r.getMessage()]
+        assert len(degraded) == 1
+        assert "ChEMBL" in degraded[0].getMessage()
+
+
+@pytest.mark.integration
+def test_every_offline_source_initialises():
+    """Every source Search resolves against must come up on a provisioned machine.
+
+    Checks the shared per-user dataset directory that PROVESID downloads into
+    (not the repository data dir the test suite points ``PROVESID_DATA_DIR`` at),
+    and uses ``auto_download=False`` so a missing database fails the test rather
+    than pulling gigabytes.  Skips only when that directory holds none of the
+    five databases — a machine where there is nothing to check.
+
+    A source silently failing to initialise is what made ``Search`` drop ChEMBL
+    for weeks: it lowers every confidence score and tightens
+    ``min_source_support`` without any visible error.
+    """
+    from platformdirs import user_data_dir
+
+    from provesid.chebi import ChebiSDF
+    from provesid.chembl import CheMBL
+    from provesid.comptox import CompToxID
+    from provesid.pubchem import PubChemID
+    from provesid.zeropm import ZeroPM
+
+    data_dir = user_data_dir(appname="provesid", appauthor="USEtox")
+
+    results = {}
+    for key, factory in [
+        ("chebi", ChebiSDF),
+        ("comptox", CompToxID),
+        ("pubchem", PubChemID),
+        ("zeropm", ZeroPM),
+        ("chembl", CheMBL),
+    ]:
+        try:
+            factory(auto_download=False, data_dir=data_dir)
+            results[key] = None
+        except Exception as exc:  # noqa: BLE001 - any failure means unavailable
+            results[key] = str(exc)
+
+    if all(err is not None for err in results.values()):  # pragma: no cover
+        pytest.skip(f"no offline datasets provisioned in {data_dir}")
+
+    missing = {key: err for key, err in results.items() if err is not None}
+    assert not missing, f"offline sources unavailable: {missing}"

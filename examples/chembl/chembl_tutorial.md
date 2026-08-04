@@ -18,7 +18,7 @@ This tutorial demonstrates how to use the ChEMBL interface in PROVESID to query 
 ## What is ChEMBL?
 
 ChEMBL is a manually curated database of bioactive molecules with drug-like properties maintained by EMBL-EBI. It contains:
-- Over 2.3 million distinct compounds
+- Over 2.9 million distinct compounds (release 37)
 - Chemical structures and properties
 - Bioactivity data from scientific literature
 - Drug/clinical candidate information

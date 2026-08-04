@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **ChEMBL was unreachable, and `Search` lost a source without saying so.**
+  `CheMBL.DEFAULT_DB_URL` pinned a release number *inside* EBI's moving
+  `latest/` path (`latest/chembl_36_sqlite.tar.gz`), so the download started
+  404ing the day ChEMBL 37 shipped — and would break again at 38. The release is
+  now resolved from the `latest/` directory listing
+  (`CheMBL.resolve_latest_db_url()`), with `DEFAULT_DB_URL` kept as a pinned
+  fallback (`CheMBL.FALLBACK_RELEASE`) for when the listing cannot be read.
+  `db_url=`, `db_name=` and `db_path=` still override everything.
+
+  Because `Search` catches source-initialisation failures and continues, and
+  0.6.0 made corroboration drive confidence, every run since ChEMBL 37 appeared
+  scored lower than a full-source run and satisfied `min_source_support` less
+  often, with nothing in the result to show why.
+
+### Changed
+- **`CheMBL()` no longer pins a database filename.** `db_name` defaults to
+  `None`: the newest `chembl_*.db` already in the data directory is reused (so a
+  new ChEMBL release does not trigger a multi-gigabyte re-download — pass
+  `redownload=True` for that), and otherwise the name is derived from the
+  resolved archive (`chembl_37_sqlite.tar.gz` → `chembl_37.db`). New
+  `CheMBL.release` attribute reports the release number in use.
+
+### Added
+- **`Search.sources_available` / `Search.sources_unavailable`**, mirrored on the
+  result frame as `df.attrs["sources_available"]` / `["sources_unavailable"]`,
+  plus a single warning naming the missing sources. A degraded run is now
+  identifiable after the fact instead of looking like a full one.
+- Tests: ChEMBL release resolution against a mocked listing (including the
+  fallback and the "existing database is reused without network access" case),
+  a live check that the resolved archive URL is downloadable, and a smoke test
+  asserting all five offline `Search` sources initialise.
+
 ## [0.6.0] - 2026-08-04
 
 ### Fixed

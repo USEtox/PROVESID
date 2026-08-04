@@ -20,10 +20,13 @@ For detailed table schema information, see src/provesid/data/schema_documentatio
 """
 
 import os
+import re
+import glob
 import sqlite3
 import tarfile
 import logging
 from typing import Optional, Dict, List, Any
+from urllib.parse import urlsplit
 import requests
 from tqdm import tqdm
 from .utils import user_dataset_path
@@ -45,23 +48,32 @@ class CheMBL:
     Parameters
     ----------
     db_name : str, optional
-        Name of the SQLite database file (default: 'chembl_36.db')
+        Name of the SQLite database file.  When omitted (the default), the newest
+        ``chembl_*.db`` already present in the data directory is reused, and if
+        there is none the release advertised by the EBI ``latest/`` directory is
+        downloaded and named after the archive (e.g. ``chembl_37.db``).
     auto_download : bool, optional
         If True, automatically download database if not found (default: True)
     db_url : str, optional
-        Custom URL for database download (default: ChEMBL FTP URL)
-    
+        Custom URL for database download.  By default the URL is resolved from
+        the EBI ``latest/`` directory listing at download time.
+
     Attributes
     ----------
     path : str
         Path to the data directory
     db_path : str
         Full path to the SQLite database file
+    db_url : str or None
+        Archive URL, once resolved.  ``None`` while an existing local database
+        makes a download unnecessary.
+    release : int or None
+        ChEMBL release number parsed from the database filename.
     conn : sqlite3.Connection
         SQLite database connection
     cursor : sqlite3.Cursor
         Database cursor for queries
-    
+
     Examples
     --------
     >>> chembl = CheMBL()
@@ -74,15 +86,29 @@ class CheMBL:
     
     Notes
     -----
-    The database file is approximately 5GB. Initial setup will download and extract
-    the database from the EMBL-EBI FTP server (~1.5GB compressed).
+    The database is large and grows with every release: ChEMBL 37 is ~5.8 GB
+    compressed and ~30 GB once extracted. Initial setup downloads and extracts it
+    from the EMBL-EBI FTP server.
+
+    ``latest/`` is a moving directory: it holds only the current release, so the
+    archive name changes with every ChEMBL release.  The version is therefore
+    resolved from the directory listing rather than pinned, with
+    :data:`DEFAULT_DB_URL` as the fallback when the listing cannot be read.
     """
-    
-    DEFAULT_DB_URL = "https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/chembl_36_sqlite.tar.gz"
-    
+
+    LATEST_DIR_URL = "https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/"
+
+    #: Release used when the ``latest/`` listing cannot be read.
+    FALLBACK_RELEASE = 37
+
+    DEFAULT_DB_URL = f"{LATEST_DIR_URL}chembl_{FALLBACK_RELEASE}_sqlite.tar.gz"
+
+    #: Matches the SQLite archives advertised in the ``latest/`` listing.
+    _ARCHIVE_RE = re.compile(r"chembl_(\d+)_sqlite\.tar\.gz")
+
     def __init__(
         self,
-        db_name: str = 'chembl_36.db',
+        db_name: Optional[str] = None,
         auto_download: bool = True,
         db_url: Optional[str] = None,
         data_dir: Optional[str] = None,
@@ -95,18 +121,21 @@ class CheMBL:
         Parameters
         ----------
         db_name : str, optional
-            Database filename (default: 'chembl_36.db')
+            Database filename.  When omitted, the newest ``chembl_*.db`` in the
+            data directory is reused, or the name is derived from the archive
+            that is about to be downloaded (e.g. ``chembl_37.db``).
         auto_download : bool, optional
             Auto-download if database missing (default: True)
         db_url : str, optional
-            Custom download URL (default: ChEMBL FTP)
+            Custom download URL.  Default: resolved from the EBI ``latest/``
+            directory listing at download time.
         data_dir : str, optional
             Directory to store the database when ``db_path`` is not provided.
         db_path : str, optional
             Full path to a database file. Overrides ``db_name``/``data_dir``.
         redownload : bool, optional
             If True, force re-download when ``auto_download`` is enabled.
-        
+
         Raises
         ------
         FileNotFoundError
@@ -114,24 +143,39 @@ class CheMBL:
         ChEMBLError
             If database connection or validation fails
         """
-        if db_path is None:
-            self.path = data_dir or user_dataset_path()
-            self.db_path = os.path.join(self.path, db_name)
-        else:
+        self.logger = logging.getLogger(__name__)
+        self.db_url = db_url
+
+        if db_path is not None:
             self.db_path = os.path.abspath(os.path.expanduser(db_path))
             self.path = os.path.dirname(self.db_path)
+        else:
+            self.path = data_dir or user_dataset_path()
+            self.db_path = (
+                os.path.join(self.path, db_name) if db_name is not None else None
+            )
 
-        self.db_url = db_url or self.DEFAULT_DB_URL
-        self.logger = logging.getLogger(__name__)
-        
         # Ensure data directory exists
         os.makedirs(self.path, exist_ok=True)
-        
-        needs_download = redownload or not os.path.exists(self.db_path)
 
-        # Check if database exists
+        # With no explicit filename, any release already on disk is good enough —
+        # re-downloading tens of GB just because the release number moved is not.
+        if self.db_path is None and not redownload:
+            self.db_path = self._find_local_database()
+            if self.db_path is not None:
+                self.logger.info("Using existing ChEMBL database: %s", self.db_path)
+
+        needs_download = (
+            redownload or self.db_path is None or not os.path.exists(self.db_path)
+        )
+
         if needs_download:
             if auto_download:
+                self.db_url = self.db_url or self.resolve_latest_db_url()
+                if self.db_path is None:
+                    self.db_path = os.path.join(
+                        self.path, self._db_name_from_url(self.db_url)
+                    )
                 if redownload and os.path.exists(self.db_path):
                     self.logger.info(
                         "Forced ChEMBL redownload requested for: %s", self.db_path
@@ -139,12 +183,32 @@ class CheMBL:
                 else:
                     self.logger.info(f"Database not found at {self.db_path}, downloading...")
                 self.download_database(url=self.db_url, force=redownload)
+                superseded = [
+                    p
+                    for p in glob.glob(os.path.join(self.path, "chembl_*.db"))
+                    if os.path.abspath(p) != os.path.abspath(self.db_path)
+                ]
+                if superseded:
+                    self.logger.info(
+                        "Older ChEMBL database(s) left in place and no longer used "
+                        "(delete to reclaim tens of GB each): %s",
+                        ", ".join(sorted(superseded)),
+                    )
             else:
+                if self.db_path is None:
+                    self.db_path = os.path.join(
+                        self.path,
+                        self._db_name_from_url(self.db_url or self.DEFAULT_DB_URL),
+                    )
                 raise FileNotFoundError(
                     f"ChEMBL database not found at {self.db_path}. "
-                    f"Set auto_download=True or manually download from {self.DEFAULT_DB_URL}"
+                    f"Set auto_download=True or manually download from "
+                    f"{self.db_url or self.LATEST_DIR_URL}"
                 )
-        
+
+        release_match = re.search(r"chembl_(\d+)", os.path.basename(self.db_path))
+        self.release = int(release_match.group(1)) if release_match else None
+
         # Connect to database
         try:
             self.conn = sqlite3.connect(self.db_path)
@@ -163,17 +227,105 @@ class CheMBL:
             except Exception as e:
                 self.logger.warning(f"Error closing database connection: {str(e)}")
     
+    @classmethod
+    def resolve_latest_db_url(cls, timeout: float = 30) -> str:
+        """
+        Resolve the download URL of the current ChEMBL SQLite archive.
+
+        ``latest/`` only ever holds the newest release, so its archive name
+        (``chembl_NN_sqlite.tar.gz``) changes with every ChEMBL release.  This
+        reads the directory listing and returns the highest ``NN`` it advertises.
+
+        Parameters
+        ----------
+        timeout : float, optional
+            Timeout in seconds for the listing request (default: 30)
+
+        Returns
+        -------
+        str
+            URL of the newest archive, or :data:`DEFAULT_DB_URL` (the pinned
+            fallback release) when the listing cannot be read or names no
+            archive.  Never raises — a stale pin is better than a hard failure.
+
+        Examples
+        --------
+        >>> CheMBL.resolve_latest_db_url()
+        'https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/chembl_37_sqlite.tar.gz'
+        """
+        logger = logging.getLogger(__name__)
+        try:
+            response = requests.get(cls.LATEST_DIR_URL, timeout=timeout)
+            response.raise_for_status()
+            releases = {
+                int(m.group(1)) for m in cls._ARCHIVE_RE.finditer(response.text)
+            }
+        except requests.RequestException as exc:
+            logger.warning(
+                "Could not read the ChEMBL release listing at %s (%s); "
+                "falling back to the pinned release chembl_%d",
+                cls.LATEST_DIR_URL, exc, cls.FALLBACK_RELEASE,
+            )
+            return cls.DEFAULT_DB_URL
+
+        if not releases:
+            logger.warning(
+                "No chembl_NN_sqlite.tar.gz found in the listing at %s; "
+                "falling back to the pinned release chembl_%d",
+                cls.LATEST_DIR_URL, cls.FALLBACK_RELEASE,
+            )
+            return cls.DEFAULT_DB_URL
+
+        release = max(releases)
+        logger.info("Resolved current ChEMBL release: chembl_%d", release)
+        return f"{cls.LATEST_DIR_URL}chembl_{release}_sqlite.tar.gz"
+
+    @staticmethod
+    def _db_name_from_url(url: str) -> str:
+        """
+        Derive the local database filename from an archive URL.
+
+        ``.../chembl_37_sqlite.tar.gz`` yields ``chembl_37.db``, matching the
+        ``.db`` member inside the archive.  URLs that carry no release number
+        fall back to ``chembl.db``.
+        """
+        archive = os.path.basename(urlsplit(url).path)
+        match = re.search(r"chembl_(\d+)", archive)
+        return f"chembl_{match.group(1)}.db" if match else "chembl.db"
+
+    def _find_local_database(self) -> Optional[str]:
+        """
+        Return the newest ``chembl_*.db`` already present in the data directory.
+
+        Used when no filename was requested, so an already-downloaded release is
+        reused instead of re-downloading tens of GB for a release number that
+        merely moved.
+
+        Returns
+        -------
+        str or None
+            Path to the highest-numbered database found, or None if the data
+            directory holds no ChEMBL database.
+        """
+        found: List[tuple] = []
+        for path in glob.glob(os.path.join(self.path, "chembl_*.db")):
+            match = re.search(r"chembl_(\d+)\.db$", os.path.basename(path))
+            found.append((int(match.group(1)) if match else -1, path))
+        return max(found)[1] if found else None
+
     def download_database(self, url: Optional[str] = None, force: bool = False):
         """
         Download and extract ChEMBL SQLite database from EMBL-EBI FTP.
         
-        Downloads the compressed tar.gz archive (~1.5GB), extracts the SQLite database
-        (~5GB), and validates the database integrity by querying the molecule_dictionary table.
+        Downloads the compressed tar.gz archive (~5.8 GB for release 37), extracts
+        the SQLite database (~30 GB), and validates its integrity by querying the
+        molecule_dictionary table.
         
         Parameters
         ----------
         url : str, optional
-            Download URL (default: DEFAULT_DB_URL)
+            Download URL.  Defaults to this instance's ``db_url``, or — when that
+            was never set — the release resolved from the EBI ``latest/`` listing.
         force : bool, optional
             If True, re-download even if database exists (default: False)
         
@@ -187,8 +339,9 @@ class CheMBL:
         >>> chembl = CheMBL(auto_download=False)  # Will raise FileNotFoundError
         >>> chembl.download_database(force=True)  # Explicit download
         """
-        url = url or self.db_url
-        
+        url = url or self.db_url or self.resolve_latest_db_url()
+        self.db_url = url
+
         # Check if already exists
         if os.path.exists(self.db_path) and not force:
             self.logger.info(f"Database already exists at {self.db_path}")
@@ -217,7 +370,7 @@ class CheMBL:
             self.logger.info(f"Download complete. Extracting database...")
             
             # Extract tar.gz archive
-            # ChEMBL archive structure: chembl_36_sqlite.tar.gz -> chembl_36/chembl_36.db
+            # ChEMBL archive structure: chembl_NN_sqlite.tar.gz -> chembl_NN/chembl_NN.db
             with tarfile.open(tar_gz_path, 'r:gz') as tar:
                 # Find the .db file in the archive
                 db_members = [m for m in tar.getmembers() if m.name.endswith('.db')]
@@ -239,10 +392,18 @@ class CheMBL:
                 extracted_path = os.path.join(self.path, db_member.name)
                 if extracted_path != self.db_path:
                     os.rename(extracted_path, self.db_path)
-                    # Clean up extracted directory if it exists
-                    extracted_dir = os.path.join(self.path, os.path.dirname(db_member.name))
-                    if os.path.exists(extracted_dir) and os.path.isdir(extracted_dir):
-                        os.rmdir(extracted_dir)
+                    # Remove the now-empty directories the archive created.  The
+                    # nesting depth varies between releases (37 ships
+                    # chembl_37/chembl_37_sqlite/chembl_37.db), so walk up from
+                    # the member's own directory and stop at the data directory
+                    # or at the first non-empty one.
+                    extracted_dir = os.path.dirname(extracted_path)
+                    while os.path.abspath(extracted_dir) != os.path.abspath(self.path):
+                        try:
+                            os.rmdir(extracted_dir)
+                        except OSError:
+                            break
+                        extracted_dir = os.path.dirname(extracted_dir)
             
             # Validate database integrity
             self.logger.info("Validating database integrity...")

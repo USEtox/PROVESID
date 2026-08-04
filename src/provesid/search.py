@@ -395,6 +395,12 @@ class Search:
         consensus_compat_threshold (float): Min similarity to merge with anchor.
         query_weight (float): Weight of query agreement in the confidence score.
         return_alternatives (bool): Attach runner-up summaries when ``n_hits=1``.
+        sources_available (list[str]): Source keys that initialised successfully,
+            filled in on the first :meth:`search` call.  Since corroboration
+            drives confidence, a run missing a source scores lower than a
+            full-source run; check this (or ``df.attrs["sources_available"]``)
+            before comparing results across runs.
+        sources_unavailable (list[str]): Source keys that failed to initialise.
 
     Example::
 
@@ -588,36 +594,61 @@ class Search:
             c is not None for c in [chebi, comptox, pubchem, zeropm, chembl]
         )
 
+        # Sources that actually came up, filled in by _ensure_clients().
+        self.sources_available: List[str] = []
+        self.sources_unavailable: List[str] = []
+        self._availability_logged: bool = False
+
     # ── Client lifecycle ──────────────────────────────────────────────────────
 
     def _ensure_clients(self) -> None:
         """Lazily initialise all offline source clients.
 
-        This method is idempotent — it only runs once per Search instance.
-        Individual clients that fail to initialise are set to ``None`` and a
-        warning is logged; the search continues with the remaining sources.
+        Client construction is idempotent — it only runs once per Search
+        instance.  Individual clients that fail to initialise are set to ``None``
+        and a warning is logged; the search continues with the remaining sources
+        and :attr:`sources_available` / :attr:`sources_unavailable` record which
+        ones, so a four-source run stays distinguishable from a five-source one.
         """
-        if self._clients_initialized:
-            return
+        if not self._clients_initialized:
+            for attr, factory in [
+                ("_chebi", ChebiSDF),
+                ("_comptox", CompToxID),
+                ("_pubchem", PubChemID),
+                ("_zeropm", ZeroPM),
+                ("_chembl", CheMBL),
+            ]:
+                if getattr(self, attr) is None:
+                    try:
+                        setattr(
+                            self,
+                            attr,
+                            factory(data_dir=self.data_dir, redownload=self.redownload),
+                        )
+                    except Exception as exc:
+                        log.warning("Could not initialise offline source %s: %s", attr[1:], exc)
 
-        for attr, factory in [
-            ("_chebi", ChebiSDF),
-            ("_comptox", CompToxID),
-            ("_pubchem", PubChemID),
-            ("_zeropm", ZeroPM),
-            ("_chembl", CheMBL),
-        ]:
-            if getattr(self, attr) is None:
-                try:
-                    setattr(
-                        self,
-                        attr,
-                        factory(data_dir=self.data_dir, redownload=self.redownload),
-                    )
-                except Exception as exc:
-                    log.warning("Could not initialise offline source %s: %s", attr[1:], exc)
+            self._clients_initialized = True
 
-        self._clients_initialized = True
+        self.sources_available = [
+            key for key in self._SOURCE_KEYS if getattr(self, f"_{key}") is not None
+        ]
+        self.sources_unavailable = [
+            key for key in self._SOURCE_KEYS if getattr(self, f"_{key}") is None
+        ]
+
+        # Corroboration drives confidence, so a missing source silently lowers
+        # every score it would have voted on — say so once, loudly.
+        if self.sources_unavailable and not self._availability_logged:
+            log.warning(
+                "Search is running with %d of %d sources; unavailable: %s. "
+                "Confidence and min_source_support reflect the remaining sources "
+                "only, so results are not comparable with a full-source run.",
+                len(self.sources_available),
+                len(self._SOURCE_KEYS),
+                ", ".join(self._SOURCE_DISPLAY[k] for k in self.sources_unavailable),
+            )
+        self._availability_logged = True
 
     @staticmethod
     def _validate_n_hits(n_hits: Union[int, str]) -> Union[int, str]:
@@ -733,6 +764,10 @@ class Search:
             up to ``n_hits`` ranked rows per query, ordered by descending
             confidence with a ``hit_rank`` column (0 = best).
 
+            ``df.attrs["sources_available"]`` and
+            ``df.attrs["sources_unavailable"]`` record which offline sources
+            backed the run (see :attr:`sources_available`).
+
         Raises:
             ValueError: If a DataFrame/file input is given but ``column`` is
                 not specified, or if ``n_hits`` is invalid.
@@ -802,6 +837,11 @@ class Search:
                     axis=1,
                 )
 
+        # Which sources backed this frame — a run degraded by a missing source
+        # should not look like a full run afterwards.
+        result_df.attrs["sources_available"] = list(self.sources_available)
+        result_df.attrs["sources_unavailable"] = list(self.sources_unavailable)
+
         return result_df
 
     # ── Dataset enrichment ────────────────────────────────────────────────────
@@ -841,6 +881,8 @@ class Search:
             ``prefix``, in the original row order and with the original index.
             When ``n_hits`` yields more than one row per query the index is a
             fresh ``RangeIndex``, since rows no longer correspond one-to-one.
+            ``df.attrs["sources_available"]`` records which offline sources backed
+            the run (see :attr:`sources_available`).
 
         Raises:
             KeyError: If ``column`` is not in ``df``.
@@ -900,6 +942,10 @@ class Search:
         # multi-hit results changed the row count.
         if len(out) == len(df):
             out.index = df.index
+
+        # Carry the source provenance of the underlying search (merge drops attrs).
+        out.attrs["sources_available"] = list(self.sources_available)
+        out.attrs["sources_unavailable"] = list(self.sources_unavailable)
         return out
 
     # ── Input normalisation ───────────────────────────────────────────────────

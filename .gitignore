@@ -220,7 +220,11 @@ src/provesid/data/*.sdf.index.pkl
 src/provesid/data/pubchem_id.db
 src/provesid/data/PubChem_CAS_*.csv
 src/provesid/data/recreate_tables.sql
-src/provesid/data/chembl_36.db
+
+# chembl database files (release number moves with every ChEMBL release)
+src/provesid/data/chembl_*.db
+src/provesid/data/chembl_*.db.tar.gz.tmp
+
 src/provesid/data/comptox_chemicals.db
 
 # identifier files

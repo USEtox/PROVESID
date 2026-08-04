@@ -12,7 +12,9 @@ These tests verify the ChEMBL class functionality including:
 import pytest
 import os
 import sqlite3
+import requests
 from provesid import CheMBL, ChEMBLError
+from provesid import chembl as chembl_module
 from provesid.utils import data_path
 
 
@@ -433,6 +435,195 @@ class TestChEMBLRobustness:
         # Verify we can open the database (no locks)
         conn = sqlite3.connect(db_path)
         conn.close()
+
+
+class TestChEMBLReleaseResolution:
+    """Release resolution, local-database reuse and download-URL derivation.
+
+    EBI's ``latest/`` directory holds only the current release, so pinning a
+    release number inside that path (``latest/chembl_36_sqlite.tar.gz``) 404s the
+    day the next release ships — which is exactly what happened when ChEMBL 37
+    appeared and ``Search`` silently lost the ChEMBL source (2026-08-04).  These
+    tests need neither the 5 GB database nor network access.
+    """
+
+    @staticmethod
+    def _listing(*archives):
+        """Build a minimal HTML directory listing naming the given archives."""
+        return "\n".join(f'<a href="{a}">{a}</a>' for a in archives)
+
+    @staticmethod
+    def _make_db(path):
+        """Create a tiny but valid SQLite file standing in for a ChEMBL release."""
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE molecule_dictionary (molregno INTEGER, pref_name TEXT)")
+        conn.commit()
+        conn.close()
+        return path
+
+    def _serve_listing(self, monkeypatch, text):
+        """Make ``requests.get`` in provesid.chembl return ``text`` as a listing."""
+        class _Response:
+            def __init__(self, body):
+                self.text = body
+
+            def raise_for_status(self):
+                pass
+
+        monkeypatch.setattr(
+            chembl_module.requests, "get", lambda url, timeout=None: _Response(text)
+        )
+
+    def _forbid_network(self, monkeypatch):
+        """Make any HTTP request from provesid.chembl fail the test."""
+        def boom(*args, **kwargs):
+            raise AssertionError(f"unexpected network access: {args} {kwargs}")
+
+        monkeypatch.setattr(chembl_module.requests, "get", boom)
+
+    # ── URL resolution ────────────────────────────────────────────────────────
+
+    def test_listing_release_is_used_not_the_pinned_one(self, monkeypatch):
+        """A listing advertising chembl_38 yields the chembl_38 archive URL."""
+        self._serve_listing(monkeypatch, self._listing("chembl_38_sqlite.tar.gz"))
+        url = CheMBL.resolve_latest_db_url()
+        assert url.endswith("chembl_38_sqlite.tar.gz")
+        assert url.startswith(CheMBL.LATEST_DIR_URL)
+
+    def test_highest_release_wins(self, monkeypatch):
+        """With several archives listed, the newest release is chosen."""
+        self._serve_listing(
+            monkeypatch,
+            self._listing(
+                "chembl_36_sqlite.tar.gz",
+                "chembl_38_sqlite.tar.gz",
+                "chembl_37_sqlite.tar.gz",
+            ),
+        )
+        assert CheMBL.resolve_latest_db_url().endswith("chembl_38_sqlite.tar.gz")
+
+    def test_listing_failure_falls_back_to_pinned_release(self, monkeypatch):
+        """A network failure reading the listing must not raise — it falls back."""
+        def fail(url, timeout=None):
+            raise requests.ConnectionError("listing unreachable")
+
+        monkeypatch.setattr(chembl_module.requests, "get", fail)
+        assert CheMBL.resolve_latest_db_url() == CheMBL.DEFAULT_DB_URL
+        assert f"chembl_{CheMBL.FALLBACK_RELEASE}_sqlite.tar.gz" in CheMBL.DEFAULT_DB_URL
+
+    def test_listing_without_archives_falls_back_to_pinned_release(self, monkeypatch):
+        """A readable but unexpected listing also falls back to the pin."""
+        self._serve_listing(monkeypatch, "<html><body>nothing here</body></html>")
+        assert CheMBL.resolve_latest_db_url() == CheMBL.DEFAULT_DB_URL
+
+    def test_db_name_is_derived_from_the_archive_url(self):
+        """chembl_NN_sqlite.tar.gz -> chembl_NN.db, matching the archive member."""
+        assert CheMBL._db_name_from_url(
+            "https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/chembl_38_sqlite.tar.gz"
+        ) == "chembl_38.db"
+        assert CheMBL._db_name_from_url("http://example.org/custom.tar.gz") == "chembl.db"
+
+    # ── Local database reuse ──────────────────────────────────────────────────
+
+    def test_existing_database_is_used_without_any_network_access(self, tmp_path, monkeypatch):
+        """An existing chembl_37.db is reused — never re-fetch 5 GB for a new release."""
+        self._forbid_network(monkeypatch)
+        self._make_db(tmp_path / "chembl_37.db")
+
+        chembl = CheMBL(data_dir=str(tmp_path))
+
+        assert chembl.db_path == str(tmp_path / "chembl_37.db")
+        assert chembl.release == 37
+        assert chembl.db_url is None  # never resolved: no download was needed
+
+    def test_newest_local_database_is_preferred(self, tmp_path, monkeypatch):
+        """With several releases on disk, the highest-numbered one is opened."""
+        self._forbid_network(monkeypatch)
+        self._make_db(tmp_path / "chembl_36.db")
+        self._make_db(tmp_path / "chembl_37.db")
+
+        assert CheMBL(data_dir=str(tmp_path)).release == 37
+
+    def test_explicit_db_name_is_honoured(self, tmp_path, monkeypatch):
+        """An explicit db_name still wins over the newest file on disk."""
+        self._forbid_network(monkeypatch)
+        self._make_db(tmp_path / "chembl_36.db")
+        self._make_db(tmp_path / "chembl_37.db")
+
+        chembl = CheMBL(db_name="chembl_36.db", data_dir=str(tmp_path))
+        assert chembl.release == 36
+
+    # ── Download path ─────────────────────────────────────────────────────────
+
+    def test_download_target_is_named_after_the_resolved_release(self, tmp_path, monkeypatch):
+        """With nothing on disk, the local filename follows the resolved archive."""
+        self._serve_listing(monkeypatch, self._listing("chembl_38_sqlite.tar.gz"))
+
+        def fake_download(self, url=None, force=False):
+            self._make_db_called_with = url
+            TestChEMBLReleaseResolution._make_db(self.db_path)
+
+        monkeypatch.setattr(CheMBL, "download_database", fake_download)
+
+        chembl = CheMBL(data_dir=str(tmp_path))
+
+        assert chembl.db_path == str(tmp_path / "chembl_38.db")
+        assert chembl.release == 38
+        assert chembl.db_url.endswith("chembl_38_sqlite.tar.gz")
+        assert chembl._make_db_called_with == chembl.db_url
+
+    def test_redownload_moves_to_the_newest_release(self, tmp_path, monkeypatch):
+        """redownload=True ignores what is on disk and fetches the current release."""
+        self._make_db(tmp_path / "chembl_36.db")
+        self._serve_listing(monkeypatch, self._listing("chembl_38_sqlite.tar.gz"))
+        monkeypatch.setattr(
+            CheMBL,
+            "download_database",
+            lambda self, url=None, force=False: TestChEMBLReleaseResolution._make_db(self.db_path),
+        )
+
+        chembl = CheMBL(data_dir=str(tmp_path), redownload=True)
+
+        assert chembl.release == 38
+        assert os.path.exists(tmp_path / "chembl_36.db")  # never deleted for the user
+
+    def test_explicit_db_url_is_not_overridden(self, tmp_path, monkeypatch):
+        """A caller-supplied db_url disables listing resolution entirely."""
+        self._forbid_network(monkeypatch)
+        monkeypatch.setattr(
+            CheMBL,
+            "download_database",
+            lambda self, url=None, force=False: TestChEMBLReleaseResolution._make_db(self.db_path),
+        )
+
+        url = "http://example.org/mirror/chembl_35_sqlite.tar.gz"
+        chembl = CheMBL(data_dir=str(tmp_path), db_url=url)
+
+        assert chembl.db_url == url
+        assert chembl.db_path == str(tmp_path / "chembl_35.db")
+
+    def test_auto_download_false_never_touches_the_network(self, tmp_path, monkeypatch):
+        """Without a database and without auto_download, fail offline and fast."""
+        self._forbid_network(monkeypatch)
+
+        with pytest.raises(FileNotFoundError) as exc_info:
+            CheMBL(data_dir=str(tmp_path), auto_download=False)
+
+        assert "chembl" in str(exc_info.value).lower()
+
+    @pytest.mark.integration
+    def test_resolved_archive_url_is_reachable(self):
+        """The resolved archive really exists on the EBI server (needs network).
+
+        This is the guard against the next moving-target break: when EBI ships
+        ChEMBL 38 and drops 37 from ``latest/``, resolution must follow it.
+        """
+        url = CheMBL.resolve_latest_db_url()
+        try:
+            response = requests.head(url, timeout=30, allow_redirects=True)
+        except requests.RequestException as exc:  # pragma: no cover - network dependent
+            pytest.skip(f"EBI FTP unreachable: {exc}")
+        assert response.status_code == 200, f"{url} is not downloadable"
 
 
 if __name__ == '__main__':

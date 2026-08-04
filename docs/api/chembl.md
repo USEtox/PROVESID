@@ -26,15 +26,15 @@
 
 ## Overview
 
-The ChEMBL module provides access to the ChEMBL SQLite database, a manually curated database of bioactive molecules with drug-like properties maintained by EMBL-EBI. The database contains over 2.3 million compounds with chemical structures, properties, and bioactivity data.
+The ChEMBL module provides access to the ChEMBL SQLite database, a manually curated database of bioactive molecules with drug-like properties maintained by EMBL-EBI. The database contains over 2.9 million compounds (release 37) with chemical structures, properties, and bioactivity data.
 
 ## Database Information
 
-- **Database**: ChEMBL v36
-- **Format**: SQLite (~5GB uncompressed)
+- **Database**: current ChEMBL release, resolved from `latest/` (v37 as of 2026-08)
+- **Format**: SQLite (~30 GB uncompressed for release 37)
 - **Source**: [EMBL-EBI FTP](https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/)
 - **Auto-download**: Yes (on first use)
-- **Compressed size**: ~1.5GB
+- **Compressed size**: ~5.8 GB (release 37)
 
 ## Key Features
 
@@ -225,14 +225,44 @@ chembl = CheMBL(auto_download=False)
 chembl.download_database(force=True)
 ```
 
-Download from command line:
+Download from command line. `latest/` holds only the current release, so check
+which archive it advertises rather than assuming a release number:
 
 ```bash
 cd src/provesid/data
-wget https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/chembl_36_sqlite.tar.gz
-tar -xzf chembl_36_sqlite.tar.gz
-mv chembl_36/chembl_36.db .
+curl -s https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/ \
+  | grep -o 'chembl_[0-9]*_sqlite.tar.gz' | sort -u
+# e.g. chembl_37_sqlite.tar.gz
+wget https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/chembl_37_sqlite.tar.gz
+tar -xzf chembl_37_sqlite.tar.gz
+# the .db sits inside the extracted tree; its depth varies between releases
+find chembl_37 -name 'chembl_37.db' -exec mv {} . \;
+rm -r chembl_37
 ```
+
+## Release Handling
+
+`CheMBL` does not pin a release number. On first use it reads the `latest/`
+directory listing, downloads the archive it advertises, and names the local
+database after it (`chembl_37_sqlite.tar.gz` → `chembl_37.db`):
+
+```python
+from provesid import CheMBL
+
+CheMBL.resolve_latest_db_url()
+# 'https://.../latest/chembl_37_sqlite.tar.gz'
+
+chembl = CheMBL()
+chembl.release   # 37
+chembl.db_path   # .../chembl_37.db
+```
+
+- Any `chembl_*.db` already in the data directory is reused — a new ChEMBL
+  release does not trigger a multi-gigabyte re-download. Pass `redownload=True` to move to
+  the newest release.
+- If the listing cannot be read, `CheMBL.DEFAULT_DB_URL` (pinned to release
+  `CheMBL.FALLBACK_RELEASE`) is used and a warning is logged.
+- `db_url=`, `db_name=`, and `db_path=` still override everything.
 
 ## Performance Notes
 

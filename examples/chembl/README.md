@@ -31,8 +31,8 @@ print(f"LogP: {props['alogp']}")
 
 ## Database Information
 
-- **Database**: ChEMBL v36 SQLite
-- **Size**: ~5GB (uncompressed), ~1.5GB (compressed)
+- **Database**: current ChEMBL release SQLite, resolved from `latest/` (v37 as of 2026-08)
+- **Size**: ~30 GB uncompressed, ~5.8 GB compressed (release 37; grows each release)
 - **Source**: https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/
 - **Auto-download**: Yes (on first use)
 

@@ -25,14 +25,17 @@ for method in sorted(methods):
 
 # %% Show default configuration
 print(f"\n3. Configuration:")
-print(f"   - Default DB URL: {CheMBL.DEFAULT_DB_URL}")
-print(f"   - Database name: chembl_36.db")
+print(f"   - Release listing: {CheMBL.LATEST_DIR_URL}")
+print(f"   - Pinned fallback URL: {CheMBL.DEFAULT_DB_URL}")
+print(f"   - Resolved current release URL: {CheMBL.resolve_latest_db_url()}")
+print(f"   - Database name: derived from the archive, e.g. chembl_37.db")
 
 # %% Show what would happen on initialization
 print(f"\n4. Initialization Behavior:")
 print(f"   - With auto_download=True: Downloads database if missing")
+print(f"   - Any existing chembl_*.db in the data dir is reused (no re-download)")
 print(f"   - With auto_download=False: Raises FileNotFoundError if missing")
-print(f"   - Database size: ~5GB (uncompressed), ~1.5GB (compressed)")
+print(f"   - Database size: ~30 GB uncompressed, ~5.8 GB compressed (release 37)")
 
 print("\n5. Search Methods Available:")
 search_methods = [

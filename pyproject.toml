@@ -43,10 +43,11 @@ dependencies = [
 [project.optional-dependencies]
 # AI-based ChEBI taxonomy classification (heavy: pulls in PyTorch).
 # The transformer + rule-based models work with just this extra; the graph (GNN)
-# models additionally need the PyG stack + git deps + an index patch — use
-# `bash scripts/install_chebifier.sh`. See docs/chebifier.md.
+# models additionally need torch_scatter, which has no source install and must
+# come from the PyG wheel index — use `bash scripts/install_chebifier.sh`.
+# See docs/chebifier.md.
 chebifier = [
-    "chebifier==1.2.1",
+    "chebifier[models]==1.2.2",
 ]
 dev = [
     "pytest>=6.0",

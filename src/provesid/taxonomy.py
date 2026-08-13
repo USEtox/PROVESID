@@ -7,10 +7,13 @@ offline, AI-based ChEB-AI ``chebifier`` ensemble that assigns ChEBI ontology
 classes to molecules.
 
 ``chebifier`` is a heavy, optional dependency (it pulls in PyTorch and, for the
-graph models, the PyG stack). It is therefore **not** a core requirement of
-PROVESID; install it with the ``chebifier`` extra plus the helper script::
+graph models, part of the PyG stack). It is therefore **not** a core requirement
+of PROVESID; install it with::
 
     bash scripts/install_chebifier.sh
+
+which wraps ``pip install 'chebifier[models]'`` plus the ``torch_scatter`` wheel
+the graph models need from the PyG index.
 
 See ``docs/chebifier.md`` for the full installation story and known issues, and
 ``plans/2026-07-02-chemical-taxonomy-classyfire-chebifier.md`` (§10) for the
@@ -30,9 +33,11 @@ Key design points (mirrors the PROVESID conventions):
 * **InChIKey-keyed, resumable cache.** Each structure is classified once and
   cached on disk (keyed by InChIKey + chebifier version + configuration), so a
   re-run over the same chemicals hits the cache and never reloads the model.
-* **Self-healing checkpoint compatibility.** chebifier 1.2.1's graph checkpoints
+* **Self-healing checkpoint compatibility.** chebifier's graph checkpoints
   require chebai-graph's property index vocabularies in a specific (older) state.
-  :func:`ensure_v244_indices` restores them if a drifted version is installed.
+  ``chebifier[models]==1.2.2`` pins a matching ``chebai-graph``, and
+  :func:`ensure_v244_indices` restores the indices if a drifted version is
+  installed over it.
 """
 
 from __future__ import annotations
@@ -54,7 +59,7 @@ from .utils import user_dataset_path
 logger = logging.getLogger(__name__)
 
 #: chebifier release this backend is validated against (see docs/chebifier.md).
-CHEBIFIER_PINNED_VERSION = "1.2.1"
+CHEBIFIER_PINNED_VERSION = "1.2.2"
 
 #: Columns of the tidy taxonomy table returned by ``classify`` (shared with the
 #: planned ClassyFire backend, hence the ClassyFire-only level columns).
@@ -74,12 +79,14 @@ TAXONOMY_COLUMNS = [
 # ---------------------------------------------------------------------------
 # chebai-graph property-index compatibility (v244 checkpoints)
 # ---------------------------------------------------------------------------
-# chebifier 1.2.1 ships GNN checkpoints ("v244") whose edge/node feature widths
-# are fixed by chebai-graph's one-hot property vocabularies. A chebai-graph
-# commit (ea77f36, 2026-03-02, *after* chebifier 1.2.1 shipped) appended tokens
-# to three of them, widening the graph feature vectors and breaking checkpoint
+# chebifier ships GNN checkpoints ("v244") whose edge/node feature widths are
+# fixed by chebai-graph's one-hot property vocabularies. A chebai-graph commit
+# (ea77f36, 2026-03-02, first released in chebai-graph 1.1.0) appended tokens to
+# three of them, widening the graph feature vectors and breaking checkpoint
 # loading with "mat1 and mat2 shapes cannot be multiplied". These are the
-# pre-drift (commit 677d44b) contents that match the v244 checkpoints.
+# pre-drift (commit 677d44b) contents that match the v244 checkpoints; they are
+# also what chebai-graph 1.0.0 -- the version chebifier[models] pins -- ships,
+# so the check below is a no-op on a clean install.
 _V244_PROPERTY_INDICES: Dict[str, List[str]] = {
     "BondType": ["DATIVE", "SINGLE", "AROMATIC", "TRIPLE", "DOUBLE"],
     "AtomNumHs": ["0", "3", "2", "4", "1", "5", "6"],
@@ -113,9 +120,11 @@ def chebifier_available() -> bool:
 
 
 #: Modules the *default* chebifier ensemble needs, beyond ``chebifier`` itself.
-#: ``pip install 'provesid[chebifier]'`` installs only some of these; the rest come
-#: from ``scripts/install_chebifier.sh``. Missing any of them makes the default
-#: ensemble fail at predict time with a bare ``ModuleNotFoundError``.
+#: ``pip install 'provesid[chebifier]'`` (i.e. ``chebifier[models]``) installs all
+#: of them; the graph models additionally need ``torch_scatter`` from the PyG wheel
+#: index, which is what ``scripts/install_chebifier.sh`` adds. Missing any of these
+#: makes the default ensemble fail at predict time with a bare
+#: ``ModuleNotFoundError``.
 _DEFAULT_ENSEMBLE_MODULES = (
     "chebifier",
     "chebai",         # electra transformer model
@@ -196,10 +205,13 @@ def ensure_v244_indices() -> Dict[str, str]:
 
     Reverts the ``BondType``/``AtomNumHs``/``NumAtomBonds`` one-hot vocabularies
     inside the installed ``chebai_graph`` package to their pre-drift contents when
-    a newer (drifted) version is present. Without this, chebifier 1.2.1's graph
-    (GNN) models fail to load with a tensor-shape error. The operation is
-    idempotent and a no-op when the indices already match or when ``chebai_graph``
-    is not installed. See ``docs/chebifier.md`` for the full root-cause writeup.
+    a newer (drifted) version is present. Without this, chebifier's graph (GNN)
+    models fail to load with a tensor-shape error. This is a safety net for a
+    hand-upgraded ``chebai_graph``: the version pinned by ``chebifier[models]``
+    (1.0.0) already matches, so every property reports ``"ok"`` on a clean
+    install. The operation is idempotent and a no-op when the indices already
+    match or when ``chebai_graph`` is not installed. See ``docs/chebifier.md`` for
+    the full root-cause writeup.
 
     Returns:
         Mapping of property name to a status string: ``"patched"``, ``"ok"``
@@ -384,7 +396,7 @@ def _load_chebifier():
             "The chebifier taxonomy backend requires the optional 'chebifier' "
             "extra and its model dependencies. Install with:\n"
             "    bash scripts/install_chebifier.sh\n"
-            "or, for the transformer/rule-based models only:\n"
+            "or, for the transformer/rule-based models only (no graph models):\n"
             "    pip install 'provesid[chebifier]'"
         ) from exc
     return BaseEnsemble

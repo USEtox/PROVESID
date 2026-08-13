@@ -6,9 +6,10 @@ offline, AI-based classifier that combines a transformer model, graph neural
 networks, and rule-based models. In PROVESID this is exposed through
 `provesid.taxonomy.ChebifierClassifier`.
 
-`chebifier` is **heavy** (it pulls in PyTorch and, for the graph models, the PyG
-stack) and its model weights are large, so it is an **optional** dependency. The
-core `pip install provesid` stays light and does not require any of it.
+`chebifier` is **heavy** (it pulls in PyTorch and, for the graph models, part of
+the PyG stack) and its model weights are large, so it is an **optional**
+dependency. The core `pip install provesid` stays light and does not require any
+of it.
 
 ---
 
@@ -18,6 +19,28 @@ Linux / CPU, all models including the graph (GNN) models:
 
 ```bash
 bash scripts/install_chebifier.sh
+```
+
+That is a thin wrapper around two pip commands, which you can also run by hand:
+
+```bash
+uv pip install "chebifier[models]"
+uv pip install torch==2.12.0 torch_scatter torch_geometric \
+    -f https://data.pyg.org/whl/torch-2.12.0+cpu.html
+uv pip install "provesid[chebifier]"
+```
+
+Installing torch from the **CPU** index instead is worth it — measured **1.6 GB**
+of site-packages against **5.4 GB**, because plain PyPI `torch` adds 2.7 GB of
+CUDA wheels plus a 700 MB triton. Do it first, so nothing pulls a CUDA torch that
+is then thrown away (this is what the script does by default):
+
+```bash
+uv pip install torch==2.12.0 --index-url https://download.pytorch.org/whl/cpu
+uv pip install "chebifier[models]"
+uv pip install torch_scatter torch_geometric \
+    -f https://data.pyg.org/whl/torch-2.12.0+cpu.html
+uv pip install "provesid[chebifier]"
 ```
 
 Then:
@@ -38,52 +61,77 @@ reuse them and hit the on-disk cache.
 
 ## Why an install script?
 
-`chebifier` cannot be fully installed with a single `pip install`. Two problems
-had to be solved, both verified by actually running the ensemble on CPU:
+Much less than it used to be. **chebifier 1.2.2** ships a `models` extra that
+pins the entire model stack, and every piece of it is now on PyPI — so the git
+installs, the `chebi-utils` workaround and the index patch that earlier PROVESID
+releases needed are all gone. What the script still does:
 
-### 1. The graph stack pins torch to 2.11
+### 1. `torch_scatter` must come from the PyG wheel index
 
-The graph models depend on `chebai-graph`, which needs the PyG compiled
-extensions `pyg_lib`, `torch_scatter`, `torch_sparse`, and **`torch_cluster`**.
-These have **no source install** — they must come from the PyG wheel index that
-matches the *exact* installed torch version and platform:
+The graph models depend on `chebai-graph`, which needs the compiled PyG extension
+**`torch_scatter`** (plus the pure-python `torch_geometric`). `torch_scatter` has
+**no source install** — it must come from the PyG wheel index matching the
+*exact* torch version and platform:
 
 ```
 https://data.pyg.org/whl/torch-<version>+cpu.html
 ```
 
-`torch_cluster`'s newest prebuilt CPU wheel is for **torch 2.11** — there is no
-torch 2.12 wheel. So the whole stack is pinned to **torch 2.11.0** on CPU, and
-the PyG extensions are installed *before* `chebai-graph`.
+This cannot be expressed in `pyproject.toml`, hence a script (or the two manual
+commands above).
 
-### 2. Some dependencies are git-only or undeclared
+`chebai-graph` 1.0.0 needs **only** `torch_scatter` — not `torch_sparse`,
+`torch_cluster` or `pyg_lib`. `torch_cluster` was the package with no wheel past
+torch 2.11 and the sole reason the stack used to be pinned to torch 2.11; without
+it, **torch 2.12** works (verified end-to-end on CPU).
 
-| Dependency | How it's installed | Needed for |
-|---|---|---|
-| `chebifier==1.2.1` | PyPI | the ensemble |
-| `chebai==1.3.0` | PyPI | all model readers |
-| `chebai-graph==1.1.0` | PyPI | graph (GNN) models |
-| `chebi-utils` | PyPI (**undeclared** import of `chebai-graph`) | graph models |
-| `chemlog-extra` | `git+https://github.com/ChEB-AI/chemlog-extra.git` | `chemlog_*` models |
-| `c3p` | `git+https://github.com/sfluegel05/c3p.git` | `c3p` model |
+### 2. It defaults to the CPU torch build and verifies the result
 
-The git dependencies are **not** placed in the `pyproject.toml` `chebifier`
-extra, because PyPI rejects direct-URL (`git+…`) references in published package
-metadata. The extra therefore contains only `chebifier==1.2.1`, and the script is
-the documented step for everything else.
+Plain `pip install torch` pulls the CUDA wheels (5.4 GB of site-packages); the
+script installs torch from `https://download.pytorch.org/whl/cpu` first (1.6 GB)
+and then imports the whole stack with the *target* interpreter, to fail loudly on
+a partial install. Set `TORCH_INDEX_URL=""` to opt out.
+
+### What gets installed
+
+| Dependency | Version | Comes from | Needed for |
+|---|---|---|---|
+| `chebifier[models]` | 1.2.2 | PyPI | the ensemble + all model deps below |
+| `chebai` | 1.2.0 | `models` extra | electra transformer + model readers |
+| `chebai-graph` | 1.0.0 | `models` extra | graph (GNN) models |
+| `chemlog-extra` | 1.0.1 | `models` extra | `chemlog_*` models |
+| `c3p` | 0.5.0 | `models` extra | `c3p` model |
+| `torch` | 2.12.0 (+cpu) | PyTorch CPU index | everything |
+| `torch_scatter`, `torch_geometric` | 2.1.2+pt212cpu, 2.8.0 | PyG wheel index | graph models |
+
+Because the whole model stack is now expressible as PyPI requirements, the
+`pyproject.toml` extra carries it directly:
+
+```toml
+chebifier = ["chebifier[models]==1.2.2"]
+```
+
+`pip install 'provesid[chebifier]'` therefore gets the transformer and
+rule-based models working on its own; only the graph models need the extra PyG
+step.
 
 ---
 
-## The graph-model checkpoint issue (and its fix)
+## The graph-model checkpoint issue (historical — handled by the pin)
 
-This is the subtle one. On a fresh install the ensemble *loads* every model, but
-prediction crashes in the graph models with:
+Applies to `chebai-graph` **1.1.0+**. With `chebifier[models]==1.2.2`, which pins
+`chebai-graph==1.0.0`, this does not occur — `ensure_v244_indices()` reports
+every index as `"ok"` on a clean install. Kept here because the failure is
+otherwise baffling and reappears the moment `chebai-graph` is upgraded by hand.
+
+With a drifted `chebai-graph`, the ensemble *loads* every model but prediction
+crashes in the graph models with:
 
 ```
 RuntimeError: mat1 and mat2 shapes cannot be multiplied (…x12 and 11x256)
 ```
 
-**Root cause.** chebifier 1.2.1 ships GNN checkpoints ("v244") whose edge/node
+**Root cause.** chebifier 1.2.x ships GNN checkpoints ("v244") whose edge/node
 feature widths are fixed (e.g. `gat-aug` edge dimension = 11). Those widths are
 produced by `chebai-graph`'s one-hot **property index vocabularies**, stored as
 text files inside the package:
@@ -108,29 +156,28 @@ predictions. Node-feature drift is absorbed by chebifier's internal padding;
 edge features are **not** padded, which is why `BondType` is what actually
 crashes the GNNs.
 
-This also explains why the hosted [chebifier web
-app](https://chebifier.hastingslab.org/) works while a fresh install does not:
-the web deployment's environment predates the drift, and the web repo's
-`requirements.txt` is unpinned — so the "missing link" is not a version pin, it's
-these index files.
+This also explained why the hosted [chebifier web
+app](https://chebifier.hastingslab.org/) kept working while a fresh unpinned
+install did not: the web deployment's environment predates the drift.
 
-**The fix.** Revert the three index files to their pre-drift (`677d44b`)
-contents. This is done two ways, both idempotent:
+**The fix.** Two layers, both idempotent:
 
-* **Install script** — `install_chebifier.sh` patches them after install.
-* **At runtime** — `ChebifierClassifier` calls
-  `provesid.taxonomy.ensure_v244_indices()` before loading the ensemble, so it
-  self-heals even if `chebai-graph` is later reinstalled. You can also call it
-  directly:
+* **The pin** — `chebifier[models]==1.2.2` resolves `chebai-graph==1.0.0`
+  (released 2025-12-08, before the 2026-03-02 drift), whose index files already
+  match the v244 checkpoints. This is the primary fix and needs no patching.
+* **At runtime, as a safety net** — `ChebifierClassifier` calls
+  `provesid.taxonomy.ensure_v244_indices()` before loading the ensemble, which
+  restores the three index files if a drifted `chebai-graph` is ever installed
+  over the pin. You can also call it directly:
 
   ```python
   from provesid.taxonomy import ensure_v244_indices
-  ensure_v244_indices()   # {'BondType': 'patched', 'AtomNumHs': 'ok', ...}
+  ensure_v244_indices()   # {'BondType': 'ok', 'AtomNumHs': 'ok', 'NumAtomBonds': 'ok'}
   ```
 
 **Upstream follow-up.** The clean long-term fix is for ChEB-AI to ship
-checkpoint-matched index files with the model repos (or retrain). Until then, the
-pin (`chebifier==1.2.1`) plus this patch is the reproducible combination.
+checkpoint-matched index files with the model repos (or retrain), so newer
+`chebai-graph` releases can be used with these checkpoints.
 
 ---
 
@@ -200,16 +247,18 @@ clear_chebifier_cache()
 
 ## Known limitations
 
-- **Non-augmented `gat` model.** The plain `gat_chebi50_v244` model logs
-  `failed to parse a SMILES string` for some inputs and abstains — a pre-existing
-  bug in `chebai-graph`'s non-augmented reader, unrelated to the index fix. It
-  degrades gracefully: the two augmented graph models (`gat-aug`,
-  `resgated-aug`) plus the transformer and rule-based models carry the ensemble.
+- **Non-augmented `gat` model.** With the older stack, the plain
+  `gat_chebi50_v244` model logged `failed to parse a SMILES string` for some
+  inputs and abstained (a `chebai-graph` reader bug). Not reproduced with
+  `chebifier[models]==1.2.2` / `chebai-graph==1.0.0`, but it degrades gracefully
+  in any case: the augmented graph models plus the transformer and rule-based
+  models carry the ensemble.
 - **Per-label confidence.** chebifier's default `predict_smiles_list` returns the
   set of predicted ChEBI classes (not per-class probabilities), so the
   `confidence` column is populated only if a configuration returns scores.
 - **Platform.** The install script targets **Linux/CPU**. On other platforms the
-  PyG wheel tags and `torch_cluster` availability differ.
+  PyG wheel tags differ — check what exists under
+  <https://data.pyg.org/whl/> for your torch version.
 
 ---
 

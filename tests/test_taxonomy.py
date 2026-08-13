@@ -5,7 +5,7 @@ exercise the guard/feature-detection, the storage redirect, the index patch,
 prediction normalisation, the tidy-schema row building and ``to_labels``.
 
 There are deliberately no end-to-end classification tests: chebifier's full model
-stack is awkward to install (see ``scripts/install_chebifier.sh``) and the suite
+stack is heavy to install (see ``scripts/install_chebifier.sh``) and the suite
 must not depend on it. See the note at the end of this file.
 """
 
@@ -171,13 +171,13 @@ class TestRowAndLabels:
 
 class TestPinnedVersion:
     def test_pinned_version_constant(self):
-        assert CHEBIFIER_PINNED_VERSION == "1.2.1"
+        assert CHEBIFIER_PINNED_VERSION == "1.2.2"
 
 
 # There are deliberately no end-to-end classification tests. chebifier is an
 # optional extra whose full model stack (transformer, graph/GNN, rule-based and
-# c3p models, each a separate package, some git-only) is awkward to install --
-# see scripts/install_chebifier.sh -- so the test suite does not depend on it.
+# c3p models) is heavy to install and needs a torch-version-matched torch_scatter
+# wheel -- see scripts/install_chebifier.sh -- so the suite does not depend on it.
 # The tests above cover everything reachable without the extra: the guard, the
 # storage redirect, the index patch, prediction normalisation and the tidy
 # output schema. To exercise real classification, run the example notebook or:

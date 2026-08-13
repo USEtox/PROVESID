@@ -29,6 +29,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `redownload=True` for that), and otherwise the name is derived from the
   resolved archive (`chembl_37_sqlite.tar.gz` → `chembl_37.db`). New
   `CheMBL.release` attribute reports the release number in use.
+- **Simplified the chebifier install to the two commands upstream now supports.**
+  chebifier 1.2.2 ships a `models` extra that pins the whole model stack
+  (`chebai` 1.2.0, `chebai-graph` 1.0.0, `chemlog-extra` 1.0.1, `c3p` 0.5.0), all
+  on PyPI, so `scripts/install_chebifier.sh` is now a thin wrapper around:
+
+  ```bash
+  uv pip install "chebifier[models]"
+  uv pip install torch==2.12.0 torch_scatter torch_geometric \
+      -f https://data.pyg.org/whl/torch-2.12.0+cpu.html
+  ```
+
+  Consequences, all verified by running the full ensemble on CPU (benzene and
+  aspirin → sensible ChEBI classes, every model incl. the GNNs loaded):
+  - The `provesid[chebifier]` extra is now `chebifier[models]==1.2.2` (was bare
+    `chebifier==1.2.1`), so `pip install 'provesid[chebifier]'` alone gets the
+    transformer and rule-based models working.
+  - **No more git installs** for `chemlog-extra` and `c3p`, and no explicit
+    `chebi-utils` — `chebai-graph` 1.0.0 does not need it.
+  - **torch is no longer capped at 2.11.** Only `torch_scatter` is required (not
+    `torch_sparse`/`torch_cluster`/`pyg_lib`); `torch_cluster`, which has no wheel
+    past torch 2.11, was the sole reason for the old pin. torch **2.12.0** now.
+  - **No index patching needed.** `chebai-graph` 1.0.0 predates the property-index
+    drift that broke the `v244` GNN checkpoints, so the installer no longer
+    rewrites files inside site-packages. `ensure_v244_indices()` stays as a
+    runtime safety net (reports `ok` on a clean install) for a hand-upgraded
+    `chebai-graph`.
+  - The installer takes torch from the PyTorch CPU index by default
+    (`TORCH_INDEX_URL=""` to opt out): **1.6 GB** of site-packages instead of
+    **5.4 GB**, since plain PyPI torch adds 2.7 GB of CUDA wheels plus triton. It
+    also verifies with the interpreter it installed into, rather than whatever
+    `python3` resolves to (this failed when `VIRTUAL_ENV` was set but the
+    environment was not activated).
+- `CHEBIFIER_PINNED_VERSION` is `"1.2.2"`.
 
 ### Added
 - **`Search.sources_available` / `Search.sources_unavailable`**, mirrored on the

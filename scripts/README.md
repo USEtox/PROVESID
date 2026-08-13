@@ -63,36 +63,43 @@ Installs the optional `chebifier` AI-classification backend for PROVESID on
 **Linux/CPU**, with **all models working incl. the graph/GNN models**. Verified
 end-to-end (benzene/aspirin/glucose → sensible ChEBI classes).
 
-**Why a script** — it encodes two non-obvious constraints found by actually
-running the ensemble:
-1. **torch pinned to 2.11.** The graph stack needs `torch_cluster`, whose newest
-   prebuilt CPU wheel is for torch **2.11** (no 2.12 wheel). PyG extensions come
-   from the wheel index matching the exact torch version and install *before*
-   `chebai-graph`.
-2. **chebai-graph property index files are patched** to the state matching
-   chebifier 1.2.1's `v244` checkpoints. A 2026-03-02 upstream commit appended
-   tokens to `BondType`/`AtomNumHs`/`NumAtomBonds`, which otherwise makes the GNN
-   models fail to load (`mat1 and mat2 shapes cannot be multiplied`). See the
-   taxonomy plan §10.4 for the full root-cause writeup.
+**Why a script** — since chebifier **1.2.2** upstream ships a `models` extra that
+pins the whole model stack (all on PyPI), so this is now essentially two pip
+commands:
 
-Install order: torch 2.11 → PyG CPU wheels (incl. `torch_cluster`) →
-`chebifier` + `chebai` + `chebai-graph` + `chebi-utils` → `chemlog-extra` +
-`c3p` (git) → `provesid[chebifier]` → index patch → verify.
+```bash
+uv pip install "chebifier[models]"
+uv pip install torch==2.12.0 torch_scatter torch_geometric \
+    -f https://data.pyg.org/whl/torch-2.12.0+cpu.html
+```
+
+The script wraps those because `torch_scatter` is a compiled extension with no
+source install — it must come from the PyG wheel index matching the exact torch
+version, which cannot be expressed in `pyproject.toml`. It also installs torch
+from the PyTorch **CPU** index (1.6 GB of site-packages, vs 5.4 GB when plain PyPI
+torch adds 2.7 GB of CUDA wheels plus triton) and verifies every model module
+imports.
+
+Install order: torch 2.12 (CPU) → `chebifier[models]` → `torch_scatter` +
+`torch_geometric` from the PyG index → `provesid[chebifier]` → verify.
 
 **Usage:**
 ```bash
 bash scripts/install_chebifier.sh
 ```
 
-**Env vars:** `TORCH_VERSION` (default 2.11.0; must be 2.9–2.11 for
-`torch_cluster`), `CHEBIFIER_VERSION` (1.2.1), `CHEBAI_VERSION` (1.3.0),
-`CHEBAI_GRAPH_VERSION` (1.1.0), `PIP` (defaults to `uv pip`, else `python -m pip`).
+**Env vars:** `TORCH_VERSION` (2.12.0), `CHEBIFIER_VERSION` (1.2.2),
+`TORCH_INDEX_URL` (PyTorch CPU index; set to `""` for plain PyPI), `PIP`
+(defaults to `uv pip`, else `python -m pip`).
 
 **Notes:**
-- Reuses an already-installed torch only if it is in 2.9–2.11 (else errors).
-- `chebi-utils` is an undeclared import of `chebai-graph`, installed explicitly.
-- The non-augmented `gat` model abstains on some SMILES (a pre-existing
-  chebai-graph reader quirk); the augmented graph models carry the ensemble.
+- `chebai-graph` 1.0.0 needs only `torch_scatter` — no `torch_sparse`,
+  `torch_cluster` or `pyg_lib`. `torch_cluster` (no wheel past torch 2.11) was
+  what previously pinned the stack to torch 2.11.
+- No index patching needed anymore: `chebai-graph==1.0.0` predates the property
+  index drift that broke the `v244` GNN checkpoints.
+  `provesid.taxonomy.ensure_v244_indices()` still runs as a safety net and
+  reports `ok` on a clean install. Root-cause writeup: `docs/chebifier.md`.
 - Model weights are **not** installed here; they download on first
   `BaseEnsemble()` use into the shared PROVESID dataset dir
   (`PROVESID_DATA_DIR` to override). See the taxonomy plan §10.2.

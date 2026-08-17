@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`ChebifierClassifier.classify()` wrote model data into the caller's working
+  directory.** The ensemble is *built* under `data_dir` because chemlog_extra and
+  the smoother resolve paths relative to cwd, but `classify()` ran
+  `predict_smiles_list` without that `chdir`, so predicting also created
+  `data/chebi_v244/` and `data/chebi_v200/` wherever the process happened to be
+  running. Now under `data_dir`, like every other path.
 - **ChEMBL was unreachable, and `Search` lost a source without saying so.**
   `CheMBL.DEFAULT_DB_URL` pinned a release number *inside* EBI's moving
   `latest/` path (`latest/chembl_36_sqlite.tar.gz`), so the download started
@@ -64,6 +70,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CHEBIFIER_PINNED_VERSION` is `"1.2.2"`.
 
 ### Added
+- **`ChebifierClassifier(with_scores=True)` and `predict_with_scores()`** —
+  per-label confidence from the chebifier ensemble. `predict_smiles_list`
+  computes a smoothed net score, thresholds it at 0 to pick the surviving
+  classes, then discards it; `predict_with_scores` runs the same four steps
+  (`gather_predictions` → `consolidate_predictions` → smoother → `> 0`) and keeps
+  it, so `classify()`'s `confidence` column is populated for no extra cost — the
+  models still run exactly once. Verified to reproduce `predict_smiles_list`'s
+  label sets exactly (120 molecules, 0 mismatches); scores land in `(0, 1]`.
+- **`ChebifierClassifier(exclude_models=[...])`** — build the ensemble without
+  named models. The motivating case: chebai's tokenizer returns `None` for SMILES
+  outside its vocabulary and the collator then dies on `len(None)`, taking the
+  **whole batch** down. Only `electra` does this, and a reduced ensemble
+  classifies those structures fine — which turned 414 hard failures into 0 over a
+  100k-compound run. Both new options participate in the cache key, so a
+  score-less or reduced-ensemble prediction is never served to a caller who asked
+  for something else.
+- **`chebi_class_names()`** — ChEBI id → name for all ~204k terms, read from the
+  ontology snapshot the ensemble already loads. Offline, and the practical way to
+  label thousands of predicted classes; the alternative was one HTTP call per id.
+  Ids are bare, matching what the ensemble predicts.
 - **`Search.sources_available` / `Search.sources_unavailable`**, mirrored on the
   result frame as `df.attrs["sources_available"]` / `["sources_unavailable"]`,
   plus a single warning naming the missing sources. A degraded run is now

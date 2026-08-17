@@ -382,6 +382,48 @@ def _build_element_class_mapping(chebi_graph, classifier_name: str) -> Dict[int,
     return mapping
 
 
+def chebi_class_names(data_dir: Optional[str] = None) -> Dict[str, str]:
+    """ChEBI id -> name for every term, read from chebifier's ontology snapshot.
+
+    chebifier already ships (and the ensemble already loads) a pickled networkx
+    graph of the whole ChEBI hierarchy, whose nodes carry their names. Reading it
+    is an **offline** alternative to resolving names one at a time through the
+    online ChEBI client, which matters when labelling thousands of predicted
+    classes at once.
+
+    Args:
+        data_dir: Base directory for chebifier storage; defaults to the shared
+            PROVESID dataset dir, exactly as :class:`ChebifierClassifier` does.
+
+    Returns:
+        ``{"33659": "organic aromatic compound", ...}`` -- ids are bare, without
+        the ``CHEBI:`` prefix, matching what the ensemble predicts.
+
+    Raises:
+        ChebifierMissingError: If ``chebifier`` is not installed.
+
+    Example:
+        >>> from provesid.taxonomy import chebi_class_names
+        >>> chebi_class_names()["33659"]  # doctest: +SKIP
+        'organic aromatic compound'
+    """
+    if not chebifier_available():
+        raise ChebifierMissingError(
+            "Reading ChEBI class names requires the optional 'chebifier' extra. "
+            "Install with:\n    bash scripts/install_chebifier.sh"
+        )
+    resolved = _configure_chebifier_storage(data_dir)
+    from chebifier.utils import load_chebi_graph
+
+    with contextlib.chdir(resolved):
+        graph = load_chebi_graph()
+    return {
+        str(node): props["name"]
+        for node, props in graph.nodes(data=True)
+        if props.get("name")
+    }
+
+
 def _load_chebifier():
     """Import and return the ``chebifier.BaseEnsemble`` class.
 
@@ -423,6 +465,13 @@ class ChebifierClassifier:
             default ensemble is used.
         patch_indices: When ``True`` (default), call :func:`ensure_v244_indices`
             before loading the ensemble so the graph models load correctly.
+        with_scores: When ``True``, populate the ``confidence`` column with the
+            ensemble's smoothed net score for each predicted class instead of
+            leaving it empty. See :meth:`predict_with_scores`.
+        exclude_models: Model names to drop from the ensemble configuration, e.g.
+            ``["electra_chebi50-3star_v244"]`` to build a fallback ensemble for
+            structures that crash the transformer's tokenizer (see
+            :meth:`classify`). Applied on top of ``model_configs``.
 
     Raises:
         ChebifierMissingError: If ``chebifier`` is not installed (raised when the
@@ -444,12 +493,16 @@ class ChebifierClassifier:
         resolve_names: bool = False,
         model_configs: Optional[Union[str, Dict[str, Any]]] = None,
         patch_indices: bool = True,
+        with_scores: bool = False,
+        exclude_models: Optional[Sequence[str]] = None,
     ) -> None:
         self.data_dir = _configure_chebifier_storage(data_dir)
         self.use_cache = use_cache
         self.resolve_names = resolve_names
         self.model_configs = model_configs
         self.patch_indices = patch_indices
+        self.with_scores = with_scores
+        self.exclude_models = list(exclude_models or ())
         self._ensemble = None
         self._chebi = None
         self._cache = _service_caches["chebifier"]
@@ -485,11 +538,43 @@ class ChebifierClassifier:
                 os.environ.get("HF_HOME", "<default>"),
             )
             with contextlib.chdir(self.data_dir):
-                if self.model_configs is not None:
-                    self._ensemble = base_ensemble_cls(model_configs=self.model_configs)
+                configs = self._resolve_model_configs()
+                if configs is not None:
+                    self._ensemble = base_ensemble_cls(model_configs=configs)
                 else:
                     self._ensemble = base_ensemble_cls()
         return self._ensemble
+
+    def _resolve_model_configs(self):
+        """The ensemble configuration to build, after applying ``exclude_models``.
+
+        Returns ``None`` (meaning "chebifier's default") when nothing has to be
+        customised, so the common path stays byte-identical to upstream.
+        """
+        if not self.exclude_models:
+            return self.model_configs
+        if self.model_configs is None:
+            from chebifier.utils import get_default_configs
+
+            config = dict(get_default_configs())
+        elif isinstance(self.model_configs, dict):
+            config = dict(self.model_configs)
+        else:
+            import yaml
+
+            with open(self.model_configs, "r") as fh:
+                config = yaml.safe_load(fh)
+        unknown = [m for m in self.exclude_models if m not in config]
+        if unknown:
+            raise ChebifierError(
+                f"exclude_models names not in the ensemble configuration: {unknown}. "
+                f"Available: {sorted(config)}"
+            )
+        for name in self.exclude_models:
+            config.pop(name)
+        if not config:
+            raise ChebifierError("exclude_models removed every model from the ensemble")
+        return config
 
     def _get_chebi(self):
         """Lazily construct an online ChEBI client for name resolution."""
@@ -501,8 +586,18 @@ class ChebifierClassifier:
 
     # -- caching helpers ---------------------------------------------------
     def _cache_key(self, inchikey: str) -> str:
-        """Build the cache key for a structure (InChIKey + version + config)."""
+        """Build the cache key for a structure (InChIKey + version + config).
+
+        ``with_scores`` and ``exclude_models`` change what a prediction contains,
+        so they are part of the key: a cached score-less entry must never be
+        served to a caller that asked for scores, or a reduced-ensemble entry to
+        a caller using the full ensemble.
+        """
         config_sig = "default" if self.model_configs is None else "custom"
+        if self.exclude_models:
+            config_sig += "-x" + ",".join(sorted(self.exclude_models))
+        if self.with_scores:
+            config_sig += "+scores"
         return f"{inchikey}::{self.chebifier_version}::{config_sig}"
 
     @staticmethod
@@ -522,6 +617,59 @@ class ChebifierClassifier:
                     for k, v in prediction.items()}
         # list/tuple/set of ids
         return {str(cid): None for cid in prediction}
+
+    def predict_with_scores(self, smiles_list: Sequence[str]) -> List[Optional[Dict[str, float]]]:
+        """Predict ChEBI classes *and* the score behind each decision.
+
+        ``BaseEnsemble.predict_smiles_list`` returns only the surviving class
+        ids; the smoothed net score it thresholds at 0 to get them is computed
+        and then discarded. This runs the same four steps
+        (``gather_predictions`` -> ``consolidate_predictions`` ->
+        ``smoother`` -> ``> 0``) and keeps the score, so callers get a per-label
+        confidence for free -- the models are run exactly once, no differently
+        and no more often than upstream does.
+
+        Args:
+            smiles_list: Structures to classify.
+
+        Returns:
+            One entry per input: a ``{chebi_id: smoothed_score}`` mapping, or
+            ``None`` for a structure no model could classify (upstream's
+            "complete failure", which ``predict_smiles_list`` also reports as
+            ``None``).
+
+        Note:
+            Verified to reproduce ``predict_smiles_list``'s label sets exactly.
+            The scores are the *smoothed* ones, i.e. the values the ontology
+            consistency pass actually thresholds, so ``score > 0`` holds for
+            every returned label.
+        """
+        import torch
+
+        ens = self.ensemble
+        with contextlib.chdir(self.data_dir):
+            logits, classes = ens.gather_predictions(list(smiles_list))
+            class_idx = {cls: i for i, cls in enumerate(classes)}
+            weights = ens.calculate_classwise_weights(class_idx)
+            net_score, has_valid = ens.consolidate_predictions(logits, weights)
+            if ens.smoother is not None:
+                ens.smoother.set_label_names(list(classes))
+                score = ens.smoother(net_score)
+            else:
+                score = net_score
+            decisions = (score > 0) & has_valid
+            failures = torch.all(~has_valid, dim=1)
+
+        out: List[Optional[Dict[str, float]]] = []
+        for i in range(len(smiles_list)):
+            if bool(failures[i]):
+                out.append(None)
+                continue
+            out.append({
+                classes[j]: float(score[i, j])
+                for j in torch.nonzero(decisions[i], as_tuple=True)[0].tolist()
+            })
+        return out
 
     # -- core API ----------------------------------------------------------
     def classify(
@@ -585,7 +733,15 @@ class ChebifierClassifier:
         # Run the ensemble on the cache misses (single batched call).
         if to_run_idx:
             batch = [smiles_list[i] for i in to_run_idx]
-            raw = self.ensemble.predict_smiles_list(batch)
+            if self.with_scores:
+                raw = self.predict_with_scores(batch)
+            else:
+                # chdir for the same reason the ensemble is *built* under it: the
+                # models resolve some data paths (chebi_v244/, disjoint_*.csv)
+                # relative to the working directory, and without this they are
+                # written into whatever directory the caller happened to run in.
+                with contextlib.chdir(self.data_dir):
+                    raw = self.ensemble.predict_smiles_list(batch)
             for pos, idx in enumerate(to_run_idx):
                 norm = self._normalize_prediction(raw[pos])
                 predictions[idx] = norm

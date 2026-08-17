@@ -231,6 +231,57 @@ from provesid.taxonomy import classify_chebifier
 df = classify_chebifier(["c1ccccc1"])
 ```
 
+### Per-label confidence — `with_scores=True`
+
+`BaseEnsemble.predict_smiles_list` returns only the class ids that survive; the
+smoothed net score it thresholds at 0 to pick them is computed and then thrown
+away. Pass `with_scores=True` (or call `predict_with_scores` directly) to keep
+it:
+
+```python
+clf = ChebifierClassifier(with_scores=True)
+df = clf.classify(["c1ccccc1"])
+dict(zip(df.chebi_ids[0].split("|"), df.confidence[0].split("|")))
+# {'22712': '1', ..., '51614': '0.4936'}   <- the weak tail is what you filter on
+```
+
+This runs the models exactly once, no differently from upstream — it reruns the
+same four steps (`gather_predictions` → `consolidate_predictions` → smoother →
+`> 0`) and keeps the intermediate. Verified to reproduce `predict_smiles_list`'s
+label sets exactly (120 molecules, 0 mismatches). Scores land in `(0, 1]`; in a
+typical sample ~91% of labels sit at 1.0 and the rest spread down to ~0.004.
+
+### Dropping models — `exclude_models`
+
+`exclude_models` removes entries from the ensemble configuration before it is
+built. The motivating case: chebai's tokenizer returns `None` for SMILES outside
+its vocabulary, and the collator then dies with `object of type 'NoneType' has no
+len()`, which takes the **whole batch** down. Every other model handles those
+structures, so a reduced ensemble classifies them fine:
+
+```python
+fallback = ChebifierClassifier(exclude_models=["electra_chebi50-3star_v244"])
+fallback.classify([poison_smiles])      # works where the full ensemble raises
+```
+
+`exclude_models` and `with_scores` both take part in the cache key, so a cached
+full-ensemble or score-less prediction is never served to a caller asking for
+something else.
+
+### ChEBI names without the network — `chebi_class_names()`
+
+The ensemble already loads a pickled networkx graph of the whole ChEBI hierarchy,
+whose nodes carry their names. `chebi_class_names()` just reads it, which beats
+resolving thousands of ids one HTTP call at a time:
+
+```python
+from provesid.taxonomy import chebi_class_names
+names = chebi_class_names()      # ~204k terms, offline
+names["33659"]                   # 'organic aromatic compound'
+```
+
+Ids are **bare**, matching what the ensemble predicts (no `CHEBI:` prefix).
+
 ### Caching
 
 Predictions are cached on disk under the `chebifier` cache service, keyed by
@@ -242,6 +293,15 @@ from provesid.cache import clear_chebifier_cache, get_chebifier_cache_info
 get_chebifier_cache_info()
 clear_chebifier_cache()
 ```
+
+**Turn it off for large one-pass runs** (`use_cache=False`). The cache writes one
+pickle per structure into a single directory and, every 100 writes, re-globs and
+re-`stat`s that entire directory to check its size — which is O(n²) over a run of
+100k structures, and serialises every process when several share the directory.
+Measured on a six-process classification run: 3.09 structures/s with the cache
+off against 1.68/s with it on. It only pays for itself when you expect to
+classify the *same* structures again; a job with its own resume ledger gets
+nothing from it.
 
 ---
 

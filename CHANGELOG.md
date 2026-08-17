@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-17
+
 ### Fixed
 - **`ChebifierClassifier.classify()` wrote model data into the caller's working
   directory.** The ensemble is *built* under `data_dir` because chemlog_extra and

@@ -1370,3 +1370,93 @@ instead of restating it.
 - Fuzzy retrieval has no home among the default sources. If typo recall matters
   later, it wants a real fuzzy index over the curated names, not ZeroPM's rows
   as a proxy for one.
+
+---
+
+## 21. Landed on 2026-09-19 — steps 1 and 2 (§11 repo hygiene, §5 B.1)
+
+The two sequencing steps that had never been started.
+
+### 21.1 §11's premise about `site/` was wrong
+
+§11 says to `git rm -r site/` because "the deploy workflow builds it". It does
+not. `mkdocs-deploy.yml` asserted that a committed `site/` existed
+(`test -f site/index.html`) and uploaded it straight to Pages, so what the world
+read was whichever build someone last remembered to commit — and it had drifted
+well behind the docstrings it came from. Removing `site/` as written would have
+taken the documentation offline.
+
+The workflow now installs the package with its `docs` extra and runs
+`mkdocs build --strict`. The package itself has to be installed, not just
+mkdocs, because mkdocstrings imports `provesid` to read its docstrings. The push
+trigger watches `docs/`, `examples/`, `src/`, `mkdocs.yml` and `pyproject.toml`
+instead of watching `site/` for a commit that will not come. `site/` is deleted
+and gitignored — 85 files, 108k lines.
+
+This is a docs workflow, not a test workflow; dev-principle §5 is untouched.
+
+### 21.2 The strict gate is already met (§13, ahead of step 14)
+
+`mkdocs build --strict` was failing on 11 warnings. Eight were griffe
+complaining about `get_property_table`'s Returns block, whose bulleted column
+list wrapped its continuation lines two spaces past the dash instead of four.
+The other three were doctest *output* lines beginning with `[` and ending with
+`]` — `['PHENYRAMIDOL']` and two tuple lists — which autorefs outside a fence
+reads as cross-reference links and cannot resolve. Those three examples now
+print in a loop rather than echoing a list literal.
+
+The strict build has been clean since, which is what made §21.1 possible. Step
+14 still has to rebuild `docs/` from docstrings; the gate it will be measured
+against now exists.
+
+### 21.3 The rest of §11
+
+- `tests/demo_nci_resolver.py`, `demo_pubchemview.py`, `demo_property_table.py`
+  moved to `examples/` and lost their `sys.path` hacks, which pointed at
+  `tests/src`, a directory that has never existed. They went to the `examples/`
+  **root**, not `examples/resolver/` and `examples/pubchemview/`: `docs/examples/*`
+  are symlinks to those folders and mkdocs-jupyter renders any `.py` it finds
+  there as a notebook page, so a demo dropped in a tutorial folder silently
+  becomes an orphan page on the docs site. Worth remembering for workstream E.
+- `tests/debug_props.py` deleted — it printed the keys of one property response.
+- `API_KEY_GUIDE.md` → `docs/api-keys.md`.
+- `pyproject.toml`: classifiers said 3.8–3.11 against `requires-python = ">=3.12"`,
+  and black targeted py38; both now 3.12. The `[tool.setuptools]` block was dead
+  — hatchling finds `src/provesid` on its own, and a wheel built without it
+  carries the same 21 modules and the same data files.
+- `openpyxl` added. The 106-line stdlib xlsx fallback stays until B.6 deletes it.
+- `examples/chebifier/__pycache__/` was already untracked.
+
+### 21.4 §5 B.1 — 571 lines of superseded resolver
+
+`ids_from_CAS`, `ids_from_name`, `ids_from_SMILES` (437 lines between them),
+`casrn_to_compounds`, `iupac_name_to_id`, `smiles_to_canonical` and
+`_best_candidate_by_name` are gone, and with them tools.py's reason to import
+`PubChemID`, `PYOPSIN`, `CompToxID`, `ChebiSDF` and `tqdm`.
+
+The 21 survivors — `make_candidate`, the six `candidate_from_*` adapters,
+`candidate_similarity`, `compute_consensus` and the small predicates they need
+— are public now. They were private in name only: `search.py` imported all 21
+across the module boundary. Each got a real docstring, and the 18 examples in
+them run and pass.
+
+`tests/test_tools.py` tested nothing but the deleted resolvers and goes whole
+(6 tests). `examples/notebooks/notebooks.py` demonstrated the three deleted
+functions; workstream E deletes it regardless. Its three `demo_ids_from_*.csv`
+result files were output from those functions and go with it; the input
+datasets in that folder stay.
+
+Test suite: 890 passed, 34 skipped. The 3 failures are pre-existing and
+environmental — PubChem is currently answering deliberately-invalid CIDs with
+HTTP 503 ServerBusy instead of 404, which the same tests hit on a clean tree.
+
+### 21.5 Still open
+
+- §12 step 3 is next: `http.py`. Nothing has started — there is no `http.py`,
+  `sources.py`, `pubchem_id.py` or `chebi_sdf.py` in `src/provesid/`.
+- `compute_consensus`'s reputation order still lists `zeropm`, which is correct:
+  ZeroPM still votes when `use_zeropm=True` (§20).
+- B.1 also asked for `examples/notebooks/notebooks.py` to be *rewritten* as a
+  `Search` notebook. It was deleted instead, because workstream E deletes the
+  folder and replaces it with `search/01_search_basics.ipynb` and its siblings.
+  Until step 15 there is no notebook covering that ground.

@@ -152,7 +152,8 @@ venv.bak/
 .ropeproject
 
 # mkdocs documentation
-# site/ is intentionally committed for deploy-only CI workflow.
+# Built by the Documentation workflow on every push; never committed.
+site/
 
 # mypy
 .mypy_cache/

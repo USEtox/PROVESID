@@ -61,26 +61,26 @@ from .opsin import PYOPSIN
 from .pubchem import PubChemID
 from .zeropm import ZeroPM
 from .tools import (
-    _apply_candidate_to_result,
-    _candidate_compatible_with_consensus,
-    _candidate_from_chebi_row,
-    _candidate_from_chembl_row,
-    _candidate_from_comptox_row,
-    _candidate_from_pubchem_row,
-    _candidate_from_zeropm_name_table,
-    _candidate_from_zeropm_smiles,
-    _compute_consensus,
-    _extract_cas_values,
-    _first_cas,
-    _inchi_to_smiles,
-    _inchikey_from_smiles,
-    _is_missing,
-    _make_candidate,
-    _normalize_synonyms,
-    _pick_first,
-    _smiles_to_canonical_and_mass,
-    _text_similarity,
-    _to_float,
+    apply_candidate_to_result,
+    candidate_compatible_with_consensus,
+    candidate_from_chebi_row,
+    candidate_from_chembl_row,
+    candidate_from_comptox_row,
+    candidate_from_pubchem_row,
+    candidate_from_zeropm_name_table,
+    candidate_from_zeropm_smiles,
+    compute_consensus,
+    extract_cas_values,
+    first_cas,
+    inchi_to_smiles,
+    inchikey_from_smiles,
+    is_missing,
+    make_candidate,
+    normalize_synonyms,
+    pick_first,
+    smiles_to_canonical_and_mass,
+    text_similarity,
+    to_float,
 )
 
 # ── Optional RDKit ─────────────────────────────────────────────────────────────
@@ -240,7 +240,7 @@ def normalize_structure(smiles: Optional[str]) -> Dict[str, Any]:
         "mol_weight": None,
         "mol": None,
     }
-    if _is_missing(smiles) or not RDKIT_AVAILABLE or Chem is None:
+    if is_missing(smiles) or not RDKIT_AVAILABLE or Chem is None:
         return empty
 
     try:
@@ -302,7 +302,7 @@ def strip_salts(
 
         strip_salts("[Na+].[Cl-].CC(=O)O")  # "CC(=O)O"
     """
-    if _is_missing(smiles) or not RDKIT_AVAILABLE or Chem is None or _SaltRemover is None:
+    if is_missing(smiles) or not RDKIT_AVAILABLE or Chem is None or _SaltRemover is None:
         return smiles  # type: ignore[return-value]
 
     try:
@@ -766,7 +766,7 @@ class Search:
             )
             self._opsin_available = False
             return None
-        if _is_missing(smiles) or not str(smiles).strip():
+        if is_missing(smiles) or not str(smiles).strip():
             return None
         norm = normalize_structure(str(smiles))
         return {
@@ -967,7 +967,7 @@ class Search:
 
         # Normalise to stripped strings, with every missing form ("", None, NaN,
         # the literal "nan") collapsed to "" so it is never searched.
-        key = df[column].map(lambda v: "" if _is_missing(v) else str(v).strip())
+        key = df[column].map(lambda v: "" if is_missing(v) else str(v).strip())
         queries = [q for q in key.unique().tolist() if q]
 
         if not queries:
@@ -1199,7 +1199,7 @@ class Search:
 
         Compares the query against the candidate ``name``, ``IUPAC_name`` and
         each individual synonym using the configured fuzzy scorer (rapidfuzz)
-        when available, falling back to :func:`_text_similarity`.
+        when available, falling back to :func:`text_similarity`.
 
         Note:
             This is a ranking signal, not evidence of an exact match — use
@@ -1226,7 +1226,7 @@ class Search:
                 return max(scorer(query, n) for n in names) / 100.0
             except Exception:
                 pass
-        return max(_text_similarity(query, n) for n in names)
+        return max(text_similarity(query, n) for n in names)
 
     @staticmethod
     def _completeness_score(cand: Dict[str, Any]) -> float:
@@ -1242,7 +1242,7 @@ class Search:
             Completeness fraction in [0, 1].
         """
         fields = ("SMILES", "InChIKey", "InChI", "molecular_mass", "name", "DTXSID")
-        present = sum(1 for f in fields if not _is_missing(cand.get(f)))
+        present = sum(1 for f in fields if not is_missing(cand.get(f)))
         present += 1 if (cand.get("CAS_candidates") or []) else 0
         return present / (len(fields) + 1)
 
@@ -1268,34 +1268,34 @@ class Search:
             try:
                 row = self._chebi.search_by_inchikey(inchikey)
                 if row:
-                    candidates["chebi"] = _candidate_from_chebi_row(row)
+                    candidates["chebi"] = candidate_from_chebi_row(row)
             except Exception as exc:
                 log.warning("ChEBI OPSIN-InChIKey lookup failed: %s", exc)
         if self._comptox is not None:
             try:
                 row = self._comptox.get_by_inchikey(inchikey)
                 if row:
-                    candidates["comptox"] = _candidate_from_comptox_row(row)
+                    candidates["comptox"] = candidate_from_comptox_row(row)
             except Exception as exc:
                 log.warning("CompTox OPSIN-InChIKey lookup failed: %s", exc)
         if self._pubchem is not None:
             try:
                 row = self._pubchem.get_by_inchikey(inchikey)
                 if row:
-                    candidates["pubchem"] = _candidate_from_pubchem_row(row)
+                    candidates["pubchem"] = candidate_from_pubchem_row(row)
             except Exception as exc:
                 log.warning("PubChemID OPSIN-InChIKey lookup failed: %s", exc)
         if self._zeropm is not None:
             try:
                 table = self._zeropm.get_id_table_from_inchikey(inchikey)
-                candidates["zeropm"] = _candidate_from_zeropm_name_table(inchikey, table)
+                candidates["zeropm"] = candidate_from_zeropm_name_table(inchikey, table)
             except Exception as exc:
                 log.warning("ZeroPM OPSIN-InChIKey lookup failed: %s", exc)
         if self._chembl is not None:
             try:
                 row = self._chembl.search_by_inchikey(inchikey)
                 if row:
-                    candidates["chembl"] = _candidate_from_chembl_row(row, self._chembl)
+                    candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
             except Exception as exc:
                 log.warning("ChEMBL OPSIN-InChIKey lookup failed: %s", exc)
 
@@ -1328,7 +1328,7 @@ class Search:
             try:
                 rows = self._chebi.search_by_cas(cas)
                 if rows:
-                    candidates["chebi"] = _candidate_from_chebi_row(rows[0])
+                    candidates["chebi"] = candidate_from_chebi_row(rows[0])
             except Exception as exc:
                 log.warning("ChEBI CAS lookup failed for %r: %s", cas, exc)
 
@@ -1337,7 +1337,7 @@ class Search:
             try:
                 row = self._comptox.get_by_casrn(cas)
                 if row:
-                    candidates["comptox"] = _candidate_from_comptox_row(row)
+                    candidates["comptox"] = candidate_from_comptox_row(row)
             except Exception as exc:
                 log.warning("CompTox CAS lookup failed for %r: %s", cas, exc)
 
@@ -1346,7 +1346,7 @@ class Search:
             try:
                 row = self._pubchem.get_by_cas(cas)
                 if row:
-                    candidates["pubchem"] = _candidate_from_pubchem_row(row)
+                    candidates["pubchem"] = candidate_from_pubchem_row(row)
             except Exception as exc:
                 log.warning("PubChemID CAS lookup failed for %r: %s", cas, exc)
 
@@ -1354,17 +1354,17 @@ class Search:
         if self._zeropm is not None:
             try:
                 table = self._zeropm.get_id_table_from_cas(cas)
-                candidates["zeropm"] = _candidate_from_zeropm_name_table(cas, table)
+                candidates["zeropm"] = candidate_from_zeropm_name_table(cas, table)
             except Exception as exc:
                 log.warning("ZeroPM CAS lookup failed for %r: %s", cas, exc)
 
         # ChEMBL — enrichment via SMILES after primary sources
         smiles_so_far = _first_smiles_from_candidates(candidates)
-        if self._chembl is not None and not _is_missing(smiles_so_far):
+        if self._chembl is not None and not is_missing(smiles_so_far):
             try:
                 row = self._chembl.search_by_smiles(str(smiles_so_far))
                 if row:
-                    candidates["chembl"] = _candidate_from_chembl_row(row, self._chembl)
+                    candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
             except Exception as exc:
                 log.warning("ChEMBL CAS enrichment failed for %r: %s", cas, exc)
 
@@ -1398,7 +1398,7 @@ class Search:
         if self.use_opsin:
             opsin_anchor = self._opsin_anchor(name)
             if opsin_anchor is not None:
-                anchor_cand = _make_candidate(
+                anchor_cand = make_candidate(
                     "OPSIN",
                     name=name,
                     smiles=opsin_anchor.get("smiles"),
@@ -1408,7 +1408,7 @@ class Search:
                 pool.append(anchor_cand)
                 # Pull the *correct* compound from each source by the OPSIN
                 # InChIKey, even when the name spelling differs.
-                if not _is_missing(opsin_anchor.get("inchikey")):
+                if not is_missing(opsin_anchor.get("inchikey")):
                     pool.extend(
                         self._inchikey_pool(str(opsin_anchor["inchikey"]), "opsin", 1.0)
                     )
@@ -1446,7 +1446,7 @@ class Search:
                 if not rows:
                     rows = self._chebi.search_by_synonym(name, exact=True) or []
                 for rank, row in enumerate(rows[:k]):
-                    add(_candidate_from_chebi_row(row), "chebi", rank, "exact_name")
+                    add(candidate_from_chebi_row(row), "chebi", rank, "exact_name")
             except Exception as exc:
                 log.warning("ChEBI name lookup failed for %r: %s", name, exc)
 
@@ -1457,7 +1457,7 @@ class Search:
                     row = self._comptox.get_by_name(name)
                     rows = [row] if row else []
                 for rank, row in enumerate(rows[:k]):
-                    add(_candidate_from_comptox_row(row), "comptox", rank, "exact_name")
+                    add(candidate_from_comptox_row(row), "comptox", rank, "exact_name")
             except Exception as exc:
                 log.warning("CompTox name lookup failed for %r: %s", name, exc)
 
@@ -1465,14 +1465,14 @@ class Search:
             try:
                 rows = self._pubchem.search_by_name(name, exact=True, limit=k) or []
                 for rank, row in enumerate(rows[:k]):
-                    add(_candidate_from_pubchem_row(row), "pubchem", rank, "exact_name")
+                    add(candidate_from_pubchem_row(row), "pubchem", rank, "exact_name")
             except Exception as exc:
                 log.warning("PubChemID name lookup failed for %r: %s", name, exc)
 
         if self._zeropm is not None:
             try:
                 table = self._zeropm.get_id_table_from_name(name)
-                add(_candidate_from_zeropm_name_table(name, table), "zeropm", 0, "exact_name")
+                add(candidate_from_zeropm_name_table(name, table), "zeropm", 0, "exact_name")
             except Exception as exc:
                 log.warning("ZeroPM name lookup failed for %r: %s", name, exc)
 
@@ -1480,7 +1480,7 @@ class Search:
             try:
                 rows = self._chembl.search_by_name(name, limit=k, exact=True) or []
                 for rank, row in enumerate(rows[:k]):
-                    add(_candidate_from_chembl_row(row, self._chembl), "chembl", rank, "exact_name")
+                    add(candidate_from_chembl_row(row, self._chembl), "chembl", rank, "exact_name")
             except Exception as exc:
                 log.warning("ChEMBL name lookup failed for %r: %s", name, exc)
 
@@ -1516,7 +1516,7 @@ class Search:
                     if not rows:
                         rows = self._chebi.search_by_synonym(norm_name, exact=False) or []
                     for rank, row in enumerate(rows[:k]):
-                        add_fuzzy(_candidate_from_chebi_row(row), "chebi", rank)
+                        add_fuzzy(candidate_from_chebi_row(row), "chebi", rank)
                 except Exception as exc:
                     log.warning("ChEBI fuzzy name lookup failed for %r: %s", name, exc)
 
@@ -1524,7 +1524,7 @@ class Search:
                 try:
                     rows = self._comptox.search_by_name(norm_name, exact=False, limit=k) or []
                     for rank, row in enumerate(rows[:k]):
-                        add_fuzzy(_candidate_from_comptox_row(row), "comptox", rank)
+                        add_fuzzy(candidate_from_comptox_row(row), "comptox", rank)
                 except Exception as exc:
                     log.warning("CompTox fuzzy name lookup failed for %r: %s", name, exc)
 
@@ -1532,7 +1532,7 @@ class Search:
                 try:
                     rows = self._pubchem.search_by_name(norm_name, exact=False, limit=k) or []
                     for rank, row in enumerate(rows[:k]):
-                        add_fuzzy(_candidate_from_pubchem_row(row), "pubchem", rank)
+                        add_fuzzy(candidate_from_pubchem_row(row), "pubchem", rank)
                 except Exception as exc:
                     log.warning("PubChemID fuzzy name lookup failed for %r: %s", name, exc)
 
@@ -1554,7 +1554,7 @@ class Search:
                         matched_name = str(table["matched_name"].iloc[0])
                         matched_score = float(table["match_score"].iloc[0]) / 100.0
                         add_fuzzy(
-                            _candidate_from_zeropm_name_table(matched_name, table),
+                            candidate_from_zeropm_name_table(matched_name, table),
                             "zeropm",
                             0,
                             score=matched_score,
@@ -1566,7 +1566,7 @@ class Search:
                 try:
                     rows = self._chembl.search_by_name(norm_name, limit=k, exact=False) or []
                     for rank, row in enumerate(rows[:k]):
-                        add_fuzzy(_candidate_from_chembl_row(row, self._chembl), "chembl", rank)
+                        add_fuzzy(candidate_from_chembl_row(row, self._chembl), "chembl", rank)
                 except Exception as exc:
                     log.warning("ChEMBL fuzzy name lookup failed for %r: %s", name, exc)
 
@@ -1592,7 +1592,7 @@ class Search:
                 if not rows:
                     rows = self._chebi.search_by_synonym(name, exact=exact)
                 if rows:
-                    candidates["chebi"] = _candidate_from_chebi_row(rows[0])
+                    candidates["chebi"] = candidate_from_chebi_row(rows[0])
             except Exception as exc:
                 log.warning("ChEBI name lookup failed for %r: %s", name, exc)
 
@@ -1603,7 +1603,7 @@ class Search:
                     matches = self._comptox.search_by_name(name, exact=False, limit=5)
                     row = matches[0] if matches else None
                 if row:
-                    candidates["comptox"] = _candidate_from_comptox_row(row)
+                    candidates["comptox"] = candidate_from_comptox_row(row)
             except Exception as exc:
                 log.warning("CompTox name lookup failed for %r: %s", name, exc)
 
@@ -1611,14 +1611,14 @@ class Search:
             try:
                 rows = self._pubchem.search_by_name(name, exact=exact, limit=5)
                 if rows:
-                    candidates["pubchem"] = _candidate_from_pubchem_row(rows[0])
+                    candidates["pubchem"] = candidate_from_pubchem_row(rows[0])
             except Exception as exc:
                 log.warning("PubChemID name lookup failed for %r: %s", name, exc)
 
         if self._zeropm is not None:
             try:
                 table = self._zeropm.get_id_table_from_name(name)
-                candidates["zeropm"] = _candidate_from_zeropm_name_table(name, table)
+                candidates["zeropm"] = candidate_from_zeropm_name_table(name, table)
             except Exception as exc:
                 log.warning("ZeroPM name lookup failed for %r: %s", name, exc)
 
@@ -1626,7 +1626,7 @@ class Search:
             try:
                 rows = self._chembl.search_by_name(name, limit=5)
                 if rows:
-                    candidates["chembl"] = _candidate_from_chembl_row(rows[0], self._chembl)
+                    candidates["chembl"] = candidate_from_chembl_row(rows[0], self._chembl)
             except Exception as exc:
                 log.warning("ChEMBL name lookup failed for %r: %s", name, exc)
 
@@ -1654,17 +1654,17 @@ class Search:
 
         norm = normalize_structure(smiles)
         canonical = norm["canonical_smiles"] or smiles
-        inchikey = norm["inchikey"] or _inchikey_from_smiles(smiles)
+        inchikey = norm["inchikey"] or inchikey_from_smiles(smiles)
 
         candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
         match_method = "exact_smiles"
 
         # ChEBI — lookup by InChIKey
-        if self._chebi is not None and not _is_missing(inchikey):
+        if self._chebi is not None and not is_missing(inchikey):
             try:
                 row = self._chebi.search_by_inchikey(str(inchikey))
                 if row:
-                    candidates["chebi"] = _candidate_from_chebi_row(row)
+                    candidates["chebi"] = candidate_from_chebi_row(row)
             except Exception as exc:
                 log.warning("ChEBI SMILES lookup failed for %r: %s", smiles, exc)
 
@@ -1672,10 +1672,10 @@ class Search:
         if self._comptox is not None:
             try:
                 row = self._comptox.get_by_smiles(smiles)
-                if row is None and not _is_missing(canonical):
+                if row is None and not is_missing(canonical):
                     row = self._comptox.get_by_smiles(canonical)
                 if row:
-                    candidates["comptox"] = _candidate_from_comptox_row(row)
+                    candidates["comptox"] = candidate_from_comptox_row(row)
             except Exception as exc:
                 log.warning("CompTox SMILES lookup failed for %r: %s", smiles, exc)
 
@@ -1683,17 +1683,17 @@ class Search:
         if self._pubchem is not None:
             try:
                 row = self._pubchem.get_by_smiles(smiles)
-                if row is None and not _is_missing(canonical):
+                if row is None and not is_missing(canonical):
                     row = self._pubchem.get_by_smiles(canonical)
                 if row:
-                    candidates["pubchem"] = _candidate_from_pubchem_row(row)
+                    candidates["pubchem"] = candidate_from_pubchem_row(row)
             except Exception as exc:
                 log.warning("PubChemID SMILES lookup failed for %r: %s", smiles, exc)
 
         # ZeroPM
         if self._zeropm is not None:
             try:
-                candidates["zeropm"] = _candidate_from_zeropm_smiles(smiles, self._zeropm)
+                candidates["zeropm"] = candidate_from_zeropm_smiles(smiles, self._zeropm)
             except Exception as exc:
                 log.warning("ZeroPM SMILES lookup failed for %r: %s", smiles, exc)
 
@@ -1702,7 +1702,7 @@ class Search:
             try:
                 row = self._chembl.search_by_smiles(smiles)
                 if row:
-                    candidates["chembl"] = _candidate_from_chembl_row(row, self._chembl)
+                    candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
             except Exception as exc:
                 log.warning("ChEMBL SMILES lookup failed for %r: %s", smiles, exc)
 
@@ -1751,9 +1751,9 @@ class Search:
                 pass
 
         # Pre-populate InChIKey so _finalise_result can use it even without a source match
-        if not _is_missing(inchikey):
+        if not is_missing(inchikey):
             result["InChIKey"] = inchikey
-        if not _is_missing(smiles):
+        if not is_missing(smiles):
             result["SMILES"] = smiles
 
         candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
@@ -1763,16 +1763,16 @@ class Search:
             try:
                 row = self._chebi.search_by_inchi(inchi)
                 if row:
-                    candidates["chebi"] = _candidate_from_chebi_row(row)
+                    candidates["chebi"] = candidate_from_chebi_row(row)
             except Exception as exc:
                 log.warning("ChEBI InChI lookup failed for %r: %s", inchi[:40], exc)
 
         # CompTox — lookup by InChIKey if derived
-        if self._comptox is not None and not _is_missing(inchikey):
+        if self._comptox is not None and not is_missing(inchikey):
             try:
                 row = self._comptox.get_by_inchikey(str(inchikey))
                 if row:
-                    candidates["comptox"] = _candidate_from_comptox_row(row)
+                    candidates["comptox"] = candidate_from_comptox_row(row)
             except Exception as exc:
                 log.warning("CompTox InChI lookup failed: %s", exc)
 
@@ -1781,7 +1781,7 @@ class Search:
             try:
                 row = self._pubchem.get_by_inchi(inchi)
                 if row:
-                    candidates["pubchem"] = _candidate_from_pubchem_row(row)
+                    candidates["pubchem"] = candidate_from_pubchem_row(row)
             except Exception as exc:
                 log.warning("PubChemID InChI lookup failed: %s", exc)
 
@@ -1789,16 +1789,16 @@ class Search:
         if self._zeropm is not None:
             try:
                 table = self._zeropm.get_id_table_from_inchi(inchi)
-                candidates["zeropm"] = _candidate_from_zeropm_name_table(inchi, table)
+                candidates["zeropm"] = candidate_from_zeropm_name_table(inchi, table)
             except Exception as exc:
                 log.warning("ZeroPM InChI lookup failed: %s", exc)
 
         # ChEMBL — via SMILES
-        if self._chembl is not None and not _is_missing(smiles):
+        if self._chembl is not None and not is_missing(smiles):
             try:
                 row = self._chembl.search_by_smiles(str(smiles))
                 if row:
-                    candidates["chembl"] = _candidate_from_chembl_row(row, self._chembl)
+                    candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
             except Exception as exc:
                 log.warning("ChEMBL InChI lookup failed: %s", exc)
 
@@ -1833,7 +1833,7 @@ class Search:
             try:
                 row = self._chebi.search_by_inchikey(inchikey)
                 if row:
-                    candidates["chebi"] = _candidate_from_chebi_row(row)
+                    candidates["chebi"] = candidate_from_chebi_row(row)
             except Exception as exc:
                 log.warning("ChEBI InChIKey lookup failed for %r: %s", inchikey, exc)
 
@@ -1842,7 +1842,7 @@ class Search:
             try:
                 row = self._comptox.get_by_inchikey(inchikey)
                 if row:
-                    candidates["comptox"] = _candidate_from_comptox_row(row)
+                    candidates["comptox"] = candidate_from_comptox_row(row)
             except Exception as exc:
                 log.warning("CompTox InChIKey lookup failed for %r: %s", inchikey, exc)
 
@@ -1851,7 +1851,7 @@ class Search:
             try:
                 row = self._pubchem.get_by_inchikey(inchikey)
                 if row:
-                    candidates["pubchem"] = _candidate_from_pubchem_row(row)
+                    candidates["pubchem"] = candidate_from_pubchem_row(row)
             except Exception as exc:
                 log.warning("PubChemID InChIKey lookup failed for %r: %s", inchikey, exc)
 
@@ -1859,7 +1859,7 @@ class Search:
         if self._zeropm is not None:
             try:
                 table = self._zeropm.get_id_table_from_inchikey(inchikey)
-                candidates["zeropm"] = _candidate_from_zeropm_name_table(inchikey, table)
+                candidates["zeropm"] = candidate_from_zeropm_name_table(inchikey, table)
             except Exception as exc:
                 log.warning("ZeroPM InChIKey lookup failed for %r: %s", inchikey, exc)
 
@@ -1868,7 +1868,7 @@ class Search:
             try:
                 row = self._chembl.search_by_inchikey(inchikey)
                 if row:
-                    candidates["chembl"] = _candidate_from_chembl_row(row, self._chembl)
+                    candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
             except Exception as exc:
                 log.warning("ChEMBL InChIKey lookup failed for %r: %s", inchikey, exc)
 
@@ -1907,7 +1907,7 @@ class Search:
             try:
                 row = self._comptox.get_by_dtxsid(dtxsid)
                 if row:
-                    candidates["comptox"] = _candidate_from_comptox_row(row)
+                    candidates["comptox"] = candidate_from_comptox_row(row)
             except Exception as exc:
                 log.warning("CompTox DTXSID lookup failed for %r: %s", dtxsid, exc)
 
@@ -1915,13 +1915,13 @@ class Search:
         comptox_cand = candidates.get("comptox")
         inchikey = comptox_cand.get("InChIKey") if comptox_cand else None
 
-        if not _is_missing(inchikey):
+        if not is_missing(inchikey):
             # ChEBI
             if self._chebi is not None:
                 try:
                     row = self._chebi.search_by_inchikey(str(inchikey))
                     if row:
-                        candidates["chebi"] = _candidate_from_chebi_row(row)
+                        candidates["chebi"] = candidate_from_chebi_row(row)
                 except Exception as exc:
                     log.warning("ChEBI DTXSID cross-ref failed: %s", exc)
 
@@ -1930,7 +1930,7 @@ class Search:
                 try:
                     row = self._pubchem.get_by_inchikey(str(inchikey))
                     if row:
-                        candidates["pubchem"] = _candidate_from_pubchem_row(row)
+                        candidates["pubchem"] = candidate_from_pubchem_row(row)
                 except Exception as exc:
                     log.warning("PubChemID DTXSID cross-ref failed: %s", exc)
 
@@ -1938,7 +1938,7 @@ class Search:
             if self._zeropm is not None:
                 try:
                     table = self._zeropm.get_id_table_from_inchikey(str(inchikey))
-                    candidates["zeropm"] = _candidate_from_zeropm_name_table(dtxsid, table)
+                    candidates["zeropm"] = candidate_from_zeropm_name_table(dtxsid, table)
                 except Exception as exc:
                     log.warning("ZeroPM DTXSID cross-ref failed: %s", exc)
 
@@ -1947,7 +1947,7 @@ class Search:
                 try:
                     row = self._chembl.search_by_inchikey(str(inchikey))
                     if row:
-                        candidates["chembl"] = _candidate_from_chembl_row(row, self._chembl)
+                        candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
                 except Exception as exc:
                     log.warning("ChEMBL DTXSID cross-ref failed: %s", exc)
 
@@ -1991,7 +1991,7 @@ class Search:
             try:
                 rows = self._chebi.search_by_formula(formula) or []
                 for rank, row in enumerate(_rank_rows_by_completeness(rows)[:k]):
-                    add(_candidate_from_chebi_row(row), "chebi", rank)
+                    add(candidate_from_chebi_row(row), "chebi", rank)
             except Exception as exc:
                 log.warning("ChEBI formula lookup failed for %r: %s", formula, exc)
 
@@ -1999,7 +1999,7 @@ class Search:
             try:
                 rows = self._comptox.search_by_formula(formula) or []
                 for rank, row in enumerate(_rank_rows_by_completeness(rows)[:k]):
-                    add(_candidate_from_comptox_row(row), "comptox", rank)
+                    add(candidate_from_comptox_row(row), "comptox", rank)
             except Exception as exc:
                 log.warning("CompTox formula lookup failed for %r: %s", formula, exc)
 
@@ -2007,7 +2007,7 @@ class Search:
             try:
                 rows = self._pubchem.search_by_formula(formula) or []
                 for rank, row in enumerate(_rank_rows_by_completeness(rows)[:k]):
-                    add(_candidate_from_pubchem_row(row), "pubchem", rank)
+                    add(candidate_from_pubchem_row(row), "pubchem", rank)
             except Exception as exc:
                 log.warning("PubChemID formula lookup failed for %r: %s", formula, exc)
 
@@ -2054,7 +2054,7 @@ class Search:
                     else:
                         table = None
                     if table is not None:
-                        cand = _candidate_from_zeropm_name_table(name, table)
+                        cand = candidate_from_zeropm_name_table(name, table)
                         if cand:
                             candidates["zeropm"] = cand
                             best_score = max(best_score, 0.7)
@@ -2072,7 +2072,7 @@ class Search:
         for cand in candidates.values():
             if cand is None:
                 continue
-            sim = _text_similarity(name, cand.get("name"))
+            sim = text_similarity(name, cand.get("name"))
             best_score = max(best_score, sim)
 
         return candidates, best_score if best_score > 0 else None
@@ -2141,7 +2141,7 @@ class Search:
         best_tanimoto: float = 0.0
 
         def _tanimoto_from_smiles(smiles: Optional[str]) -> float:
-            if _is_missing(smiles) or Chem is None:
+            if is_missing(smiles) or Chem is None:
                 return 0.0
             try:
                 m = Chem.MolFromSmiles(str(smiles))
@@ -2159,7 +2159,7 @@ class Search:
                 if row:
                     t = _tanimoto_from_smiles(row.get("canonical_smiles"))
                     if t >= self.similarity_threshold:
-                        candidates["chembl"] = _candidate_from_chembl_row(row, self._chembl)
+                        candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
                         best_tanimoto = max(best_tanimoto, t)
             except Exception as exc:
                 log.warning("ChEMBL Tanimoto search failed: %s", exc)
@@ -2168,12 +2168,12 @@ class Search:
         if self._pubchem is not None:
             try:
                 norm = normalize_structure(query_smiles)
-                if not _is_missing(norm["canonical_smiles"]):
+                if not is_missing(norm["canonical_smiles"]):
                     row = self._pubchem.get_by_smiles(norm["canonical_smiles"])
                     if row:
                         t = _tanimoto_from_smiles(row.get("smiles") or row.get("canonical_smiles"))
                         if t >= self.similarity_threshold:
-                            candidates["pubchem"] = _candidate_from_pubchem_row(row)
+                            candidates["pubchem"] = candidate_from_pubchem_row(row)
                             best_tanimoto = max(best_tanimoto, t)
             except Exception as exc:
                 log.warning("PubChemID Tanimoto search failed: %s", exc)
@@ -2218,7 +2218,7 @@ class Search:
                     rows = _comptox_skeleton_search(self._comptox, skeleton)
                     row = rows[0] if rows else None
                 if row:
-                    candidates["comptox"] = _candidate_from_comptox_row(row)
+                    candidates["comptox"] = candidate_from_comptox_row(row)
             except Exception as exc:
                 log.warning("CompTox skeleton search failed for %r: %s", skeleton, exc)
 
@@ -2230,7 +2230,7 @@ class Search:
                     rows = _pubchem_skeleton_search(self._pubchem, skeleton)
                     row = rows[0] if rows else None
                 if row:
-                    candidates["pubchem"] = _candidate_from_pubchem_row(row)
+                    candidates["pubchem"] = candidate_from_pubchem_row(row)
             except Exception as exc:
                 log.warning("PubChemID skeleton search failed for %r: %s", skeleton, exc)
 
@@ -2239,7 +2239,7 @@ class Search:
             try:
                 rows = _chebi_skeleton_search(self._chebi, skeleton)
                 if rows:
-                    candidates["chebi"] = _candidate_from_chebi_row(rows[0])
+                    candidates["chebi"] = candidate_from_chebi_row(rows[0])
             except Exception as exc:
                 log.warning("ChEBI skeleton search failed for %r: %s", skeleton, exc)
 
@@ -2292,7 +2292,7 @@ class Search:
                 fields: List[str] = []
                 for cand_field, out_field in _FIELD_MAP.items():
                     val = cand.get(cand_field)
-                    if not _is_missing(val):
+                    if not is_missing(val):
                         fields.append(out_field)
                 # CAS
                 cas_vals = cand.get("CAS_candidates") or []
@@ -2342,7 +2342,7 @@ class Search:
         returned the wrong compound.
 
         A ``consensus_score`` of exactly 0.0 short-circuits to 0.0 rather than
-        following the formula. :func:`~provesid.tools._compute_consensus` only
+        following the formula. :func:`~provesid.tools.compute_consensus` only
         returns 0.0 when there were no candidates at all — one source scores 1.0,
         and even two fully disagreeing sources score 0.5 — so a zero consensus
         means nothing matched, and the formula's floor of ``0.5 × base`` would
@@ -2549,46 +2549,46 @@ class Search:
         if opsin_match:
             cluster_method = "opsin"
 
-        consensus_source, source_match_scores, match_score = _compute_consensus(per_source)
+        consensus_source, source_match_scores, match_score = compute_consensus(per_source)
         consensus_candidate = per_source.get(consensus_source) if consensus_source else None
 
         for source_key in (k for k in self._SOURCE_KEYS if k != "chembl"):
             candidate = per_source.get(source_key)
-            if _candidate_compatible_with_consensus(
+            if candidate_compatible_with_consensus(
                 candidate, consensus_candidate, self.consensus_compat_threshold
             ):
-                _apply_candidate_to_result(result, candidate)
+                apply_candidate_to_result(result, candidate)
 
         chembl_cand = per_source.get("chembl")
-        if _candidate_compatible_with_consensus(
+        if candidate_compatible_with_consensus(
             chembl_cand, consensus_candidate, self.consensus_compat_threshold
         ):
-            _apply_candidate_to_result(result, chembl_cand)
+            apply_candidate_to_result(result, chembl_cand)
 
         # OPSIN supplies a structure even when no source row carried one.
-        if opsin_match and _is_missing(result.get("SMILES")) and not _is_missing(opsin_smiles):
+        if opsin_match and is_missing(result.get("SMILES")) and not is_missing(opsin_smiles):
             result["SMILES"] = opsin_smiles
 
         # Structure normalisation
         norm = normalize_structure(result.get("SMILES"))
         result["canonical_smiles"] = norm["canonical_smiles"]
         result["kekulized_smiles"] = norm["kekulized_smiles"]
-        result["molecular_mass"] = _pick_first(result.get("molecular_mass"), norm["mol_weight"])
+        result["molecular_mass"] = pick_first(result.get("molecular_mass"), norm["mol_weight"])
 
         rdkit_inchi = norm["inchi"]
         rdkit_ik = norm["inchikey"]
-        if not _is_missing(result.get("InChIKey")) and not _is_missing(rdkit_ik):
+        if not is_missing(result.get("InChIKey")) and not is_missing(rdkit_ik):
             if result["InChIKey"] != rdkit_ik:
                 log.debug(
                     "InChIKey mismatch for query %r: source=%r rdkit=%r",
                     result["query"], result["InChIKey"], rdkit_ik,
                 )
-        result["InChI"] = _pick_first(result.get("InChI"), rdkit_inchi)
-        result["InChIKey"] = _pick_first(result.get("InChIKey"), rdkit_ik)
+        result["InChI"] = pick_first(result.get("InChI"), rdkit_inchi)
+        result["InChIKey"] = pick_first(result.get("InChIKey"), rdkit_ik)
 
-        result["name"] = _pick_first(result.get("name"), result.get("IUPAC_name"))
-        result["IUPAC_name"] = _pick_first(result.get("IUPAC_name"), result.get("name"))
-        result["source"] = _pick_first(
+        result["name"] = pick_first(result.get("name"), result.get("IUPAC_name"))
+        result["IUPAC_name"] = pick_first(result.get("IUPAC_name"), result.get("name"))
+        result["source"] = pick_first(
             result.get("source"),
             consensus_candidate.get("source") if consensus_candidate else None,
         )
@@ -2621,10 +2621,10 @@ class Search:
         result["opsin_smiles"] = opsin_smiles
 
         # Salt stripping
-        if self.strip_salts and not _is_missing(result.get("SMILES")):
+        if self.strip_salts and not is_missing(result.get("SMILES")):
             parent = strip_salts(result["SMILES"], self.salt_smarts or None)
             canonical = result.get("canonical_smiles")
-            if not _is_missing(parent) and parent != canonical:
+            if not is_missing(parent) and parent != canonical:
                 result["parent_smiles"] = parent
                 parent_norm = normalize_structure(parent)
                 result["parent_inchikey"] = parent_norm["inchikey"]
@@ -2703,7 +2703,7 @@ def mw_within(
 
         if name_column is not None:
             wanted = row.get(name_column)
-            if not _is_missing(wanted) and _matches_name_exactly(
+            if not is_missing(wanted) and _matches_name_exactly(
                 str(wanted), {"name": hit.get("name"), "IUPAC_name": hit.get("IUPAC_name")}
             ):
                 passed.append("name")
@@ -2798,7 +2798,7 @@ def resolve_cascade(
     def verdict(hit: Dict[str, Any], row: Dict[str, Any]) -> Optional[str]:
         """Run ``accept`` and return the validated_by text, or None to reject."""
         if accept is None:
-            return "inchikey" if not _is_missing(hit.get("InChIKey")) else None
+            return "inchikey" if not is_missing(hit.get("InChIKey")) else None
         outcome = accept(hit, row)
         if isinstance(outcome, bool):
             return "accept" if outcome else None
@@ -2809,7 +2809,7 @@ def resolve_cascade(
         if not pending:
             break
 
-        eligible = [i for i in pending if not _is_missing(rows.at[i, column])]
+        eligible = [i for i in pending if not is_missing(rows.at[i, column])]
         if not eligible:
             continue
 
@@ -2887,10 +2887,10 @@ def _candidate_names(cand: Dict[str, Any]) -> List[str]:
     names: List[str] = []
     for field in ("name", "IUPAC_name"):
         value = cand.get(field)
-        if not _is_missing(value):
+        if not is_missing(value):
             names.append(str(value))
     synonyms = cand.get("Synonyms")
-    if not _is_missing(synonyms):
+    if not is_missing(synonyms):
         names.extend(s.strip() for s in str(synonyms).split(";") if s.strip())
     return names
 
@@ -2938,7 +2938,7 @@ def _rank_rows_by_completeness(rows: List[Dict[str, Any]]) -> List[Dict[str, Any
         return []
     return sorted(
         rows,
-        key=lambda r: sum(1 for v in r.values() if not _is_missing(v)),
+        key=lambda r: sum(1 for v in r.values() if not is_missing(v)),
         reverse=True,
     )
 
@@ -2960,7 +2960,7 @@ def _has_attachment_point(smiles: Any) -> bool:
     Returns:
         True when the SMILES contains an attachment point.
     """
-    return not _is_missing(smiles) and "*" in str(smiles)
+    return not is_missing(smiles) and "*" in str(smiles)
 
 
 def _candidate_cluster_keys(cand: Dict[str, Any], by_skeleton: bool) -> set:
@@ -2981,7 +2981,7 @@ def _candidate_cluster_keys(cand: Dict[str, Any], by_skeleton: bool) -> set:
     """
     keys: set = set()
     ik = cand.get("InChIKey")
-    if not _is_missing(ik):
+    if not is_missing(ik):
         ik_s = str(ik)
         keys.add(("ik", ik_s))
         if by_skeleton and len(ik_s) >= 14:
@@ -2989,12 +2989,12 @@ def _candidate_cluster_keys(cand: Dict[str, Any], by_skeleton: bool) -> set:
         return keys
 
     canon = cand.get("canonical_smiles") or cand.get("SMILES")
-    if not _is_missing(canon):
+    if not is_missing(canon):
         keys.add(("smi", str(canon)))
         return keys
 
     name = cand.get("name") or cand.get("IUPAC_name")
-    if not _is_missing(name):
+    if not is_missing(name):
         keys.add(("name", str(name).strip().lower()))
     return keys
 
@@ -3081,7 +3081,7 @@ def _first_smiles_from_candidates(
         if cand is None:
             continue
         smiles = cand.get("SMILES") or cand.get("canonical_smiles")
-        if not _is_missing(smiles):
+        if not is_missing(smiles):
             return smiles
     return None
 
@@ -3102,7 +3102,7 @@ def _most_complete_row(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         return {}
     if len(rows) == 1:
         return rows[0]
-    return max(rows, key=lambda r: sum(1 for v in r.values() if not _is_missing(v)))
+    return max(rows, key=lambda r: sum(1 for v in r.values() if not is_missing(v)))
 
 
 def _comptox_skeleton_search(

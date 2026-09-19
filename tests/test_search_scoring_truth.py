@@ -150,9 +150,9 @@ def test_attachment_point_detection(smiles, expected):
 
 def _pool_entry(resolver, source_key, smiles, inchikey, name):
     """Build one tagged candidate for ``_finalise_hits`` without touching a database."""
-    from provesid.tools import _make_candidate
+    from provesid.tools import make_candidate
 
-    cand = _make_candidate(source_key.title(), name=name, smiles=smiles, inchikey=inchikey)
+    cand = make_candidate(source_key.title(), name=name, smiles=smiles, inchikey=inchikey)
     return resolver._tag_candidate(cand, source_key, 0, "exact_cas", 1.0)
 
 

@@ -751,20 +751,20 @@ class PubChemView:
 
             - ``StringWithMarkup`` — the value exactly as PubChem wrote it.
             - ``ExperimentalValue`` — the single number, as a float; NaN when
-              the entry reports a range or no number at all.
+                the entry reports a range or no number at all.
             - ``ValueMin`` / ``ValueMax`` — the bounds, equal to
-              ``ExperimentalValue`` for a single value, so a numeric filter
-              needs no special case for ranges.
+                ``ExperimentalValue`` for a single value, so a numeric filter
+                needs no special case for ranges.
             - ``Unit`` — normalised, so ``torr`` and ``mm Hg`` agree.
             - ``ValueSI`` / ``ValueMinSI`` / ``ValueMaxSI`` / ``UnitSI`` — the
-              same quantity in SI units, or NaN where the unit has no
-              unambiguous SI equivalent (a percentage, a ppm).
+                same quantity in SI units, or NaN where the unit has no
+                unambiguous SI equivalent (a percentage, a ppm).
             - ``Operator`` — ``>``, ``<``, ``>=``, ``<=`` or ``~`` when the
-              entry bounds the value rather than stating it.
+                entry bounds the value rather than stating it.
             - ``Qualitative`` — the word that replaced the number, such as
-              ``insoluble``.
+                ``insoluble``.
             - ``Temperature`` — the temperature the measurement was made at, in
-              °C. A *condition*, not the value.
+                °C. A *condition*, not the value.
             - ``FullReference`` — the resolved citation.
 
             The frame is empty, with these columns, when PubChem holds no such

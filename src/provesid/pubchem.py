@@ -907,8 +907,10 @@ class PubChemAPI:
         Example:
             >>> api = PubChemAPI()
             >>> rows = api.get_compound_properties_batch([2244, 702], ['MolecularFormula'])
-            >>> [(row['cid'], row.get('MolecularFormula')) for row in rows]
-            [(2244, 'C9H8O4'), (702, 'C2H6O')]
+            >>> for row in rows:
+            ...     print(row['cid'], row.get('MolecularFormula'))
+            2244 C9H8O4
+            702 C2H6O
         """
         unique_cids = list(dict.fromkeys(cids))
         rows = self.get_properties_for_cids(unique_cids, properties, chunk_size=chunk_size)
@@ -2892,8 +2894,10 @@ class PubChemID:
         Example:
             >>> db = PubChemID()
             >>> rows = db.properties_for_cids([2244, 702], ['MolecularFormula'])
-            >>> [(row['CID'], row['MolecularFormula'], row['Source']) for row in rows]
-            [(2244, 'C9H8O4', 'offline'), (702, 'C2H6O', 'offline')]
+            >>> for row in rows:
+            ...     print(row['CID'], row['MolecularFormula'], row['Source'])
+            2244 C9H8O4 offline
+            702 C2H6O offline
         """
         if properties is not None and not properties:
             raise ValueError("properties must name at least one property, or be None")

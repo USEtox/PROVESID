@@ -2,10 +2,82 @@ import os
 import json
 import requests
 import logging
-from functools import lru_cache
+from typing import Any
 from .cache import cached
 from .config import get_cas_api_key
+from .http import HTTPClient, NotFoundError, ServiceError, ServiceTimeoutError
 CASCommonChem_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+
+#: Seconds between two requests to CAS Common Chemistry. CAS does not publish a
+#: per-second figure alongside the API key, so this is politeness: five
+#: requests a second is what the rest of the package uses for a service that
+#: has not said otherwise.
+CAS_MIN_INTERVAL = 0.2
+
+
+class CASCommonChemError(ServiceError):
+    """
+    Base exception for CAS Common Chemistry failures.
+
+    Raised by the transport rather than by the methods below, which catch it
+    and report the failure in the ``status`` key of the dict they return ---
+    the contract those methods have always had.
+
+    Example:
+        >>> issubclass(CASCommonChemNotFoundError, CASCommonChemError)
+        True
+    """
+    pass
+
+
+class CASCommonChemNotFoundError(CASCommonChemError, NotFoundError):
+    """
+    CAS answered, and its answer was that there is no such substance.
+
+    Example:
+        >>> issubclass(CASCommonChemNotFoundError, NotFoundError)
+        True
+    """
+    pass
+
+
+class CASCommonChemTimeoutError(CASCommonChemError, ServiceTimeoutError):
+    """
+    Every attempt timed out or the connection could not be made.
+
+    Example:
+        >>> issubclass(CASCommonChemTimeoutError, ServiceTimeoutError)
+        True
+    """
+    pass
+
+
+def _lookup_failed(result: Any) -> bool:
+    """
+    Report whether a CAS lookup did not come back with a substance.
+
+    Both methods in this module report absence *and* failure the same way, by
+    returning a dict whose ``found`` is False --- so neither can be cached.
+    Caching the failure would turn one throttled request into a permanent
+    "no such CAS number"; caching the absence would do the same thing for a
+    substance CAS adds next month. Re-asking costs one cheap request, and
+    :func:`~provesid.cache.is_empty_result` makes the same trade for every
+    other client in the package.
+
+    Args:
+        result: The value returned by ``cas_to_detail`` or ``name_to_detail``.
+
+    Returns:
+        True unless the result is a dict that reports ``found`` as True.
+
+    Example:
+        >>> _lookup_failed({"found": False, "status": "Timeout"})
+        True
+        >>> _lookup_failed({"found": True, "rn": "7732-18-5"})
+        False
+    """
+    return not (isinstance(result, dict) and result.get("found") is True)
+
 
 class CASCommonChem:
     """
@@ -50,7 +122,83 @@ class CASCommonChem:
                 "3. Set persistent API key: from provesid.config import set_cas_api_key; set_cas_api_key('your-key')\n"
                 "4. Set environment variable: CCC_API_KEY or CAS_API_KEY"
             )
-    
+
+        self.logger = logging.getLogger(__name__)
+
+        # One shared transport. Before this the module had no pacing and no
+        # retry at all: a throttled request became a "Network Error" entry in
+        # the returned dict, and the cache remembered it. CAS uses its status
+        # codes honestly --- 404 for an unknown CAS number, 401 for a rejected
+        # key --- so the default classifier reads them correctly, and the key
+        # goes on the client where every request picks it up.
+        self._http = HTTPClient(
+            min_interval=CAS_MIN_INTERVAL,
+            headers=self._get_headers(),
+            error_cls=CASCommonChemError,
+            not_found_cls=CASCommonChemNotFoundError,
+            timeout_cls=CASCommonChemTimeoutError,
+            pace_host=self.base_url,
+            logger=self.logger,
+        )
+
+    def _failure_status(self, exc: CASCommonChemError) -> str:
+        """
+        Name the failure an exception describes, the way this module always has.
+
+        Args:
+            exc: The exception the transport raised.
+
+        Returns:
+            The string to put in the ``status`` key of the returned dict.
+
+        Example:
+            >>> cas = CASCommonChem.__new__(CASCommonChem)
+            >>> cas.responses = {200: "Success", 404: "Invalid Request"}
+            >>> cas._failure_status(CASCommonChemError("x", status_code=401))
+            'Unauthorized - Check API Key'
+            >>> cas._failure_status(CASCommonChemTimeoutError("x"))
+            'Timeout'
+        """
+        if isinstance(exc, CASCommonChemTimeoutError):
+            return "Timeout"
+        if exc.status_code == 401:
+            return "Unauthorized - Check API Key"
+        if isinstance(exc, CASCommonChemNotFoundError):
+            return "Not Found"
+        if exc.status_code is None:
+            # No response arrived at all, and it was not a timeout.
+            return "Network Error"
+        return self.responses.get(exc.status_code, "Unknown Status")
+
+    #: Bumped whenever an entry written by an earlier version must not be
+    #: served. Version 2 is this change: the old code cached failures, so a CAS
+    #: number that was looked up during one network outage is on disk as a
+    #: permanent ``{"found": False, "status": "Network Error"}``. Version 1
+    #: entries are made unreachable rather than left to be served as fact.
+    CACHE_SCHEMA_VERSION = 2
+
+    def __cache_key__(self) -> tuple:
+        """
+        Identify this client for cache-key purposes.
+
+        The API key is deliberately not part of it: two keys reach the same
+        registry and get the same answer, so keying on it would only mean a new
+        key started from an empty cache. The endpoint and the schema version are
+        what change what a call returns.
+
+        Returns:
+            Tuple of the class path, the configured base URL and
+            :attr:`CACHE_SCHEMA_VERSION`.
+
+        Example:
+            >>> cas = CASCommonChem.__new__(CASCommonChem)
+            >>> cas.base_url = "https://commonchemistry.cas.org/api"
+            >>> cas.__cache_key__()
+            ('provesid.cascommonchem.CASCommonChem', 'https://commonchemistry.cas.org/api', 2)
+        """
+        return ("provesid.cascommonchem.CASCommonChem", self.base_url,
+                self.CACHE_SCHEMA_VERSION)
+
     def _load_api_key(self, api_key: str = None, api_key_file: str = None) -> str:
         """
         Load API key from multiple sources in priority order:
@@ -100,7 +248,7 @@ class CASCommonChem:
             'Content-Type': 'application/json'
         }
     
-    @cached(service='cas')
+    @cached(service='cas', skip_if=_lookup_failed)
     def cas_to_detail(self, cas_rn: str, timeout=30):
         """
         Returns a dictionary with the data for a given CAS RN using API v2.0
@@ -126,37 +274,30 @@ class CASCommonChem:
         """
         url = self.base_url + self.query_url[0] + "?cas_rn=" + cas_rn
         res = self._empty_res()
-        
+
         try:
-            response = requests.get(url, headers=self._get_headers(), timeout=timeout)
-            res["status"] = self.responses.get(response.status_code, "Unknown Status")
-            
-            if response.status_code == 200:
-                data = response.json()
-                for key in data.keys():
-                    res[key] = data[key]
-                res["found"] = True
+            data = self._http.get_json(url, timeout=timeout)
+        except CASCommonChemError as e:
+            res["status"] = self._failure_status(e)
+            res["found"] = False
+            if res["status"] == "Unauthorized - Check API Key":
+                self.logger.error("CAS API authentication failed. Check your API key.")
             else:
-                res["found"] = False
-                if response.status_code == 404:
-                    res["status"] = "Not Found"
-                elif response.status_code == 401:
-                    res["status"] = "Unauthorized - Check API Key"
-                    logging.error("CAS API authentication failed. Check your API key.")
-                
-        except requests.exceptions.Timeout:
-            res["status"] = "Timeout"
-            logging.error(f"Request timeout for CAS RN: {cas_rn}")
-        except requests.exceptions.RequestException as e:
-            res["status"] = "Network Error"
-            logging.error(f"Network error for CAS RN {cas_rn}: {e}")
+                self.logger.warning(f"CAS lookup failed for CAS RN {cas_rn}: {e}")
+            return res
         except Exception as e:
             res["status"] = "Error"
-            logging.error(f"Unexpected error for CAS RN {cas_rn}: {e}")
-            
+            res["found"] = False
+            self.logger.error(f"Unexpected error for CAS RN {cas_rn}: {e}")
+            return res
+
+        res["status"] = self.responses[200]
+        for key in data.keys():
+            res[key] = data[key]
+        res["found"] = True
         return res
     
-    @cached(service='cas')
+    @cached(service='cas', skip_if=_lookup_failed)
     def name_to_detail(self, name: str, timeout=30):
         """
         Returns compound details for a given name or SMILES using API v2.0
@@ -170,48 +311,34 @@ class CASCommonChem:
         """
         res = self._empty_res()
         url = self.base_url + self.query_url[2] + "?q=" + requests.utils.quote(name)
-        
+
         try:
-            response = requests.get(url, headers=self._get_headers(), timeout=timeout)
-            
-            if response.status_code == 401:
-                res["status"] = "Unauthorized - Check API Key"
-                res["found"] = False
-                logging.error("CAS API authentication failed. Check your API key.")
-                return res
-            elif response.status_code != 200:
-                res["status"] = self.responses.get(response.status_code, "Unknown Status")
-                res["found"] = False
-                return res
-                
-            res_call = response.json()
-            
-            if "count" not in res_call or res_call["count"] == 0:
-                res["status"] = "Not found"
-                res["found"] = False
-                return res
-                
-            if res_call["count"] > 1:
-                logging.warning(f"Multiple compounds found for '{name}', using first result")
-                
-            # Get CAS RN from first result and fetch details
-            cas_rn = res_call["results"][0]["rn"]
-            return self.cas_to_detail(cas_rn)
-            
-        except requests.exceptions.Timeout:
-            res["status"] = "Timeout"
+            res_call = self._http.get_json(url, timeout=timeout)
+        except CASCommonChemError as e:
+            res["status"] = self._failure_status(e)
             res["found"] = False
-            logging.error(f"Request timeout for name: {name}")
-        except requests.exceptions.RequestException as e:
-            res["status"] = "Network Error"
-            res["found"] = False
-            logging.error(f"Network error for name '{name}': {e}")
+            if res["status"] == "Unauthorized - Check API Key":
+                self.logger.error("CAS API authentication failed. Check your API key.")
+            else:
+                self.logger.warning(f"CAS search failed for name '{name}': {e}")
+            return res
         except Exception as e:
             res["status"] = "Error"
             res["found"] = False
-            logging.error(f"Unexpected error for name '{name}': {e}")
-            
-        return res
+            self.logger.error(f"Unexpected error for name '{name}': {e}")
+            return res
+
+        if not res_call.get("count"):
+            res["status"] = "Not found"
+            res["found"] = False
+            return res
+
+        if res_call["count"] > 1:
+            self.logger.warning(f"Multiple compounds found for '{name}', using first result")
+
+        # Get CAS RN from first result and fetch details
+        cas_rn = res_call["results"][0]["rn"]
+        return self.cas_to_detail(cas_rn)
     
     def smiles_to_detail(self, smiles: str, timeout=30):
         return self.name_to_detail(smiles, timeout)

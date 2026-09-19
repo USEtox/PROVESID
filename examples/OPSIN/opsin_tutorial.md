@@ -15,7 +15,9 @@ kernelspec:
 
 OPSIN is a chemical name-to-structure service that converts IUPAC chemical names into chemical structures. This tutorial demonstrates how to use the `OPSIN` class from the `provesid` package to convert IUPAC names to SMILES, InChI, and InChI keys.
 
-OPSIN was developed at the University of Cambridge and provides a reliable service for converting systematic chemical names to molecular representations.
+OPSIN was developed at the University of Cambridge and provides a reliable service for converting systematic chemical names to molecular representations. The web service is hosted by EMBL-EBI.
+
+For more than a handful of names, prefer `PYOPSIN`, which runs the same parser locally through `py2opsin`: it is faster and needs no network.
 
 ```{code-cell} ipython3
 from provesid import OPSIN
@@ -119,23 +121,32 @@ for i, result in enumerate(results):
 
 OPSIN handles various types of input errors gracefully. Let's see how it responds to invalid or ambiguous names:
 
+A failure carries OPSIN's own explanation in `message`, naming the part of the
+name it could not read. That is usually more useful than the status:
+
 ```{code-cell} ipython3
 # Try an invalid chemical name
 invalid_result = opsin.get_id("notarealchemicalname")
 print("Invalid name 'notarealchemicalname':")
 print(f"  Status: {invalid_result['status']}")
 print(f"  SMILES: {invalid_result['smiles']}")
+print(f"  Message: {invalid_result['message']}")
 
 # Try an empty string
 empty_result = opsin.get_id("")
 print("\nEmpty string:")
 print(f"  Status: {empty_result['status']}")
+print(f"  Message: {empty_result['message']}")
 
 # Try a common name that might not be recognized
 common_name_result = opsin.get_id("table salt")
 print("\nCommon name 'table salt' (not IUPAC):")
 print(f"  Status: {common_name_result['status']}")
+print(f"  Message: {common_name_result['message']}")
 ```
+
+Nothing is raised, and neither a failure nor an unreachable service is cached, so
+a name that failed because the network was down is re-asked next time.
 
 ## 5. Comparing Systematic vs Common Names
 
@@ -276,7 +287,13 @@ for name in pharmaceutical_names:
 
 ## 7. Performance Considerations
 
-When processing multiple compounds, OPSIN includes built-in rate limiting to be respectful to the service:
+When processing multiple compounds, OPSIN includes built-in rate limiting to be
+respectful to the service. There are two layers: `get_id_from_list` sleeps
+`pause_time` after each name, and underneath it the shared HTTP transport keeps
+every request at least 0.1 s apart — across every client in the process aimed at
+the same host, which for OPSIN means it shares a budget with `ChEBI`. The
+transport also retries a momentary failure with back-off, so a single 503 no
+longer costs you a compound:
 
 ```{code-cell} ipython3
 import time
@@ -322,6 +339,8 @@ The `OPSIN` class provides two main methods:
 - **Standard InChI**: Standardized version of InChI
 - **InChI Key**: Fixed-length hash of InChI
 - **Status**: SUCCESS/FAILURE indication
+- **Message**: empty on success; on a failure, OPSIN's explanation of what it
+  could not parse
 
 ### Best Practices:
 1. Use systematic IUPAC names for best results
@@ -336,4 +355,6 @@ OPSIN is particularly valuable for:
 - Building chemical databases from text sources
 - Educational applications for learning chemical nomenclature
 
-The service is provided by the University of Cambridge and is free to use for academic and commercial applications.
+OPSIN was written at the University of Cambridge; the web service is hosted by
+EMBL-EBI at `https://www.ebi.ac.uk/opsin/ws/` and is free to use for academic
+and commercial applications.

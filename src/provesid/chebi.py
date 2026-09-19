@@ -22,11 +22,53 @@ from typing import Dict, List, Optional, Union, Any
 from rdkit import Chem
 import pandas as pd
 from tqdm import tqdm
+from .http import HTTPClient, NotFoundError, ServiceError, ServiceTimeoutError
 from .utils import user_dataset_path
 
 
-class ChEBIError(Exception):
-    """Custom exception for ChEBI API errors."""
+#: Seconds between two requests to ChEBI from this process. EBI publishes no
+#: per-IP figure for the ChEBI 2.0 API, so this is politeness rather than a
+#: quoted limit: ten requests a second is well inside what a walk over an
+#: ontology subtree needs.
+CHEBI_MIN_INTERVAL = 0.1
+
+
+class ChEBIError(ServiceError):
+    """
+    Custom exception for ChEBI API errors.
+
+    Also the base for the two more specific failures below, so a caller that
+    catches this one keeps catching everything --- which is what every method
+    in this module does internally before returning None.
+
+    Example:
+        >>> issubclass(ChEBINotFoundError, ChEBIError)
+        True
+    """
+    pass
+
+
+class ChEBINotFoundError(ChEBIError, NotFoundError):
+    """
+    ChEBI answered, and its answer was that there is no such record.
+
+    A statement about the data rather than the request, so it is never retried.
+
+    Example:
+        >>> issubclass(ChEBINotFoundError, NotFoundError)
+        True
+    """
+    pass
+
+
+class ChEBITimeoutError(ChEBIError, ServiceTimeoutError):
+    """
+    Every attempt timed out or the connection could not be made.
+
+    Example:
+        >>> issubclass(ChEBITimeoutError, ServiceTimeoutError)
+        True
+    """
     pass
 
 
@@ -79,6 +121,29 @@ class ChEBI:
         # Setup logging
         self.logger = logging.getLogger(__name__)
 
+        # One shared transport, making its calls through the session above so
+        # that the pooled connection and the persistent headers survive the
+        # move. ChEBI uses its status codes honestly --- unlike PubChem and
+        # CACTUS, it has no fault code in the body to read --- so the default
+        # classifier is the right one.
+        #
+        # Two retries with a half-second base, rather than the transport's
+        # three and one: an ontology walk makes many small requests to a fast
+        # service, where a long back-off curve costs more than the request it
+        # is protecting.
+        self._http = HTTPClient(
+            session=self.session,
+            min_interval=CHEBI_MIN_INTERVAL,
+            timeout=timeout,
+            max_retries=2,
+            backoff=0.5,
+            error_cls=ChEBIError,
+            not_found_cls=ChEBINotFoundError,
+            timeout_cls=ChEBITimeoutError,
+            pace_host=self.base_url,
+            logger=self.logger,
+        )
+
     @staticmethod
     def _format_chebi_id(chebi_id: Union[int, str]) -> str:
         """
@@ -102,9 +167,33 @@ class ChEBI:
     # Low-level HTTP helpers
     # ------------------------------------------------------------------
 
+    def _json_or_text(self, response: requests.Response) -> Any:
+        """
+        Return a response body as JSON when ChEBI says it is JSON, else as text.
+
+        ChEBI serves molfiles and SVG from the same API as its records, and
+        labels them honestly in ``Content-Type``, so the header is what decides.
+
+        Args:
+            response: The response to read.
+
+        Returns:
+            The decoded JSON, or the body as text.
+
+        Raises:
+            ChEBIError: The body was labelled JSON and is not.
+        """
+        if response.headers.get("Content-Type", "").startswith("application/json"):
+            return self._http.decode_json(response)
+        return response.text
+
     def _get(self, endpoint: str, params: Optional[Dict] = None) -> Any:
         """
         Perform a GET request and return the parsed JSON body.
+
+        Pacing, retries and back-off belong to the shared transport; what stays
+        here is ChEBI's own contract --- where its endpoints live and how it
+        labels what it returns.
 
         Args:
             endpoint (str): Path relative to *base_url* (e.g. ``compound/15377/``).
@@ -114,35 +203,34 @@ class ChEBI:
             Parsed JSON response (dict / list / str).
 
         Raises:
-            ChEBIError: On network / HTTP / JSON errors.
+            ChEBINotFoundError: ChEBI reported no such record (404).
+            ChEBITimeoutError: Every attempt timed out or could not connect.
+            ChEBIError: Any other HTTP or JSON failure, including a transient
+                one that outlived the retries.
         """
         url = f"{self.base_url}/{endpoint}"
-        try:
-            response = self.session.get(url, params=params, timeout=self.timeout)
-            response.raise_for_status()
-            if response.headers.get("Content-Type", "").startswith("application/json"):
-                return response.json()
-            return response.text
-        except requests.exceptions.Timeout:
-            raise ChEBIError(f"Request timeout after {self.timeout} seconds")
-        except requests.exceptions.RequestException as e:
-            raise ChEBIError(f"Request failed: {str(e)}")
+        return self._json_or_text(self._http.get(url, params=params))
 
     def _get_raw(self, endpoint: str, params: Optional[Dict] = None) -> requests.Response:
         """
         Perform a GET request and return the raw :class:`requests.Response`.
 
         Useful for endpoints that return non-JSON content (SVG, molfile, images).
+
+        Args:
+            endpoint (str): Path relative to *base_url*.
+            params (dict, optional): Query-string parameters.
+
+        Returns:
+            The response, already classified as a success.
+
+        Raises:
+            ChEBINotFoundError: ChEBI reported no such record (404).
+            ChEBITimeoutError: Every attempt timed out or could not connect.
+            ChEBIError: Any other HTTP failure.
         """
         url = f"{self.base_url}/{endpoint}"
-        try:
-            response = self.session.get(url, params=params, timeout=self.timeout)
-            response.raise_for_status()
-            return response
-        except requests.exceptions.Timeout:
-            raise ChEBIError(f"Request timeout after {self.timeout} seconds")
-        except requests.exceptions.RequestException as e:
-            raise ChEBIError(f"Request failed: {str(e)}")
+        return self._http.get(url, params=params)
 
     def _post_json(self, endpoint: str, json_body: Any = None,
                    params: Optional[Dict] = None) -> Any:
@@ -158,40 +246,64 @@ class ChEBI:
             Parsed JSON response.
 
         Raises:
-            ChEBIError: On network / HTTP / JSON errors.
+            ChEBINotFoundError: ChEBI reported no such record (404).
+            ChEBITimeoutError: Every attempt timed out or could not connect.
+            ChEBIError: Any other HTTP or JSON failure.
         """
         url = f"{self.base_url}/{endpoint}"
-        try:
-            response = self.session.post(
-                url, json=json_body, params=params, timeout=self.timeout,
-            )
-            response.raise_for_status()
-            if response.headers.get("Content-Type", "").startswith("application/json"):
-                return response.json()
-            return response.text
-        except requests.exceptions.Timeout:
-            raise ChEBIError(f"Request timeout after {self.timeout} seconds")
-        except requests.exceptions.RequestException as e:
-            raise ChEBIError(f"Request failed: {str(e)}")
+        return self._json_or_text(
+            self._http.post(url, json=json_body, params=params)
+        )
 
     def _post_text(self, endpoint: str, text_body: str,
                    params: Optional[Dict] = None) -> str:
         """
         Perform a POST request with a ``text/plain`` body and return the
         response text.  Used by the structure-calculation endpoints.
+
+        Args:
+            endpoint (str): Path relative to *base_url*.
+            text_body (str): The body to send, a SMILES string or a formula.
+            params (dict, optional): Query-string parameters.
+
+        Returns:
+            The response body as text.
+
+        Raises:
+            ChEBINotFoundError: ChEBI reported no such record (404).
+            ChEBITimeoutError: Every attempt timed out or could not connect.
+            ChEBIError: Any other HTTP failure.
+        """
+        return self._post_raw(endpoint, text_body, params=params).text
+
+    def _post_raw(self, endpoint: str, text_body: str,
+                  params: Optional[Dict] = None) -> requests.Response:
+        """
+        POST a ``text/plain`` body and return the raw response.
+
+        The structure-calculation endpoints want the text; ``depict_structure``
+        wants the bytes of a PNG. Only the ``Content-Type`` header --- the one
+        thing these endpoints need that the session does not already carry ---
+        is set per request; ``requests`` merges it over the session's own.
+
+        Args:
+            endpoint (str): Path relative to *base_url*.
+            text_body (str): The body to send.
+            params (dict, optional): Query-string parameters.
+
+        Returns:
+            The response, already classified as a success.
+
+        Raises:
+            ChEBINotFoundError: ChEBI reported no such record (404).
+            ChEBITimeoutError: Every attempt timed out or could not connect.
+            ChEBIError: Any other HTTP failure.
         """
         url = f"{self.base_url}/{endpoint}"
-        try:
-            response = self.session.post(
-                url, data=text_body, params=params, timeout=self.timeout,
-                headers={**self.session.headers, "Content-Type": "text/plain;charset=UTF-8"},
-            )
-            response.raise_for_status()
-            return response.text
-        except requests.exceptions.Timeout:
-            raise ChEBIError(f"Request timeout after {self.timeout} seconds")
-        except requests.exceptions.RequestException as e:
-            raise ChEBIError(f"Request failed: {str(e)}")
+        return self._http.post(
+            url, data=text_body, params=params,
+            headers={"Content-Type": "text/plain;charset=UTF-8"},
+        )
 
     # ------------------------------------------------------------------
     # Compound retrieval
@@ -748,22 +860,17 @@ class ChEBI:
         Returns:
             PNG image data as bytes, or *None* on error.
         """
-        url = f"{self.base_url}/structure-calculations/depict-indigo/"
         params: Dict[str, Any] = {
             "width": width,
             "height": height,
             "transbg": str(transparent_bg).lower(),
         }
         try:
-            response = self.session.post(
-                url, data=structure, params=params, timeout=self.timeout,
-                headers={**self.session.headers, "Content-Type": "text/plain;charset=UTF-8"},
+            response = self._post_raw(
+                "structure-calculations/depict-indigo/", structure, params=params,
             )
-            response.raise_for_status()
             return response.content
-        except requests.exceptions.Timeout:
-            raise ChEBIError(f"Request timeout after {self.timeout} seconds")
-        except requests.exceptions.RequestException as e:
+        except ChEBIError as e:
             self.logger.warning(f"depict-indigo failed: {e}")
             return None
 

@@ -296,16 +296,33 @@ print(f"Invalid ID (999999999): {invalid_result}")
 empty_search = chebi.search_by_name("thiscompounddoesnotexist12345")
 print(f"Empty search results: {len(empty_search)} results")
 
-# Handle ChEBIError exceptions
-try:
-    # This might cause a timeout or network error
-    chebi_timeout = ChEBI(timeout=0.001)  # Very short timeout
-    result = chebi_timeout.get_complete_entity(15377)
-except ChEBIError as e:
-    print(f"ChEBIError caught: {e}")
-except Exception as e:
-    print(f"Other error: {e}")
+# A transport failure is reported the same way: as None, with a warning in the
+# log. The public methods never raise, so `if result is None` is the check.
+chebi_timeout = ChEBI(timeout=0.001)          # far too short to succeed
+print(f"Impossible timeout: {chebi_timeout.get_complete_entity(15377)}")
 ```
+
+The timeout is retried twice with back-off before it is given up on, so that
+cell takes a second or two. `ChEBIError` is what the low-level helpers raise and
+what the public methods catch, and it now has two subclasses worth knowing
+about:
+
+```{code-cell} ipython3
+from provesid.chebi import ChEBIError, ChEBINotFoundError, ChEBITimeoutError
+
+try:
+    ChEBI()._get("compound/CHEBI:999999999/")
+except ChEBINotFoundError as e:
+    print(f"No such record: {e}")
+except ChEBITimeoutError as e:
+    print(f"Could not reach ChEBI: {e}")
+except ChEBIError as e:
+    print(f"Some other ChEBI failure: {e}")
+```
+
+Both descend from `ChEBIError`, and `ChEBIError` now descends from
+`provesid.http.ServiceError`, so one `except` can cover every web service in the
+package.
 
 ## 8. Exploring Compound Details
 

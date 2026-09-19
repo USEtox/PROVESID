@@ -18,10 +18,12 @@ from provesid.http import (
     HTTPClient,
     NotFoundError,
     Outcome,
+    RateLimiter,
     RateLimitError,
     ServiceError,
     ServiceTimeoutError,
     default_classify,
+    host_limiter,
     retry_after_seconds,
 )
 
@@ -463,3 +465,244 @@ def test_the_shared_bases_catch_across_modules():
     # And each still catches as its own service, which is what callers wrote.
     assert issubclass(PubChemViewNotFoundError, PubChemViewError)
     assert issubclass(NCIResolverNotFoundError, NCIResolverError)
+
+
+# --------------------------------------------------------------------------
+# Pacing is per host, not per object
+# --------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_two_clients_on_one_host_share_a_clock():
+    """
+    PubChem's five per second is a per-IP budget, so objects cannot each keep
+    their own clock and still honour it.
+    """
+    a = HTTPClient(min_interval=0.2, pace_host="https://pubchem.ncbi.nlm.nih.gov/rest/pug")
+    b = HTTPClient(min_interval=0.2, pace_host="https://pubchem.ncbi.nlm.nih.gov/rest/pug_view")
+
+    assert a.limiter is b.limiter
+    assert a.limiter is host_limiter("pubchem.ncbi.nlm.nih.gov")
+
+
+@pytest.mark.unit
+def test_clients_on_different_hosts_do_not_share_a_clock():
+    """One slow service must not pace a fast unrelated one."""
+    a = HTTPClient(pace_host="https://pubchem.ncbi.nlm.nih.gov/rest/pug")
+    b = HTTPClient(pace_host="https://www.ebi.ac.uk/chebi/backend/api/public")
+    assert a.limiter is not b.limiter
+
+
+@pytest.mark.unit
+def test_a_client_with_no_pace_host_paces_alone():
+    """A stub, or a service with no shared budget, keeps its own clock."""
+    a = HTTPClient(min_interval=0.2)
+    b = HTTPClient(min_interval=0.2)
+    assert a.limiter is not b.limiter
+
+
+@pytest.mark.unit
+def test_the_shared_clock_actually_delays_the_second_client(monkeypatch, sleeps):
+    """
+    The point of sharing: a request waits for the last request *anyone* made.
+    """
+    monkeypatch.setattr(requests, "get", _Recorder(_FakeResponse(200, text="ok")))
+    host = "https://shared.example.test/api"
+    first = HTTPClient(min_interval=0.5, pace_host=host)
+    second = HTTPClient(min_interval=0.5, pace_host=host)
+
+    first.get_text(host)
+    sleeps.clear()
+    second.get_text(host)
+
+    assert len(sleeps) == 1, "the second client did not wait for the first"
+    assert 0 < sleeps[0] <= 0.5
+
+
+@pytest.mark.unit
+def test_last_request_time_stays_per_client():
+    """
+    A client reports when *it* last asked, even though the clock it measures
+    against is shared. A fresh client has never asked.
+    """
+    host = "https://fresh.example.test/api"
+    warm = HTTPClient(pace_host=host)
+    warm.rate_limit()
+
+    assert warm.last_request_time > 0
+    assert HTTPClient(pace_host=host).last_request_time == 0.0
+
+
+@pytest.mark.unit
+def test_a_bare_limiter_records_even_when_pacing_is_off(sleeps):
+    """The request happened, so the next caller has to be able to see it."""
+    limiter = RateLimiter()
+    assert limiter.last_request_time == 0.0
+    limiter.wait(0.0)
+    assert limiter.last_request_time > 0
+    assert sleeps == []
+
+
+# --------------------------------------------------------------------------
+# The total wait budget
+# --------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_max_elapsed_stops_retrying_before_the_attempts_run_out(monkeypatch, sleeps):
+    """
+    A service that says "come back in 30s" three times must not cost 90s.
+
+    PubChem does exactly this to a throttled IP, which is why the budget
+    exists.
+    """
+    recorder = _Recorder(_FakeResponse(503, text="busy", headers={"Retry-After": "30"}))
+    monkeypatch.setattr(requests, "get", recorder)
+
+    client = HTTPClient(max_retries=3, max_elapsed=30, min_interval=0)
+    with pytest.raises(ServiceError, match="stopped retrying after 30s of its 30s retry budget"):
+        client.get("https://example.org/x")
+
+    assert sleeps == [30.0], "the budget allowed exactly one wait"
+    assert recorder.count == 2
+
+
+@pytest.mark.unit
+def test_max_elapsed_does_not_curtail_cheap_retries(monkeypatch, sleeps):
+    """A fast back-off curve fits inside the budget and is spent in full."""
+    recorder = _Recorder(_FakeResponse(503, text="busy"))
+    monkeypatch.setattr(requests, "get", recorder)
+
+    client = HTTPClient(max_retries=3, backoff=0.5, max_elapsed=30, min_interval=0)
+    with pytest.raises(ServiceError):
+        client.get("https://example.org/x")
+
+    assert sleeps == [0.5, 1.0, 2.0]
+    assert recorder.count == 4
+
+
+@pytest.mark.unit
+def test_no_budget_means_max_retries_is_the_only_bound(monkeypatch, sleeps):
+    """The default is unchanged: retry until the attempts run out."""
+    recorder = _Recorder(_FakeResponse(503, text="busy", headers={"Retry-After": "30"}))
+    monkeypatch.setattr(requests, "get", recorder)
+
+    with pytest.raises(ServiceError, match="after 3 attempt"):
+        HTTPClient(max_retries=2, min_interval=0).get("https://example.org/x")
+
+    assert sleeps == [30.0, 30.0]
+    assert recorder.count == 3
+
+
+# --------------------------------------------------------------------------
+# Telling one failure from another
+# --------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_a_busy_service_and_a_bad_request_raise_different_classes(monkeypatch):
+    """
+    "The service kept failing" and "the request was wrong" are different
+    things, and PubChem's callers have always been able to tell them apart.
+    """
+    class MyError(ServiceError):
+        pass
+
+    class MyBusy(MyError):
+        pass
+
+    client = HTTPClient(error_cls=MyError, retry_exhausted_cls=MyBusy,
+                        max_retries=1, backoff=0.0, min_interval=0)
+
+    monkeypatch.setattr(requests, "get", _Recorder(_FakeResponse(503, text="busy")))
+    with pytest.raises(MyBusy):
+        client.get("https://example.org/x")
+
+    monkeypatch.setattr(requests, "get", _Recorder(_FakeResponse(403, text="nope")))
+    with pytest.raises(MyError) as excinfo:
+        client.get("https://example.org/x")
+    assert not isinstance(excinfo.value, MyBusy)
+
+
+@pytest.mark.unit
+def test_retry_exhausted_defaults_to_the_error_class(monkeypatch):
+    """A client that does not care keeps one exception for both."""
+    monkeypatch.setattr(requests, "get", _Recorder(_FakeResponse(503, text="busy")))
+    with pytest.raises(ServiceError):
+        HTTPClient(max_retries=0, min_interval=0).get("https://example.org/x")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("status,payload", [(404, None), (403, None), (503, None)])
+def test_the_exception_carries_the_status_and_the_url(monkeypatch, status, payload):
+    """
+    CAS distinguishes a rejected key from an unknown CAS number by status, so
+    the status has to survive the raise.
+    """
+    monkeypatch.setattr(requests, "get", _Recorder(_FakeResponse(status, text="x")))
+
+    with pytest.raises(ServiceError) as excinfo:
+        HTTPClient(max_retries=0, min_interval=0).get("https://example.org/thing")
+
+    assert excinfo.value.status_code == status
+    assert excinfo.value.url == "https://example.org/thing"
+    assert excinfo.value.response is not None
+
+
+@pytest.mark.unit
+def test_a_timeout_carries_no_status(monkeypatch, sleeps):
+    """Nothing arrived, so there is nothing to report a status for."""
+    monkeypatch.setattr(requests, "get", _Recorder(requests.Timeout("gone")))
+
+    with pytest.raises(ServiceTimeoutError) as excinfo:
+        HTTPClient(max_retries=0, min_interval=0,
+                   timeout_cls=ServiceTimeoutError).get("https://example.org/x")
+
+    assert excinfo.value.status_code is None
+    assert excinfo.value.response is None
+
+
+@pytest.mark.unit
+def test_a_plain_exception_class_is_still_usable(monkeypatch):
+    """
+    The detail is keyword-only, so a class that never declared it must not be
+    handed it --- that would turn a service failure into a TypeError.
+    """
+    class Plain(Exception):
+        pass
+
+    monkeypatch.setattr(requests, "get", _Recorder(_FakeResponse(403, text="nope")))
+
+    with pytest.raises(Plain):
+        HTTPClient(error_cls=Plain, max_retries=0, min_interval=0).get(
+            "https://example.org/x"
+        )
+
+
+# --------------------------------------------------------------------------
+# Sessions
+# --------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_a_session_is_used_when_one_is_given(monkeypatch):
+    """
+    ChEBI keeps a session for its pooled connection and persistent headers, so
+    the transport has to call through it rather than around it.
+    """
+    recorder = _Recorder(_FakeResponse(200, text="ok"))
+    session = requests.Session()
+    monkeypatch.setattr(session, "get", recorder)
+    monkeypatch.setattr(requests, "get", _Recorder(_FakeResponse(500, text="wrong path")))
+
+    assert HTTPClient(session=session).get_text("https://example.org/x") == "ok"
+    assert recorder.count == 1
+
+
+@pytest.mark.unit
+def test_without_a_session_the_module_function_is_called(monkeypatch):
+    """
+    Patching ``requests.get`` must keep working: several suites rely on it, and
+    a ``from requests import get`` or an always-on session would defeat them.
+    """
+    recorder = _Recorder(_FakeResponse(200, text="ok"))
+    monkeypatch.setattr(requests, "get", recorder)
+
+    assert HTTPClient().get_text("https://example.org/x") == "ok"
+    assert recorder.count == 1

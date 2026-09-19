@@ -191,13 +191,32 @@ if exp_props:
 
 ## 6. Error Handling
 
-The API handles various error conditions gracefully. Let's see what happens with invalid inputs:
+Nothing here raises: every method returns a dict, and `status` says what
+happened. That makes the distinction between *absence* and *failure* the
+important one to read, because they are not the same thing and only one of them
+is worth acting on:
+
+| `status` | Meaning |
+|---|---|
+| `Success` | CAS answered; `found` is True |
+| `Not Found` / `Not found` | CAS answered, and there is no such substance |
+| `Unauthorized - Check API Key` | your key was rejected — fix the key |
+| `Timeout` / `Network Error` | CAS could not be reached; try again later |
+| `Invalid Request` | CAS rejected the request itself |
+
+A throttled or failing request is retried with back-off first, and **neither a
+failure nor an absence is cached**, so a lookup that failed because the network
+was down is asked again next time rather than remembered as "no such CAS
+number".
+
+Let's see what happens with invalid inputs:
 
 ```{code-cell} ipython3
 # Try an invalid CAS RN
 invalid_cas = ccc.cas_to_detail("0000-00-0")
 print("Invalid CAS RN (0000-00-0):")
 print(f"  Status: {invalid_cas.get('status')}")
+print(f"  Found:  {invalid_cas.get('found')}")
 print(f"  Name: {invalid_cas.get('name')}")
 
 # Try a non-existent compound name
@@ -289,7 +308,9 @@ The `CASCommonChem` class provides three main methods:
 - ✅ Access to 500,000+ chemical substances
 - ✅ Comprehensive chemical data (names, formulas, structures, properties)
 - ✅ Multiple search methods (CAS RN, name, SMILES)
-- ✅ Robust error handling
+- ✅ Robust error handling: nothing raises, `status` says what happened
+- ✅ Rate limiting and retry with back-off, handled for you
+- ✅ Failures and absences are never cached, so a bad day is not remembered
 - ✅ Rich metadata including synonyms and experimental properties
 
 ### Returned Data Includes:

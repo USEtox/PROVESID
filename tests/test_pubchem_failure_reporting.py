@@ -386,3 +386,210 @@ def test_empty_synonym_list_is_not_cached(tmp_path, monkeypatch):
     assert api.get_compound_synonyms(2244) == []
     assert api.get_compound_synonyms(2244) == ["aspirin"]
     assert len(calls) == 2
+
+
+# --------------------------------------------------------------------------
+# The two services read a bare 400 differently
+# --------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_pugview_reads_a_bare_400_as_absence():
+    """
+    PUG-View takes the heading as a query parameter, so a 400 means "no such
+    heading for this compound" --- absence, and not worth a retry.
+    """
+    from provesid.http import Outcome
+    from provesid.pubchem import pugview_classify
+
+    assert pugview_classify(_FakeResponse(400)) is Outcome.ABSENT
+
+
+@pytest.mark.unit
+def test_pugrest_reads_a_bare_400_as_a_bad_request():
+    """
+    PUG-REST takes its whole query in the URL path, so a 400 means the path was
+    wrong --- a misspelled property name. That is the caller's mistake, and the
+    caller needs PubChem's explanation of it, which absence would throw away.
+    """
+    from provesid.http import Outcome
+    from provesid.pubchem import pugrest_classify
+
+    assert pugrest_classify(_FakeResponse(400)) is Outcome.FATAL
+
+
+@pytest.mark.unit
+def test_a_bad_property_name_reaches_the_caller_with_pubchems_reason(api, monkeypatch):
+    """The body of a 400 is the only place the misspelled name is named."""
+    import requests
+
+    def bad_request(url, timeout=None, headers=None):
+        return _FakeResponse(
+            400, text="PUGREST.BadRequest: Invalid property name: NotAProperty",
+        )
+
+    monkeypatch.setattr(requests, "get", bad_request)
+    with pytest.raises(PubChemError, match="Invalid property name"):
+        api._make_request("https://example.org/property/NotAProperty/JSON")
+
+
+@pytest.mark.unit
+def test_both_services_still_read_a_404_as_absence():
+    """An unknown compound is absent whichever endpoint was asked."""
+    from provesid.http import Outcome
+    from provesid.pubchem import pugrest_classify, pugview_classify
+
+    for classify in (pugrest_classify, pugview_classify):
+        assert classify(_FakeResponse(404)) is Outcome.ABSENT
+
+
+# --------------------------------------------------------------------------
+# PUG-REST on the shared transport
+# --------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_pugrest_server_busy_is_retried_then_raises_a_server_error(api, monkeypatch):
+    """
+    A busy PubChem is transient, and the exception says so: callers catch
+    ``PubChemServerError`` to skip rather than to fail.
+    """
+    import requests
+    from provesid.pubchem import PubChemServerError
+
+    attempts = []
+    api._http.backoff = 0.0
+    api._http.max_retries = 2
+
+    def busy(url, timeout=None, headers=None):
+        attempts.append(url)
+        return _FakeResponse(503, payload={"Fault": {"Code": "PUGREST.ServerBusy"}})
+
+    monkeypatch.setattr(requests, "get", busy)
+    with pytest.raises(PubChemServerError):
+        api._make_request("https://example.org/synonyms")
+    assert len(attempts) == 3
+
+
+@pytest.mark.unit
+def test_a_thirty_second_throttle_is_not_waited_out(api, monkeypatch):
+    """
+    PubChem answers a throttled or blacklisted IP with ``Retry-After: 30``, and
+    a block like that does not lift in thirty seconds --- measured. So the wait
+    buys nothing while every call would pay it, and the budget declines it.
+    """
+    import time as time_module
+
+    import requests
+
+    slept = []
+    monkeypatch.setattr(time_module, "sleep", lambda seconds: slept.append(seconds))
+
+    class _ThrottledResponse(_FakeResponse):
+        def __init__(self):
+            super().__init__(503, payload={"Fault": {"Code": "PUGREST.ServerBusy"}})
+            self.headers = {"Retry-After": "30"}
+
+    attempts = []
+
+    def throttled(url, timeout=None, headers=None):
+        attempts.append(url)
+        return _ThrottledResponse()
+
+    monkeypatch.setattr(requests, "get", throttled)
+    with pytest.raises(PubChemError, match="retry budget"):
+        api._make_request("https://example.org/synonyms")
+
+    assert len(attempts) == 1, "a 30s Retry-After was waited out"
+    # Only pacing sleeps, all well under a second.
+    assert all(seconds < 1 for seconds in slept), slept
+
+
+@pytest.mark.unit
+def test_a_cheap_transient_failure_still_gets_every_retry(api, monkeypatch):
+    """
+    Declining a 30-second wait must not cost the retries that are worth having:
+    a 500 with no Retry-After is where retrying earns its keep.
+    """
+    import time as time_module
+
+    import requests
+
+    slept = []
+    monkeypatch.setattr(time_module, "sleep", lambda seconds: slept.append(seconds))
+
+    attempts = []
+
+    def failing(url, timeout=None, headers=None):
+        attempts.append(url)
+        return _FakeResponse(500, payload={"Fault": {"Code": "PUGREST.ServerError"}})
+
+    monkeypatch.setattr(requests, "get", failing)
+    with pytest.raises(PubChemError):
+        api._make_request("https://example.org/synonyms")
+
+    assert len(attempts) == api._http.max_retries + 1
+    assert [seconds for seconds in slept if seconds >= 1] == [1.0, 2.0, 4.0]
+
+
+@pytest.mark.unit
+def test_a_transient_failure_that_clears_is_invisible(api, monkeypatch):
+    """The whole point of the retry: the caller never learns it happened."""
+    import requests
+
+    attempts = []
+    api._http.backoff = 0.0
+
+    def flaky(url, timeout=None, headers=None):
+        attempts.append(url)
+        if len(attempts) == 1:
+            return _FakeResponse(503, payload={"Fault": {"Code": "PUGREST.ServerBusy"}})
+        return _stub_response({"InformationList": {"Information": [{"Synonym": ["aspirin"]}]}})
+
+    monkeypatch.setattr(requests, "get", flaky)
+    assert api.get_compound_synonyms(2244) == ["aspirin"]
+    assert len(attempts) == 2
+
+
+@pytest.mark.unit
+def test_pubchem_clients_share_one_pacing_clock():
+    """
+    Five requests per second is PubChem's limit per IP. Two clients in one
+    process each keeping their own clock would together ask twice as fast.
+    """
+    assert PubChemAPI()._http.limiter is PubChemView()._http.limiter
+
+
+@pytest.mark.unit
+def test_pause_time_is_settable_mid_batch():
+    """
+    ``pause_time`` was a plain attribute the old rate limiter read live. It is
+    a property over the transport now, and still takes effect at once.
+    """
+    api = PubChemAPI(pause_time=0.2)
+    assert api.pause_time == 0.2
+
+    api.pause_time = 1.0
+    assert api.pause_time == 1.0
+    assert api._http.min_interval == 1.0
+
+
+@pytest.mark.unit
+def test_a_202_is_returned_rather_than_retried(api, monkeypatch, caplog):
+    """
+    A list-key operation PubChem has accepted but not finished is a real
+    answer: the body holds the key to poll with.
+    """
+    import logging
+
+    import requests
+
+    monkeypatch.setattr(
+        requests, "get",
+        lambda url, timeout=None, headers=None: _FakeResponse(
+            202, payload={"Waiting": {"ListKey": "abc"}}
+        ),
+    )
+    with caplog.at_level(logging.WARNING):
+        response = api._make_request("https://example.org/listkey")
+
+    assert response.status_code == 202
+    assert "Asynchronous operation pending" in caplog.text

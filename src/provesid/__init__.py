@@ -8,16 +8,31 @@ from .http import (
     RateLimitError,
     ServiceTimeoutError,
 )
-from .cascommonchem import CASCommonChem
-from .chebi import ChEBI, ChEBIError, ChebiSDF, get_chebi_entity, search_chebi
+from .cascommonchem import (
+    CASCommonChem,
+    CASCommonChemError,
+    CASCommonChemNotFoundError,
+    CASCommonChemTimeoutError,
+)
+from .chebi import (
+    ChEBI,
+    ChEBIError,
+    ChEBINotFoundError,
+    ChEBITimeoutError,
+    ChebiSDF,
+    get_chebi_entity,
+    search_chebi,
+)
 from .chembl import CheMBL, ChEMBLError
 from .classyfire import ClassyFireAPI
-from .opsin import OPSIN, PYOPSIN
+from .opsin import OPSIN, OPSINError, OPSINNotFoundError, OPSINTimeoutError, PYOPSIN
 from .pubchem import (
     PubChemAPI,
     CompoundProperties,
     PubChemNotFoundError,
     PubChemError,
+    PubChemServerError,
+    PubChemTimeoutError,
     Domain,
     PubChemID,
 )

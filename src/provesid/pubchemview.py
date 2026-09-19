@@ -6,7 +6,7 @@ import pandas as pd
 import re
 from .cache import cached, is_empty_result
 from .http import HTTPClient, ServiceError, NotFoundError
-from .pubchem import pubchem_classify
+from .pubchem import RETRY_WAIT_BUDGET, pugview_classify
 from .pubchemview_parse import ParsedValue, parse_value
 
 
@@ -84,15 +84,20 @@ class PubChemView:
 
         # One shared transport. PubChem describes every error in the body, so
         # it supplies its own classifier rather than trusting the status code:
-        # see :func:`provesid.pubchem.pubchem_classify`.
+        # see :func:`provesid.pubchem.pugview_classify`.
         self._http = HTTPClient(
             min_interval=0.2,          # 5 requests per second max
             timeout=timeout,
             max_retries=max_retries,
             backoff=backoff_factor,
-            classify=pubchem_classify,
+            max_elapsed=RETRY_WAIT_BUDGET,
+            classify=pugview_classify,
             error_cls=PubChemViewError,
             not_found_cls=PubChemViewNotFoundError,
+            # PubChem's five requests per second is a per-IP budget, so this
+            # client shares its pacing clock with every other client aimed at
+            # the same host --- a PubChemAPI in the same process, above all.
+            pace_host=self.base_url,
             logger=self.logger,
         )
         
@@ -234,7 +239,7 @@ class PubChemView:
 
         The transport handles the pacing, the retries and the back-off; what
         stays here is the shape of a PUG-View request. Classification is
-        :func:`provesid.pubchem.pubchem_classify`, which reads the fault code
+        :func:`provesid.pubchem.pugview_classify`, which reads the fault code
         in the body because PubChem's status codes alone do not distinguish a
         compound that has no such data from a service shedding load.
 

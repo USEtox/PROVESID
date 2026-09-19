@@ -2,17 +2,21 @@
 # but with a simpler interface that serves our purpose in PROVES
 
 import requests
-import time
 import json
 import logging
 import re
 import os
 import pandas as pd
-from functools import lru_cache
 from typing import Dict, List, Union, Optional, Any
 from urllib.parse import quote
 from .cache import cached, is_empty_result
-from .http import Outcome, ServiceError, NotFoundError, ServiceTimeoutError
+from .http import (
+    HTTPClient,
+    Outcome,
+    ServiceError,
+    NotFoundError,
+    ServiceTimeoutError,
+)
 from .utils import user_dataset_path
 
 pugrest_prolog = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
@@ -23,6 +27,23 @@ pause_between_calls = 0.2 # seconds
 #: URL; the margin left here covers the prolog, the operation and the property
 #: list that share the path with the identifiers.
 URL_IDENTIFIER_LIMIT = 1600
+
+#: Longest total time a PubChem client will spend waiting between retries, in
+#: seconds: "do not make the caller wait longer than this".
+#:
+#: Ten seconds leaves the whole cheap back-off curve intact --- 1 + 2 + 4 for a
+#: transient 500 or a timeout, which is where retrying earns its keep --- while
+#: declining to sit out PubChem's ``Retry-After: 30``. That is deliberate.
+#: PubChem sends that header when it has throttled or blacklisted an IP, and a
+#: block like that does not lift in thirty seconds: measured on 2026-09-19,
+#: waiting the full thirty and asking again returned the same 503. So the wait
+#: buys nothing while every call pays it, which for a caller resolving a
+#: thousand names is hours instead of an immediate "you are blocked".
+#:
+#: A caller who does want to wait a throttle out raises it
+#: (``api._http.max_elapsed = 180``), which is the right setting for an
+#: unattended bulk job.
+RETRY_WAIT_BUDGET = 10.0
 
 #: Default number of CIDs per bulk property request. PubChem answers several
 #: hundred at a time without complaint, but a smaller chunk costs less to redo
@@ -237,30 +258,19 @@ def fault_code(response: requests.Response) -> Optional[str]:
         return None
 
 
-def pubchem_classify(response: requests.Response) -> Outcome:
+def _classify_fault(response: requests.Response, bare_400: Outcome) -> Outcome:
     """
-    Decide what a PubChem response means, reading the fault code first.
+    Classify a PubChem response, reading the fault code before the status.
 
-    PubChem's status codes are not a reliable guide on their own: under load it
-    answers with ``PUGVIEW.ServerBusy`` or ``PUGREST.ServerBusy`` behind a 404
-    as readily as behind a 503, and treating that as absence caches a momentary
-    outage as fact (see §17.6 of the refactor plan). The fault code in the body
-    is what both services always send, so it is what decides.
+    Shared by :func:`pugrest_classify` and :func:`pugview_classify`, which
+    differ in one place only --- see ``bare_400``.
 
     Args:
         response: The response to classify.
+        bare_400: What a 400 that carries no fault code means for this service.
 
     Returns:
-        :attr:`~provesid.http.Outcome.OK` for a 2xx, ``RETRY`` for any
-        transient fault code and for 429/5xx, ``ABSENT`` for an absence fault
-        code and for a bare 404, ``FATAL`` for any other client error.
-
-    Example:
-        >>> class R:
-        ...     status_code = 404
-        ...     def json(self): return {"Fault": {"Code": "PUGVIEW.ServerBusy"}}
-        >>> pubchem_classify(R()).name
-        'RETRY'
+        The :class:`~provesid.http.Outcome` for this response.
     """
     status = response.status_code
     if 200 <= status < 300:
@@ -273,13 +283,80 @@ def pubchem_classify(response: requests.Response) -> Outcome:
         return Outcome.ABSENT
     if status == 429 or status >= 500:
         return Outcome.RETRY
-    if status in (400, 404):
-        # PubChem answers an unknown compound with 404 and an unknown heading
-        # with 400. Both are permanent even when the body carries no fault.
+    if status == 404:
+        # An unknown compound, on either service. Permanent even with no fault.
         return Outcome.ABSENT
+    if status == 400:
+        return bare_400
     if 400 <= status < 500:
         return Outcome.FATAL
     return Outcome.RETRY
+
+
+def pugrest_classify(response: requests.Response) -> Outcome:
+    """
+    Decide what a PUG-REST response means, reading the fault code first.
+
+    PubChem's status codes are not a reliable guide on their own: under load it
+    answers with ``PUGREST.ServerBusy`` behind a 404 as readily as behind a
+    503, and treating that as absence caches a momentary outage as fact (see
+    §17.6 of the refactor plan). The fault code in the body is what the service
+    always sends, so it is what decides.
+
+    A 400 is where this differs from :func:`pugview_classify`: PUG-REST takes
+    its query in the URL path, so a 400 means the path was wrong --- an
+    unknown property name, a malformed identifier. That is a permanent error in
+    the request, not a statement that the compound has no such data, and the
+    caller needs the body to learn which property it misspelled.
+
+    Args:
+        response: The response to classify.
+
+    Returns:
+        :attr:`~provesid.http.Outcome.OK` for a 2xx, ``RETRY`` for any
+        transient fault code and for 429/5xx, ``ABSENT`` for an absence fault
+        code and for a bare 404, ``FATAL`` for a 400 and any other client
+        error.
+
+    Example:
+        >>> class R:
+        ...     status_code = 404
+        ...     def json(self): return {"Fault": {"Code": "PUGREST.ServerBusy"}}
+        >>> pugrest_classify(R()).name
+        'RETRY'
+        >>> class R:
+        ...     status_code = 400
+        ...     def json(self): return {"Fault": {"Code": "PUGREST.BadRequest"}}
+        >>> pugrest_classify(R()).name
+        'FATAL'
+    """
+    return _classify_fault(response, Outcome.FATAL)
+
+
+def pugview_classify(response: requests.Response) -> Outcome:
+    """
+    Decide what a PUG-View response means, reading the fault code first.
+
+    Identical to :func:`pugrest_classify` but for a bare 400, which PUG-View
+    uses to say "no such heading" --- the heading is a query parameter, and
+    asking for one a compound does not have is absence, not a bad request.
+    ``PUGVIEW.BadRequest`` is already in :data:`ABSENCE_FAULT_CODES` for the
+    same reason; this covers the case where the body carries no fault at all.
+
+    Args:
+        response: The response to classify.
+
+    Returns:
+        As :func:`pugrest_classify`, except that a bare 400 is ``ABSENT``.
+
+    Example:
+        >>> class R:
+        ...     status_code = 400
+        ...     def json(self): return None
+        >>> pugview_classify(R()).name
+        'ABSENT'
+    """
+    return _classify_fault(response, Outcome.ABSENT)
 
 
 def _synonyms_incomplete(result: Any) -> bool:
@@ -338,10 +415,68 @@ class PubChemAPI:
             Use provesid.cache functions for cache management.
         """
         self.base_url = base_url.rstrip('/')
-        self.pause_time = pause_time
-        self.last_request_time = 0
         self.use_cache = use_cache
-        
+        self.logger = logging.getLogger(__name__)
+
+        # One shared transport. PUG-REST describes every error in the body, so
+        # it supplies its own classifier rather than trusting the status code:
+        # see :func:`pugrest_classify`. ``pace_host`` is what keeps this client
+        # and any PubChemView in the same process inside PubChem's five
+        # requests per second, which is a per-IP budget and not a per-object
+        # one.
+        self._http = HTTPClient(
+            min_interval=pause_time,
+            max_elapsed=RETRY_WAIT_BUDGET,
+            classify=pugrest_classify,
+            error_cls=PubChemError,
+            not_found_cls=PubChemNotFoundError,
+            timeout_cls=PubChemTimeoutError,
+            rate_limit_cls=PubChemServerError,
+            retry_exhausted_cls=PubChemServerError,
+            pace_host=self.base_url,
+            logger=self.logger,
+        )
+
+    @property
+    def pause_time(self) -> float:
+        """
+        Minimum seconds between two requests to PubChem.
+
+        Held by the transport, and settable: raising it slows a long batch
+        down, and the new value takes effect on the next request, retries
+        included.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> api.pause_time
+            0.2
+            >>> api.pause_time = 1.0      # gentler, for a long batch
+        """
+        return self._http.min_interval
+
+    @pause_time.setter
+    def pause_time(self, seconds: float) -> None:
+        self._http.min_interval = seconds
+
+    @property
+    def last_request_time(self) -> float:
+        """
+        When this client last made a request, as a Unix timestamp.
+
+        Kept on the transport; exposed here because it describes this client's
+        own pacing. The clock the pacing is *measured* against is shared with
+        every other client aimed at PubChem --- see
+        :class:`provesid.http.RateLimiter`.
+
+        Returns:
+            Seconds since the epoch, or 0.0 before the first request.
+
+        Example:
+            >>> PubChemAPI().last_request_time
+            0.0
+        """
+        return self._http.last_request_time
+
     def __cache_key__(self) -> tuple:
         """
         Identify this client for cache-key purposes.
@@ -367,78 +502,63 @@ class PubChemAPI:
         return get_pubchem_cache_info()
         
     def _rate_limit(self):
-        """Enforce rate limiting between requests"""
-        current_time = time.time()
-        time_since_last = current_time - self.last_request_time
-        if time_since_last < self.pause_time:
-            time.sleep(self.pause_time - time_since_last)
-        self.last_request_time = time.time()
-    
-    def _make_request(self, url: str, method: str = 'GET', data: Optional[Dict] = None, 
+        """
+        Sleep, if needed, so requests to PubChem stay :attr:`pause_time` apart.
+
+        Delegates to the shared transport, which paces every request it makes
+        including retries.
+
+        Example:
+            >>> PubChemAPI(pause_time=0)._rate_limit()
+        """
+        self._http.rate_limit()
+
+    def _make_request(self, url: str, method: str = 'GET', data: Optional[Dict] = None,
                      timeout: int = 30, headers: Optional[Dict] = None) -> requests.Response:
         """
-        Make HTTP request with error handling and rate limiting
-        
+        Make one request to PUG-REST and return the raw response.
+
+        The transport handles the pacing, the retries and the back-off; what
+        stays here is the shape of a PUG-REST request and the one status code
+        that is neither success nor failure. Classification is
+        :func:`pugrest_classify`, which reads the fault code in the body
+        because PubChem's status codes alone do not distinguish a compound that
+        has no such data from a service shedding load.
+
         Args:
             url: Request URL
             method: HTTP method (GET or POST)
             data: POST data
             timeout: Request timeout in seconds
             headers: HTTP headers
-            
+
         Returns:
-            Response object
-            
+            Response object. Returned unparsed because the caller knows which
+            of JSON, text, SDF or PNG it asked for --- see
+            :meth:`_parse_response`.
+
         Raises:
-            PubChemTimeoutError: If request times out
-            PubChemNotFoundError: If resource not found (404)
-            PubChemServerError: If server error occurs (5xx)
-            PubChemError: For other HTTP errors
+            PubChemNotFoundError: The compound, substance or assay does not
+                exist. Never retried; asking again cannot change it.
+            PubChemServerError: PubChem stayed busy, or kept throttling, for
+                every attempt. Transient fault codes, 429 and 5xx are retried
+                first.
+            PubChemTimeoutError: Every attempt timed out or could not connect.
+            PubChemError: A permanent error in the request itself --- a 400
+                naming a property that does not exist, a 403. The message
+                carries the start of PubChem's own explanation.
         """
-        self._rate_limit()
-        
-        try:
-            if method.upper() == 'GET':
-                response = requests.get(url, timeout=timeout, headers=headers)
-            elif method.upper() == 'POST':
-                response = requests.post(url, data=data, timeout=timeout, headers=headers)
-            else:
-                raise ValueError(f"Unsupported HTTP method: {method}")
-            
-            # Handle different HTTP status codes
-            if response.status_code == 200:
-                return response
-            elif response.status_code == 202:
-                # Accepted - asynchronous operation pending
-                logging.warning("Asynchronous operation pending - may need to poll for results")
-                return response
-            elif response.status_code == 400:
-                raise PubChemError(f"Bad request: {response.text}")
-            elif response.status_code == 404:
-                code = fault_code(response)
-                if code in TRANSIENT_FAULT_CODES:
-                    # PubChem occasionally sheds load behind a 404; that is not
-                    # an absent record.
-                    raise PubChemServerError(f"Server busy ({code})")
-                raise PubChemNotFoundError(f"Resource not found ({code or '404'})")
-            elif response.status_code == 405:
-                raise PubChemError("Method not allowed")
-            elif response.status_code == 500:
-                raise PubChemServerError("Internal server error")
-            elif response.status_code == 501:
-                raise PubChemError("Not implemented")
-            elif response.status_code == 503:
-                raise PubChemServerError("Server busy - try again later")
-            elif response.status_code == 504:
-                raise PubChemTimeoutError("Request timed out")
-            else:
-                raise PubChemError(f"HTTP error {response.status_code}: {response.text}")
-                
-        except requests.Timeout:
-            raise PubChemTimeoutError("Request timed out")
-        except requests.RequestException as e:
-            raise PubChemError(f"Request failed: {str(e)}")
-    
+        response = self._http.request(method, url, data=data, timeout=timeout,
+                                      headers=headers)
+        if response.status_code == 202:
+            # A list-key operation that PubChem has accepted but not finished.
+            # It is a real answer --- the body holds the key to poll with ---
+            # so it is returned rather than retried.
+            self.logger.warning(
+                "Asynchronous operation pending - may need to poll for results"
+            )
+        return response
+
     def _build_url(self, domain: str, namespace: str, identifiers: Union[str, int, List[Union[str, int]]], 
                    operation: Optional[str] = None, output_format: str = OutputFormat.JSON,
                    **options) -> str:

@@ -23,9 +23,11 @@ Example:
 
 import email.utils
 import logging
+import threading
 import time
 from enum import Enum
 from typing import Any, Callable, Dict, Optional, Type
+from urllib.parse import urlsplit
 
 import requests
 
@@ -41,11 +43,45 @@ class ServiceError(Exception):
     catch one service or, through this base, all of them. A raw ``requests``
     exception never escapes :class:`HTTPClient`.
 
+    The message is the whole of what most callers want, so it stays the single
+    positional argument and ``str(exc)`` is unchanged. The response detail is
+    keyword-only and defaults to None, which is what lets a client raise one of
+    these by hand --- ``raise PubChemError("bad request")`` --- exactly as
+    before. It exists because two services distinguish their failures by
+    status: CAS Common Chemistry reports a rejected key as 401 and an unknown
+    CAS number as 404, and both have to become different entries in the dict it
+    returns.
+
+    Args:
+        message: The human-readable description.
+        status_code: The HTTP status that caused the failure, when there was a
+            response at all. None for a timeout or a connection error.
+        url: The URL that was requested.
+        response: The raw response, for a caller that needs to read the body.
+            None when no response arrived.
+
+    Attributes:
+        status_code: As above.
+        url: As above.
+        response: As above.
+
     Example:
         >>> issubclass(NotFoundError, ServiceError)
         True
+        >>> exc = ServiceError("nope", status_code=404)
+        >>> str(exc), exc.status_code
+        ('nope', 404)
+        >>> ServiceError("by hand").status_code is None
+        True
     """
-    pass
+
+    def __init__(self, message: str = "", *, status_code: Optional[int] = None,
+                 url: Optional[str] = None,
+                 response: Optional[requests.Response] = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.url = url
+        self.response = response
 
 
 class NotFoundError(ServiceError):
@@ -197,6 +233,107 @@ def retry_after_seconds(response: requests.Response) -> Optional[float]:
     return delay if delay > 0 else None
 
 
+class RateLimiter:
+    """
+    The clock a host's requests are paced against.
+
+    A client's ``min_interval`` is its own promise about how fast it will ask.
+    The clock it measures that promise against belongs to the *host*, because
+    the limit being respected does too: PubChem publishes five requests per
+    second **per IP**, not per Python object. Two clients aimed at PubChem in
+    one process --- a :class:`~provesid.pubchem.PubChemAPI` and a
+    :class:`~provesid.pubchemview.PubChemView`, which is the ordinary way to
+    use this package --- each kept their own clock before this class existed,
+    so each could believe it was pacing correctly while together they asked
+    twice as fast as PubChem allows.
+
+    Sharing the clock means a request waits ``min_interval`` after the last
+    request *anyone* made to that host. The lock is held across the sleep, so
+    threads queue rather than all waking at once.
+
+    Attributes:
+        last_request_time: When any client last asked this host, as a Unix
+            timestamp; 0.0 before the first request.
+
+    Example:
+        >>> limiter = RateLimiter()
+        >>> limiter.last_request_time
+        0.0
+        >>> _ = limiter.wait(0.0)       # pacing off: returns at once
+        >>> limiter.last_request_time > 0
+        True
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.last_request_time = 0.0
+
+    def wait(self, min_interval: float) -> float:
+        """
+        Sleep until ``min_interval`` has passed since this host was last asked.
+
+        Args:
+            min_interval: Seconds the caller promises to leave between
+                requests. 0 or less disables the wait but still records the
+                request, because the request is happening either way and the
+                next caller needs to know when.
+
+        Returns:
+            The time at which the caller may proceed, as a Unix timestamp.
+
+        Example:
+            >>> limiter = RateLimiter()
+            >>> first = limiter.wait(0.05)
+            >>> limiter.wait(0.05) - first >= 0.045
+            True
+        """
+        with self._lock:
+            if min_interval > 0:
+                elapsed = time.time() - self.last_request_time
+                if elapsed < min_interval:
+                    time.sleep(min_interval - elapsed)
+            self.last_request_time = time.time()
+            return self.last_request_time
+
+
+#: Every host a limiter has been asked for, so that clients aimed at the same
+#: service find the same clock. Keyed by lower-cased ``host:port``. Entries are
+#: never removed --- there are a handful of them and each is two floats.
+_host_limiters: Dict[str, RateLimiter] = {}
+_host_limiters_lock = threading.Lock()
+
+
+def host_limiter(url_or_host: str) -> RateLimiter:
+    """
+    Return the process-wide :class:`RateLimiter` for one host, creating it once.
+
+    Args:
+        url_or_host: A full URL, whose host is used, or a bare host. Accepting
+            either is deliberate: a client already holds its service's base
+            URL, so it can pass that and needs no second piece of
+            configuration to get its pacing shared correctly.
+
+    Returns:
+        The limiter for that host. Two calls naming the same host return the
+        same object.
+
+    Example:
+        >>> a = host_limiter("https://pubchem.ncbi.nlm.nih.gov/rest/pug")
+        >>> b = host_limiter("https://pubchem.ncbi.nlm.nih.gov/rest/pug_view")
+        >>> a is b
+        True
+        >>> a is host_limiter("https://www.ebi.ac.uk/chebi")
+        False
+    """
+    parsed = urlsplit(url_or_host)
+    host = (parsed.netloc or parsed.path or url_or_host).strip().lower()
+    with _host_limiters_lock:
+        limiter = _host_limiters.get(host)
+        if limiter is None:
+            limiter = _host_limiters[host] = RateLimiter()
+        return limiter
+
+
 class HTTPClient:
     """
     Rate-limited HTTP client with retry and back-off, shared by every
@@ -216,17 +353,45 @@ class HTTPClient:
             seconds. 0 retries immediately, which is what tests want.
         max_backoff: Ceiling on any single wait, including one a
             ``Retry-After`` header asks for.
+        max_elapsed: Ceiling on the *total* time spent waiting between
+            attempts. Retrying stops once the next wait would take the sum past
+            it, whatever ``max_retries`` allows. None means ``max_retries`` is
+            the only bound.
+
+            This exists because a service that says ``Retry-After: 30`` --- as
+            PubChem does when it throttles an IP --- turns three retries into a
+            ninety-second call. Dropping the retry would be worse: a caller
+            resolving ten thousand compounds loses one to every transient 503.
+            One wait the service itself asked for recovers most of them; the
+            budget is what stops the rest of the curve from being charged to a
+            caller who is waiting at a prompt.
         headers: Headers sent with every request. Omitted entirely when None,
             so a stub that accepts only ``(url, timeout=...)`` still works.
         classify: Maps a response to an :class:`Outcome`. Defaults to
             :func:`default_classify`.
-        error_cls: Raised for a fatal response and for an exhausted retry
-            budget.
+        error_cls: Raised for a fatal response --- a malformed request, a
+            rejected key --- and, unless ``retry_exhausted_cls`` says
+            otherwise, for an exhausted retry budget.
         not_found_cls: Raised for :attr:`Outcome.ABSENT`.
         timeout_cls: Raised when every attempt timed out or could not connect.
             Defaults to ``error_cls``.
         rate_limit_cls: Raised when every attempt was throttled. Defaults to
             ``error_cls``.
+        retry_exhausted_cls: Raised when a transient condition that was neither
+            a throttle nor a timeout outlived the retry budget --- a service
+            that stayed busy. Defaults to ``error_cls``. PubChem passes its
+            ``PubChemServerError`` here, because "the service kept failing" and
+            "the request was wrong" are different things to its callers.
+        session: A ``requests.Session`` to make the calls through, for
+            connection pooling and persistent headers. When None the module
+            functions ``requests.get`` / ``requests.post`` are called, which is
+            what lets a test stub them.
+        pace_host: The service this client shares its pacing clock with, as a
+            host or as the base URL it already holds. Given, the client waits
+            ``min_interval`` after the last request *any* client made to that
+            host --- the only way to honour a limit expressed per IP, such as
+            PubChem's five per second. Omitted, the client paces alone, which
+            is right for a stub and for a service with no shared budget.
         logger: Logger for the DEBUG line per request and the WARNING per
             retry. Defaults to this module's logger.
 
@@ -239,47 +404,55 @@ class HTTPClient:
     def __init__(self, *, min_interval: float = 0.0, timeout: float = 30,
                  max_retries: int = 3, backoff: float = 1.0,
                  max_backoff: float = 60.0,
+                 max_elapsed: Optional[float] = None,
                  headers: Optional[Dict[str, str]] = None,
                  classify: Callable[[requests.Response], Outcome] = default_classify,
                  error_cls: Type[Exception] = ServiceError,
                  not_found_cls: Type[Exception] = NotFoundError,
                  timeout_cls: Optional[Type[Exception]] = None,
                  rate_limit_cls: Optional[Type[Exception]] = None,
+                 retry_exhausted_cls: Optional[Type[Exception]] = None,
+                 session: Optional[requests.Session] = None,
+                 pace_host: Optional[str] = None,
                  logger: Optional[logging.Logger] = None):
         self.min_interval = min_interval
         self.timeout = timeout
         self.max_retries = max_retries
         self.backoff = backoff
         self.max_backoff = max_backoff
+        self.max_elapsed = max_elapsed
         self.headers = headers
         self.classify = classify
         self.error_cls = error_cls
         self.not_found_cls = not_found_cls
         self.timeout_cls = timeout_cls or error_cls
         self.rate_limit_cls = rate_limit_cls or error_cls
+        self.retry_exhausted_cls = retry_exhausted_cls or error_cls
+        self.session = session
         self.logger = logger or logging.getLogger(__name__)
         self.last_request_time = 0.0
+        self.limiter = host_limiter(pace_host) if pace_host else RateLimiter()
 
     def rate_limit(self) -> None:
         """
-        Sleep, if needed, so this client's requests stay ``min_interval``
+        Sleep, if needed, so requests to this service stay ``min_interval``
         apart.
 
         Called by :meth:`request` before every attempt --- including retries,
         which is the point: a service that is shedding load should not be
         asked again faster than a service that is not.
 
+        The interval is this client's own; the clock it is measured against
+        belongs to :attr:`limiter`, which is shared with every other client
+        aimed at the same host when ``pace_host`` was given. So the wait is
+        ``min_interval`` since *anybody* last asked that service, not since
+        this object did.
+
         Example:
             >>> client = HTTPClient(min_interval=0.0)
             >>> client.rate_limit()     # returns at once when pacing is off
         """
-        if self.min_interval <= 0:
-            self.last_request_time = time.time()
-            return
-        elapsed = time.time() - self.last_request_time
-        if elapsed < self.min_interval:
-            time.sleep(self.min_interval - elapsed)
-        self.last_request_time = time.time()
+        self.last_request_time = self.limiter.wait(self.min_interval)
 
     def _send(self, method: str, url: str, *, params=None, data=None,
               json=None, headers=None, timeout=None,
@@ -293,6 +466,12 @@ class HTTPClient:
         case. Several test suites stub ``requests.get`` with exactly that
         signature; a client that always passed ``params=None, headers=None``
         would break them for no gain.
+
+        The call goes through :attr:`session` when the client was given one,
+        and otherwise through the ``requests`` module functions. Which of the
+        two is visible from outside: a session's ``get`` carries the session's
+        persistent headers and pooled connection, and is patched as
+        ``requests.Session.get``.
 
         Args:
             method: ``"GET"`` or ``"POST"``.
@@ -323,11 +502,12 @@ class HTTPClient:
         if stream:
             kwargs["stream"] = True
 
+        caller = self.session if self.session is not None else requests
         verb = method.upper()
         if verb == "GET":
-            return requests.get(url, **kwargs)
+            return caller.get(url, **kwargs)
         if verb == "POST":
-            return requests.post(url, **kwargs)
+            return caller.post(url, **kwargs)
         raise ValueError(f"Unsupported HTTP method: {method}")
 
     def _wait(self, attempt: int, response: Optional[requests.Response]) -> float:
@@ -367,10 +547,17 @@ class HTTPClient:
 
         Raises:
             not_found_cls: The service reported the record as absent.
-            error_cls: A permanent error, or a transient one that outlived the
-                retry budget.
+            error_cls: A permanent error.
             timeout_cls: Every attempt timed out or failed to connect.
             rate_limit_cls: Every attempt was throttled.
+            retry_exhausted_cls: A transient condition outlived the retry
+                budget, either in attempts or in ``max_elapsed`` seconds.
+                Defaults to ``error_cls``.
+
+        Every one of those carries the status, the URL and the response on the
+        exception when there was a response --- see :class:`ServiceError` --- so
+        a client can tell a rejected key from an unknown record without
+        re-reading the wire.
 
         Example:
             >>> client = HTTPClient()
@@ -381,6 +568,8 @@ class HTTPClient:
         last_status: Optional[int] = None
         timed_out = False
         throttled = False
+        waited = 0.0
+        out_of_time = False
 
         for attempt in range(self.max_retries + 1):
             self.rate_limit()
@@ -399,7 +588,8 @@ class HTTPClient:
                 # Anything else requests can raise --- a malformed URL, a
                 # broken redirect chain. Not worth a retry, and it must not
                 # reach the caller as a requests exception.
-                raise self.error_cls(f"Request to {url} failed: {exc}") from exc
+                raise self._fail(self.error_cls, f"Request to {url} failed: {exc}",
+                                 url=url) from exc
 
             if response is not None:
                 verdict = self.classify(response)
@@ -410,13 +600,17 @@ class HTTPClient:
 
                 if verdict is Outcome.ABSENT:
                     self.logger.debug(f"absent: {last_status} for {url}")
-                    raise self.not_found_cls(
-                        f"No data for {url} (HTTP {last_status})"
+                    raise self._fail(
+                        self.not_found_cls,
+                        f"No data for {url} (HTTP {last_status})",
+                        status_code=last_status, url=url, response=response,
                     )
 
                 if verdict is Outcome.FATAL:
-                    raise self.error_cls(
-                        f"HTTP {last_status} for {url}: {self._body_excerpt(response)}"
+                    raise self._fail(
+                        self.error_cls,
+                        f"HTTP {last_status} for {url}: {self._body_excerpt(response)}",
+                        status_code=last_status, url=url, response=response,
                     )
 
                 throttled = last_status == 429
@@ -426,20 +620,79 @@ class HTTPClient:
                 break
 
             wait = self._wait(attempt, response)
+            if self.max_elapsed is not None and waited + wait > self.max_elapsed:
+                # The service is willing to be asked again, just not soon
+                # enough to be worth the caller's time.
+                out_of_time = True
+                self.logger.warning(
+                    f"{last_error} for {url}; giving up rather than waiting "
+                    f"another {wait:.1f}s on top of {waited:.1f}s "
+                    f"(max_elapsed={self.max_elapsed:g}s)"
+                )
+                break
+
             self.logger.warning(
                 f"{last_error} for {url}; retrying in {wait:.1f}s "
                 f"(attempt {attempt + 2} of {self.max_retries + 1})"
             )
             if wait > 0:
                 time.sleep(wait)
+                waited += wait
 
-        attempts = self.max_retries + 1
-        message = f"Request to {url} failed after {attempts} attempt(s): {last_error}"
+        if out_of_time:
+            # "Spent" would be a lie when the budget stopped the very first
+            # wait, which is the usual case against a service asking for more
+            # than the whole budget --- so say how much was actually used.
+            message = (f"Request to {url} failed; stopped retrying after "
+                       f"{waited:.0f}s of its {self.max_elapsed:g}s retry "
+                       f"budget: {last_error}")
+        else:
+            attempts = self.max_retries + 1
+            message = (f"Request to {url} failed after {attempts} attempt(s): "
+                       f"{last_error}")
         if throttled:
-            raise self.rate_limit_cls(message)
-        if timed_out:
-            raise self.timeout_cls(message)
-        raise self.error_cls(message)
+            failure = self.rate_limit_cls
+        elif timed_out:
+            failure = self.timeout_cls
+        else:
+            failure = self.retry_exhausted_cls
+        raise self._fail(failure, message, status_code=last_status, url=url,
+                         response=response)
+
+    @staticmethod
+    def _fail(cls: Type[Exception], message: str, *,
+              status_code: Optional[int] = None, url: Optional[str] = None,
+              response: Optional[requests.Response] = None) -> Exception:
+        """
+        Build the exception to raise, with the response detail when it fits.
+
+        Every exception class in this package descends from
+        :class:`ServiceError` and so accepts the keyword detail. A caller is
+        free to pass a plain ``Exception`` subclass as ``error_cls``, though,
+        and handing that one keywords it never declared would turn a service
+        failure into a ``TypeError``. So the detail is attached only when the
+        class is known to take it.
+
+        Args:
+            cls: The exception class to instantiate.
+            message: The message.
+            status_code: The HTTP status, when there was a response.
+            url: The URL requested.
+            response: The raw response, when one arrived.
+
+        Returns:
+            The exception, not yet raised.
+
+        Example:
+            >>> HTTPClient._fail(ServiceError, "busy", status_code=503).status_code
+            503
+            >>> isinstance(HTTPClient._fail(ValueError, "busy", status_code=503), ValueError)
+            True
+        """
+        if issubclass(cls, ServiceError):
+            return cls(message, status_code=status_code, url=url,
+                       response=response)
+        return cls(message)
 
     @staticmethod
     def _body_excerpt(response: requests.Response, limit: int = 200) -> str:
@@ -531,7 +784,7 @@ class HTTPClient:
             >>> HTTPClient().get_json("https://example.org/data.json")   # doctest: +SKIP
             {'ok': True}
         """
-        return self._decode(self.request("GET", url, **kwargs), url)
+        return self.decode_json(self.request("GET", url, **kwargs), url)
 
     def post_json(self, url: str, **kwargs: Any) -> Any:
         """
@@ -551,25 +804,46 @@ class HTTPClient:
             >>> HTTPClient().post_json("https://example.org/q", json={"n": 1})   # doctest: +SKIP
             {'ok': True}
         """
-        return self._decode(self.request("POST", url, **kwargs), url)
+        return self.decode_json(self.request("POST", url, **kwargs), url)
 
-    def _decode(self, response: requests.Response, url: str) -> Any:
+    def decode_json(self, response: requests.Response,
+                    url: Optional[str] = None) -> Any:
         """
         Parse a response body as JSON, reporting failure as a service error.
 
+        Public because a client that decides for itself whether a body is JSON
+        --- ChEBI reads the ``Content-Type``, because it serves molfiles and SVG
+        from the same API as its records --- needs the same failure reported the
+        same way.
+
         Args:
             response: The response to decode.
-            url: The URL, for the error message.
+            url: The URL, for the error message. Falls back to the response's
+                own when it has one.
 
         Returns:
             The decoded JSON.
 
         Raises:
             error_cls: The body is not valid JSON.
+
+        Example:
+            >>> class R:
+            ...     text = 'not json'
+            ...     def json(self): raise ValueError("nope")
+            >>> HTTPClient().decode_json(R(), "https://example.org/x")
+            Traceback (most recent call last):
+                ...
+            provesid.http.ServiceError: Response from https://example.org/x is not JSON: not json
         """
+        if url is None:
+            url = getattr(response, "url", "") or "the service"
         try:
             return response.json()
         except ValueError as exc:
-            raise self.error_cls(
-                f"Response from {url} is not JSON: {self._body_excerpt(response)}"
+            raise self._fail(
+                self.error_cls,
+                f"Response from {url} is not JSON: {self._body_excerpt(response)}",
+                status_code=getattr(response, "status_code", None), url=url,
+                response=response,
             ) from exc

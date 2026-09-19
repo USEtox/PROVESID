@@ -117,10 +117,13 @@ class NCIChemicalIdentifierResolver:
 
         # One shared transport, configured with this service's exceptions so
         # callers keep catching NCIResolverError and friends. CACTUS hides a
-        # not-found behind a 500, hence its own classifier.
+        # not-found behind a 500, hence its own classifier. ``pace_host`` gives
+        # every resolver aimed at CACTUS one clock, so two instances in a
+        # process cannot together ask twice as fast as either promises.
         self._http = HTTPClient(
             min_interval=pause_time,
             timeout=timeout,
+            pace_host=self.base_url,
             classify=nci_classify,
             error_cls=NCIResolverError,
             not_found_cls=NCIResolverNotFoundError,

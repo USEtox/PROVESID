@@ -443,46 +443,28 @@ data = safe_cas_lookup("64-17-5")
 
 #### 2. Rate Limiting and Caching
 
+Both are already done for you, so there is nothing to hand-roll. Every lookup
+goes through the [shared transport](http.md), which paces requests at five per
+second and retries a timeout, a connection failure or a `5xx` with exponential
+back-off, honouring `Retry-After` when CAS sends one. Results are cached
+persistently, and a failure or an absence is **not** cached — so a throttled
+request never becomes a permanent "no such CAS number".
+
 ```python
-import time
-from functools import lru_cache
+from provesid.cascommonchem import CASCommonChem
 
-class CachedCASCommonChem:
-    """CAS API with caching and rate limiting"""
-    
-    def __init__(self, delay=0.5):
-        self.api = CASCommonChem()
-        self.delay = delay
-        self.last_request_time = 0
-    
-    def _rate_limit(self):
-        """Implement rate limiting"""
-        elapsed = time.time() - self.last_request_time
-        if elapsed < self.delay:
-            time.sleep(self.delay - elapsed)
-        self.last_request_time = time.time()
-    
-    @lru_cache(maxsize=1000)
-    def cached_cas_lookup(self, cas_number):
-        """Cached CAS lookup"""
-        self._rate_limit()
-        return self.api.cas_to_detail(cas_number)
-    
-    @lru_cache(maxsize=1000)
-    def cached_name_lookup(self, name):
-        """Cached name lookup"""
-        self._rate_limit()
-        return self.api.name_to_detail(name)
+api = CASCommonChem()
 
-# Usage
-cached_api = CachedCASCommonChem(delay=1.0)
+# First call reaches CAS; the second is served from the cache.
+data1 = api.cas_to_detail("64-17-5")
+data2 = api.cas_to_detail("64-17-5")
 
-# First call - hits API
-data1 = cached_api.cached_cas_lookup("64-17-5")
-
-# Second call - uses cache
-data2 = cached_api.cached_cas_lookup("64-17-5")
+# Go gentler on a long batch. Takes effect on the next request.
+api._http.min_interval = 1.0
 ```
+
+A 401 is reported as `status == "Unauthorized - Check API Key"` and is never
+retried, because asking again with the same key cannot help.
 
 #### 3. Data Export and Analysis
 
@@ -616,8 +598,9 @@ store_cas_data("64-17-5")
 
 #### Rate Limiting
 - No official documented limits
-- Recommended to implement delays between requests
-- Monitor for HTTP 429 (Too Many Requests) responses
+- The client paces itself at five requests per second and retries a throttled
+  or failing request for you; see [HTTP Transport](http.md)
+- Raise `api._http.min_interval` for a long unattended batch
 
 #### Data Quality
 - High-quality data from CAS REGISTRY

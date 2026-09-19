@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **One shared HTTP transport, and `Retry-After` honoured for the first time.**
   Every web-API client used to carry its own copy of "pause, request, decide
-  what the status code meant, maybe give up". The four copies had drifted
+  what the status code meant, maybe give up". The six copies had drifted
   apart: only `pubchemview` retried at all, none honoured `Retry-After`, and
   `chebi`, `cascommonchem` and `opsin` had no rate limiting whatsoever.
 
@@ -22,14 +22,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not asked again faster than a healthy one. No raw `requests` exception
   reaches a caller.
 
-  `resolver` and `pubchemview` are migrated. `pubchem`, `chebi`,
-  `cascommonchem` and `opsin` follow in the next step.
+  Every web-API client is migrated: `resolver`, `pubchemview`, `pubchem`,
+  `chebi`, `cascommonchem` and `opsin`. Only `classyfire` still holds
+  `requests` calls of its own, and only because its service has been down
+  since February 2023. The bulk database downloads
+  (`ChEBISDF.download_sdf`, `chembl`, `comptox`, `zeropm`, `pubchem`'s Zenodo
+  dataset) are deliberately left alone: a hundred-megabyte streamed file wants
+  resumption and checksums, not a 5-per-second pacer.
 
   Nothing changes for a caller. Each client passes its own exception classes to
   the transport, so `except NCIResolverError` and `except PubChemViewError`
   work exactly as before; what is new is that those classes also descend from
   `provesid.http.ServiceError` / `NotFoundError` / `ServiceTimeoutError`, so a
   caller can now catch every service at once.
+
+- **Pacing is now shared per host, not per client object.** PubChem publishes
+  five requests per second **per IP**, and a `PubChemAPI` plus a `PubChemView`
+  in one process — which is the ordinary way to use this package, and what
+  `Search` does — each kept their own clock. Each believed it was pacing
+  correctly while together they asked twice as fast as PubChem allows.
+
+  `min_interval` stays the client's own promise about how fast it will ask; the
+  clock it is measured against now belongs to the host.
+  `provesid.http.RateLimiter` holds one host's clock behind a lock, and
+  `provesid.http.host_limiter(url_or_host)` hands every client aimed at that
+  host the same one. ChEBI and OPSIN are both served from `www.ebi.ac.uk`, so
+  they share a clock too — which is correct, the limit being the host's.
+
+  `last_request_time` still reports when *that* client last asked. The
+  effective rate for a host is set by its most impatient client, so this stops
+  two clients from doubling a limit but not one client configured at
+  `min_interval=0.01` from exceeding it alone.
+
+- **`max_elapsed`, a ceiling on the total time spent waiting between retries** —
+  "do not make the caller wait longer than this". PubChem answers a throttled or
+  blacklisted IP with `Retry-After: 30`, which the transport honours, so three
+  retries would be a ninety-second call;
+  `tests/test_pubchemview.py::TestPubChemView::test_error_handling` measured
+  92.5 s. Dropping the retry would be worse, because a caller resolving ten
+  thousand compounds loses one to every transient 503.
+
+  Both PubChem clients set `provesid.pubchem.RETRY_WAIT_BUDGET = 10.0`, which
+  leaves the cheap curve intact — 1 + 2 + 4 for a transient 500 or a timeout —
+  while declining the 30-second throttle. That block does not lift in thirty
+  seconds: measured on 2026-09-19, waiting the full thirty and asking again
+  returned the same 503, so the wait buys nothing while every call pays it. A
+  throttled `get_compound_by_cid` now fails in 1.1 s. Raise the budget with
+  `api._http.max_elapsed = 180` for an unattended bulk job that would rather
+  wait.
+
+  `max_elapsed` defaults to `None`, so every other client is unaffected.
+
+- **`HTTPClient(session=...)`**, so a client that keeps a `requests.Session`
+  for connection pooling and persistent headers makes its calls through it.
+  `chebi` uses this: its `User-Agent` and `Accept` live on the session, and an
+  ontology walk reuses one connection. Without a session the transport calls
+  `requests.get`/`requests.post` through the module, which is what lets a test
+  stub them.
+
+- **Exceptions carry the response detail.** `ServiceError` now has
+  `status_code`, `url` and `response`, keyword-only and defaulting to None, so
+  `raise PubChemError("...")` by hand is unchanged. CAS Common Chemistry needs
+  this: it reports a rejected key as 401 and an unknown CAS number as 404, and
+  both have to become different strings in the dict it returns.
+
+- **`retry_exhausted_cls`**, raised when a transient condition outlives the
+  retry budget, as distinct from a permanent error. PubChem passes
+  `PubChemServerError`, because its callers catch that one to skip and
+  `PubChemError` to fail. Defaults to `error_cls`, so no other client notices.
+
+- **New exception classes**, all exported from `provesid` and all descending
+  from the shared bases: `ChEBINotFoundError`, `ChEBITimeoutError`,
+  `CASCommonChemError`, `CASCommonChemNotFoundError`,
+  `CASCommonChemTimeoutError`, `OPSINError`, `OPSINNotFoundError`,
+  `OPSINTimeoutError`. `PubChemServerError` and `PubChemTimeoutError` are now
+  exported too. `ChEBIError` was a bare `Exception` and is now a
+  `ServiceError`, so `except ServiceError` catches ChEBI as well.
+
+- **`tests/test_cascommonchem_offline.py`**, 19 offline tests.
+  `tests/test_cascommonchem.py` skips itself entirely without a CAS API key, so
+  the module that gained the most in this change had no coverage on a developer
+  machine at all. The key is only a header, so a stub key and a stubbed
+  `requests.get` cover the lot.
 
 - **`provesid.cache.is_empty_result`**, the `skip_if` predicate that keeps an
   empty answer out of the cache. It was written twice, identically, in
@@ -143,6 +217,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- **OPSIN threw away the reason for every failure it reported.** OPSIN answers a
+  name it cannot parse with HTTP 404 and a complete JSON body —
+  `{"status": "FAILURE", "message": "notachemical12345 was uninterpretable due
+  to the following section of the name: ..."}` — and the body is the only place
+  that explanation exists. `OPSIN.get_id` mapped the status code through a
+  lookup table and returned without reading it, so `message` was empty for
+  every failure the module ever reported, including in the WARNING
+  `get_id_from_list` logs, which therefore always read
+  `Failed to get ID for x: ` with nothing after the colon.
+
+  `provesid.opsin.opsin_classify` treats a 404 as a success for exactly this
+  reason, and `get_id` reads `status` and `message` out of the body. The
+  status-code table, `OPSIN.responses`, is gone — there is nothing left for it
+  to do.
+
+- **CAS Common Chemistry cached its own failures as answers.** `cas_to_detail`
+  and `name_to_detail` report a failure in-band, by returning
+  `{"status": "Timeout", "found": False, ...}`, and both were `@cached` with no
+  `skip_if`. One timed-out request became a permanent "no such CAS number" on
+  disk. This is the same defect fixed elsewhere in this release:
+  `is_failure_result` looks for `success: False`, and CAS says `found: False`.
+  Both methods now skip the cache unless `found` is True — absence included, for
+  the reason `is_empty_result` gives.
+
+- **Old OPSIN and CAS cache entries are retired.** Both clients cached failures
+  before this release, so a name or CAS number looked up during one momentary
+  outage sits on disk as a permanent failure for a record that exists — and
+  every cached OPSIN failure carries an empty `message`, because the old code
+  never read the body that explains it. Neither is fixable in place, so both
+  clients gained a `CACHE_SCHEMA_VERSION = 2` inside a new `__cache_key__`,
+  which makes version 1 entries unreachable. The CAS key deliberately excludes
+  the API key: two keys reach the same registry and get the same answer.
+
+- **A momentary OPSIN outage raised a bare `KeyError`.** `get_id` looked the
+  status code up in a three-entry table, so a 503 — not one of the three —
+  failed inside the lookup rather than being reported. It is retried now, and
+  reported as a `"FAILURE"` whose `message` says what happened.
+
 - `docs/api/pubchemview.md` documented `PubChemView(pause_time=...)`, a
   parameter that has never existed — both snippets raised `TypeError`.
   `docs/api/nci_resolver.md` described the default pacing as "3 requests per
@@ -220,6 +332,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PubChemAPI.get_cache_info`.
 
 ### Changed
+- **`OPSIN.base_url` is `https://www.ebi.ac.uk/opsin/ws/`.** The Cambridge
+  address it used to name, `opsin.ch.cam.ac.uk`, answers every request with a
+  301 to it (verified live, 2026-09-19), so the old URL worked and cost a
+  redirect per name. `OPSIN.responses` is removed with it.
+
+- **PUG-REST and PUG-View read a bare 400 differently, so they have separate
+  classifiers.** `pubchem_classify` is now `pugrest_classify` and
+  `pugview_classify`. PUG-View takes the heading as a query parameter, so a 400
+  means "no such heading" — absence. PUG-REST takes its whole query in the URL
+  path, so a 400 means the path was wrong, and the caller needs PubChem's own
+  explanation of which property name it misspelled, which absence would discard.
+  The fault code still decides first for both, so the split only governs a 400
+  carrying no fault at all.
+
+- **`PubChemAPI.pause_time` and `last_request_time` are properties** over the
+  shared transport rather than plain attributes. `pause_time` is still settable
+  mid-batch and still takes effect on the next request, retries included;
+  `last_request_time` is read-only.
+
+- **ChEBI paces itself at 10 requests per second and retries twice** with a
+  half-second base back-off, where it previously did neither. Two retries rather
+  than the transport's three: an ontology walk makes many small requests to a
+  fast service, where a 1-2-4 second curve costs more than the request it is
+  protecting. EBI publishes no per-IP figure for the ChEBI 2.0 API, so the
+  pacing is politeness rather than a quoted limit.
+
+  A ChEBI timeout message changed with the move: it now names the URL and the
+  number of attempts.
+
+- **CAS Common Chemistry paces itself at 5 requests per second and retries**,
+  where it previously did neither. A 401 is never retried, because asking again
+  with the same key cannot help.
+
 - **An unresolvable identifier now costs the NCI resolver one request instead
   of four.** CACTUS answers an identifier it cannot resolve with **HTTP 500**
   carrying the body `<h1>Page not found (404)</h1>` — verified live on

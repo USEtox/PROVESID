@@ -1605,3 +1605,371 @@ pacing "3 requests per second" when it is 0.1 s between requests, so at most
 - `max_backoff` defaults to 60 s and `backoff` to 1.0 for a client that does
   not say otherwise. Whether those are the right numbers for each service is
   untested against a real throttling event; only the mechanism is.
+
+---
+
+## 23. Landed on 2026-09-19 — step 4, the last four clients (§4 Workstream A)
+
+`pubchem.py`, `chebi.py`, `cascommonchem.py` and `opsin.py` run on `http.py`.
+Every web-API client in the package now shares one transport; the only module
+left holding a `requests` call of its own is `classyfire.py`, whose service has
+been down since February 2023 and which §4 A.2 deals with separately.
+
+### 23.1 The session question, answered by adding sessions to the transport
+
+§22.7 left `chebi.py` open because it uses a `requests.Session` for its
+persistent headers and pooled connection, "which `HTTPClient` does not
+currently model", and because thirty of its tests patch `requests.Session.get`.
+
+Both the session and the tests are right, and neither is the obstacle it looked
+like. A connection reused across an ontology walk is a real saving on a service
+this package asks many small questions of, and `requests.Session.get` is the
+honest patch point for a client that genuinely uses one. So `HTTPClient` takes
+an optional `session` and makes its calls through it; with no session it calls
+`requests.get`/`requests.post` through the module, exactly as before, which is
+what keeps §22.4.1 true.
+
+That turned the migration into a swap after all. `_get`, `_get_raw`,
+`_post_json` and `_post_text` are now one or two lines each over the transport,
+and `depict_structure` — which had a fifth copy of the session call inline,
+duplicating `_post_text` to get at `.content` — reuses `_post_raw` with them. The manual
+`headers={**self.session.headers, "Content-Type": ...}` merge is gone: only the
+one header these endpoints actually need is passed per request, and `requests`
+merges it over the session's own.
+
+ChEBI gets two retries with a half-second base rather than the transport's
+three and one. The reasoning is the shape of its traffic: many small requests to
+a fast service, where a 1-2-4 second curve costs more than the request it is
+protecting. It gets `min_interval=0.1`; EBI publishes no per-IP figure for the
+ChEBI 2.0 API, so that is politeness rather than a quoted limit.
+
+### 23.2 Pacing had to move from the object to the host (§22.7)
+
+The old limiter was per instance, and PubChem's published limit is five
+requests per second **per IP**. A `PubChemAPI` and a `PubChemView` in one
+process — which is the ordinary way to use this package, and what `Search`
+does — each kept their own clock, so each could believe it was pacing correctly
+while together they asked twice as fast as PubChem allows.
+
+The fix separates the promise from the clock. `min_interval` stays the client's
+own: it is what *this* client promises about how fast it will ask. The clock it
+measures that promise against belongs to the host, because the limit being
+respected does too. `RateLimiter` holds one host's clock behind a lock, and
+`host_limiter(url_or_host)` hands every client aimed at that host the same one.
+A client names its host by passing the base URL it already holds, so nothing
+needs a second piece of configuration.
+
+`resolver.py` was migrated in step 3, before `host_limiter` existed, and was
+given `pace_host` here too. Nothing in the package constructs an `NCIResolver`,
+so two of them only co-exist if a caller makes two — a narrower case than
+PubChem's, where the two clients are different classes and `Search` builds
+both. It is one argument, and it makes "pacing is per host" true of every
+migrated client rather than of five out of six.
+
+One consequence worth naming: ChEBI and OPSIN are both served from
+`www.ebi.ac.uk`, so they now share a clock, and ten requests a second is the
+budget for the two of them together. That is the right answer — the limit is the
+host's — and it is only right because the key is the host rather than the
+module.
+
+Two things this deliberately does *not* do:
+
+- It does not merge the intervals. An earlier sketch had the shared limiter keep
+  the strictest interval any client had asked for, which is more conservative
+  and wrong in a way that would have been found late: constructing a
+  `PubChemAPI(pause_time=0.5)` would have changed what a default
+  `PubChemAPI().pause_time` reported, and `tests/test_pubchem_minimal.py` and
+  `tests/test_pubchem.py` assert both values in the same session. Order-dependent
+  test failures are the mild symptom; a client's own configuration silently
+  changing under it is the real one.
+- It does not make the shared clock a guarantee. The effective rate for a host
+  is set by its most impatient client, so sharing stops two clients from
+  doubling a limit but not one client configured at `min_interval=0.01` from
+  exceeding it alone. That is a smaller hole than the one it closes.
+
+`last_request_time` stays per client, because it answers "when did *this* client
+last ask" — which is what the two timing tests read it for. A client given no
+`pace_host` keeps a private clock, which is what a stub wants and what leaves
+`tests/test_http.py` free of cross-test coupling.
+
+### 23.3 PubChem throttles this IP with `Retry-After: 30` (new)
+
+Migrating `pubchem.py` onto a retrying transport was measured against a
+throttled PubChem, which is the only way this would have been found: on
+2026-09-19 every PUG-REST and PUG-View request from this machine answered
+
+```
+HTTP/2 503
+retry-after: 30
+x-throttling-control: ... Service status: Green (0%), too many requests per second or blacklisted
+{"Fault": {"Code": "PUGREST.ServerBusy", ...}}
+```
+
+The old `_make_request` raised `PubChemServerError` on the first 503, so this
+cost one request. The transport honours `Retry-After`, correctly, and with
+`max_retries=3` that is a **ninety-second call** — and the pre-change baseline
+shows it: `tests/test_pubchemview.py::TestPubChemView::test_error_handling`
+took 92.49 s, up from well under a second, because `pubchemview` had already
+landed in step 3.
+
+Dropping the retry altogether would be worse than the wait. A caller resolving
+ten thousand compounds loses one to every transient 503, and that is the case
+the retry layer exists for. But the whole back-off curve should not be charged
+to someone waiting at a prompt, so `HTTPClient` gained `max_elapsed`: retrying
+stops once the next wait would take the cumulative waiting past it, whatever
+`max_retries` allows. It defaults to None, so every other client keeps the old
+bound.
+
+**The budget was set to 30 s first, and that was wrong.** Thirty buys exactly
+one of PubChem's own waits, which reads well and is what the first draft did.
+Running the suite against the block showed the flaw: `test_search_scoring_truth`
+resolves 65 CAS numbers, each call paid its own 30 s, and the run was still
+inside that one file after twenty minutes when it was stopped — against about
+four minutes for the whole file in the pre-change baseline. The aggregate is
+what matters, and 30 s per call for a thousand names is hours where the old
+fail-fast code told the caller in one second that they were blocked.
+
+It is also thirty seconds spent on nothing. The wait only pays off if the block
+lifts within it, and it does not: the earlier run waited the full thirty and got
+the same 503 back, and `x-throttling-control` said `Service status: Green (0%)
+... too many requests per second or blacklisted` all day.
+
+So `RETRY_WAIT_BUDGET = 10.0`, which reads as "do not make the caller wait more
+than ten seconds". That leaves the cheap curve completely intact — 1 + 2 + 4 for
+a transient 500 or a timeout, which is where retrying earns its keep — and
+declines the 30-second throttle. Measured against the live block afterwards: a
+`get_compound_by_cid` fails in **1.10 s**, the same shape as the old code, with
+the retries that are worth having still in place. A caller who does want to wait
+a throttle out raises it with `api._http.max_elapsed = 180`.
+
+### 23.4 PUG-REST and PUG-View disagree about a bare 400 (new)
+
+`pubchem_classify` could not be shared between the two services, which is only
+visible once PUG-REST is on it. §19.4 gave the classifier
+`if status in (400, 404): return Outcome.ABSENT`, and it is right for PUG-View:
+the heading is a query parameter, so "no such heading" is absence, and
+`tests/test_pubchem_failure_reporting.py::test_permanent_client_errors_are_absence_and_are_not_retried`
+pins a bare 400 as exactly that.
+
+PUG-REST takes its whole query in the URL *path*, so a 400 there means the path
+was wrong — a misspelled property name. Reading that as absence loses the one
+thing the caller needs, which is PubChem's own explanation of which name it
+could not read; `tests/test_pubchem.py::test_malformed_property_names` asserts
+`'Invalid property' in result['error']`, and that string exists only in the
+body.
+
+So `pubchem_classify` is now `pugrest_classify` and `pugview_classify` over a
+shared `_classify_fault(response, bare_400)`. The fault code still decides
+first for both, and `PUGVIEW.BadRequest` remains in `ABSENCE_FAULT_CODES`, so
+the split only governs a 400 that carries no fault at all.
+
+That is the third service in this package whose status codes cannot be read
+literally, and the fourth is below. The classifier hook is not an extension
+point; it is the common case.
+
+### 23.5 OPSIN has been discarding the reason for every failure (new)
+
+OPSIN answers a name it cannot parse with HTTP 404 and a complete JSON body:
+
+```
+HTTP 404
+{"status":"FAILURE","message":"notachemical12345 was uninterpretable due to the
+ following section of the name: notachemical12345 ..."}
+```
+
+The 404 is an envelope; the answer is in the body, and the body is the only
+place the *reason* exists. `get_id` mapped the status code through a table and
+returned without reading it, so `message` was empty for every failure the module
+ever reported — including in the WARNING `get_id_from_list` logs, which has
+therefore always read `Failed to get ID for x: ` with nothing after the colon.
+
+`opsin_classify` treats a 404 as `Outcome.OK` for exactly this reason, and
+`get_id` reads `status` and `message` out of the body. The status-code table
+(`self.responses`) is gone, along with the `list(self.responses.keys())[0]` that
+§4 flagged: there is nothing left for it to do. §4 also proposed dropping the
+always-empty `message` key, which was the wrong fix — the key was right and the
+code filling it was wrong.
+
+Two more things on this module:
+
+- The base URL moves to `https://www.ebi.ac.uk/opsin/ws/`. The Cambridge
+  address §4 named answers every request with a 301 to it (verified live,
+  2026-09-19), so the old URL worked and cost a redirect per name.
+- It had no pacing, no retry and no timeout handling. A momentary 503 reached
+  the caller as a raw `KeyError` out of the status-code table, because 503 was
+  not one of the three codes in it.
+
+### 23.6 CAS Common Chemistry was caching its own failures (new)
+
+The module had no pacing and no retry — §4 predicted that — but the defect worth
+recording is the one below it. `cas_to_detail` and `name_to_detail` report a
+failure in-band, by returning `{"status": "Timeout", "found": False, ...}`, and
+both are `@cached` with no `skip_if`. So one timed-out request became a
+permanent "no such CAS number" on disk. This is §17.2 again, in the one module
+§17 did not reach: `is_failure_result` looks for `success: False`, and CAS says
+`found: False`.
+
+Both methods now take `skip_if=_lookup_failed`, which accepts only a result
+whose `found` is True. Absence is not cached either, for the reason
+`is_empty_result` gives: a substance CAS adds next month would otherwise stay
+absent forever, and re-asking costs one cheap request.
+
+Telling the failures apart needed one thing from the transport. CAS reports a
+rejected key as 401 and an unknown CAS number as 404, and both have to become
+different strings in the returned dict — but an exception carries a message, not
+a status. So `ServiceError` now carries `status_code`, `url` and `response`,
+keyword-only and defaulting to None, which leaves `raise PubChemError("...")`
+working everywhere it already appears. `HTTPClient._fail` attaches them only to
+a class it knows accepts them, so passing a plain `Exception` subclass as
+`error_cls` still works rather than turning a service failure into a
+`TypeError`.
+
+One more knob came out of this: an exhausted retry budget and a permanent error
+are different things to PubChem's callers, who catch `PubChemServerError` to
+skip and `PubChemError` to fail. `retry_exhausted_cls` is raised when a
+transient condition outlived the budget, and defaults to `error_cls` so no other
+client notices.
+
+### 23.6a The old cache entries had to be retired, and that was found by accident
+
+Adding `message` to the OPSIN tutorial is what surfaced this. `get_id("")`
+returned `status: FAILURE` with an *empty* message, while the service plainly
+answers that URL with a full explanation — because the answer was coming from a
+cache entry written by the old code, which had cached the failure and never read
+the body.
+
+That is not cosmetic. The old code cached failures indiscriminately, so a name
+that hit one momentary 503 sometime this year is on disk as a permanent
+`"FAILURE"` for a name OPSIN parses perfectly well, and the new `skip_if` cannot
+reach backwards to undo it. Same for CAS Common Chemistry, whose old entries
+include `{"found": False, "status": "Network Error"}` for substances that exist.
+
+So both clients gained a `CACHE_SCHEMA_VERSION = 2` inside a `__cache_key__`,
+following §19.6's precedent: version 1 entries become unreachable rather than
+being served as fact. Neither client had a `__cache_key__` at all before —
+§17.1 left them keyed on the class name, which is stable across processes but
+offers no way to retire an entry whose *content* is now known to be wrong.
+
+The CAS key deliberately excludes the API key. Two keys reach the same registry
+and get the same answer, so keying on it would only mean a new key starts from an
+empty cache.
+
+Verified after the bump: `OPSIN().get_id("")["message"]` is now
+`'ws was uninterpretable due to the following section of the name: ws ...'`,
+straight from the service.
+
+### 23.7 What the tests pinned, and what they gained
+
+Three constraints from the existing suite, none of them in §4:
+
+1. `tests/test_pubchem_properties.py` replaces `_make_request` with a recorder
+   whose signature is `(url, method="GET", data=None, timeout=30, headers=None)`
+   and asserts *how many* requests a call took. `_make_request` keeps that
+   signature exactly and still returns an unparsed response, because the caller
+   knows whether it asked for JSON, SDF or PNG — `_parse_response` is
+   untouched.
+2. `pause_time` was a plain attribute the old `_rate_limit` read live, so
+   setting it mid-batch worked. It is a property over the transport's interval,
+   so it still does, and `test_pubchem.py` / `test_pubchem_minimal.py` keep
+   reading it.
+3. `@patch('provesid.chebi.time.sleep')` patches the *global* `time.sleep`,
+   because `provesid.chebi` and `provesid.http` hold the same module object. So
+   `test_batch_get_compounds`, which counted sleeps to check that
+   `batch_get_compounds` pauses once per compound, saw the transport's pacing
+   too. It now counts the calls carrying its own `pause_time`, which pins the
+   value as well as the count.
+
+The 202 PUG-REST returns for an unfinished list-key operation is neither success
+nor failure. It is a real answer — the body holds the key to poll with — so
+`_make_request` returns it and logs the warning the old code logged, now on the
+module logger rather than the root one.
+
+New coverage:
+
+- `tests/test_http.py` — 18 new tests, 60 in all: that two clients on one host
+  share a clock and two hosts do not; that the shared clock actually delays the
+  second client; that `last_request_time` stays per client; that `max_elapsed`
+  stops one 30-second wait short of a second and leaves a cheap curve alone;
+  that a busy service and a bad request raise different classes; that the
+  status, URL and response survive the raise and are absent for a timeout; that
+  a plain `Exception` subclass is still usable; and that a session is used when
+  given and `requests.get` when not.
+- `tests/test_cascommonchem_offline.py` — **new, 19 tests.**
+  `tests/test_cascommonchem.py` skips itself entirely without a CAS API key, so
+  the module that gained the most had no coverage on a developer machine at
+  all. The key is only a header, so a stub key and a stubbed `requests.get`
+  cover the lot: the happy path, the key being sent, a name search following
+  through to the detail call, a rejected key told apart from an unknown number,
+  a timeout, a 401 never retried, a 503 retried, a transient failure clearing
+  invisibly, no `requests` exception escaping, and a failure being re-asked
+  next time rather than served from the cache.
+- `tests/test_pubchem_failure_reporting.py` — 10 new tests: the bare-400 split
+  in both directions, a bad property name reaching the caller with PubChem's
+  reason, PUG-REST's ServerBusy retried then raised as a server error,
+  `Retry-After` honoured once inside the budget, a transient failure clearing
+  invisibly, the shared pacing clock, `pause_time` settable mid-batch, and the
+  202.
+- `tests/test_chebi.py` — 5 new tests: a timeout retried and reported, an
+  `HTTPError` not retried, a 404 as `ChEBINotFoundError` in one request, a 503
+  retried and carrying its status, and that the transport uses the session.
+  Two existing tests' regexes were updated, the messages having changed.
+- `tests/test_opsin.py` — 5 new tests: that a parse failure carries OPSIN's
+  explanation, that a 503 is retried and never read as an unparseable name, that
+  the 404 costs exactly one request, and two on the cache key.
+- `tests/test_cascommonchem_offline.py` gained two more on the cache key: that it
+  is stable and carries the schema version, and that it does not carry the API
+  key.
+
+### 23.7a The suite, run to completion on 2026-09-20
+
+`pytest tests/` — **998 passed, 3 failed, 34 skipped, 8m24s.**
+
+The three failures are the throttle, not the change.
+`test_pubchem.py::test_error_handling_invalid_cid`,
+`test_pubchem.py::test_malformed_property_names` and
+`test_pubchemview.py::test_error_handling` each assert on an answer only a
+healthy PubChem can give — a not-found, an "Invalid property" explanation, an
+extracted value — and each got `HTTP 503` instead. The three URLs were fetched
+with `curl` straight afterwards and all three answered 503, so the tests are
+reading the block rather than a regression.
+
+`max_elapsed` is visible in every one of them: *"giving up rather than waiting
+another 30.0s on top of 0.0s (max_elapsed=10s)"*. Each failed in about a
+second instead of ninety, which is the whole reason the suite finished at all.
+Against the budget of 30 s that §23.3 rejected, `test_search_scoring_truth.py`
+alone had not finished in twenty minutes; it now runs its 65 CAS resolutions in
+101 s.
+
+Also verified after the fact: doctests on `http.py`, `opsin.py` and
+`cascommonchem.py` (30 passed, 7 skipped). `pubchem.py`'s offline `PubChemID`
+has 26 docstring examples written without expected output, so they fail under
+`--doctest-modules` — pre-existing, untouched by this step, and not collected
+by the suite, whose `testpaths` is `tests`.
+
+### 23.8 Still open
+
+- `classyfire.py` is the last module with `requests` calls of its own. §4 A.2
+  wants every method raising `ServiceUnavailableError` with the February 2023
+  evidence and a pointer to `ChebifierClassifier`, which is a decision about a
+  dead service rather than a migration.
+- The bulk downloads are deliberately not migrated: `ChEBISDF.download_sdf`,
+  `chembl.py`'s release fetch and archive download, `comptox.py`, `zeropm.py`
+  and `pubchem.py`'s Zenodo dataset all call `requests.get(..., stream=True)`
+  directly. One hundred-megabyte file with a progress bar wants resumption and
+  checksums, not a 5-per-second pacer; if they are ever unified it should be
+  under something that models a download, not `HTTPClient`.
+- PubChem was throttling this IP throughout, so the three PubChem failures in
+  the suite are environmental and were failing before this change too. The
+  live-PubChem assertions in `test_pubchem.py` and `test_pubchemview.py` could
+  not be re-verified against a healthy service.
+- `max_elapsed` bounds one call, not the aggregate. At 10 s that no longer
+  matters for PubChem, because nothing is waited out — but the general shape is
+  still missing. The right thing is a circuit breaker, and the shared
+  `RateLimiter` is already the place for it: a `Retry-After` is information about
+  the *host*, so it belongs on the host's clock as a "not before T" that every
+  client respects and that makes a known-throttled host fail at once, rather
+  than being rediscovered by each request's retry loop. That is a behaviour
+  change big enough to want its own step.
+- The shared clock is a `threading.Lock`, so it paces threads in one process.
+  Two processes still have two clocks, and nothing in the package coordinates
+  across them.

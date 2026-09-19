@@ -4,7 +4,11 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'site/**'
+      - 'docs/**'
+      - 'examples/**'
+      - 'src/**'
+      - 'mkdocs.yml'
+      - 'pyproject.toml'
       - '.github/workflows/mkdocs-deploy.yml'
   workflow_dispatch:
 
@@ -20,18 +24,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  package-site:
+  build-site:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Verify committed site exists
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      # mkdocstrings imports provesid to read its docstrings, so the package
+      # and its runtime dependencies have to be installed, not just mkdocs.
+      - name: Install the package and the docs toolchain
         run: |
-          test -d site
-          test -f site/index.html
+          python -m pip install --upgrade pip
+          pip install -e '.[docs]'
+
+      # --strict, so a broken cross-reference or a malformed docstring fails
+      # the build instead of quietly shipping a wrong page.
+      - name: Build the documentation
+        run: mkdocs build --strict
 
       - name: Setup Pages
         id: pages
@@ -44,7 +59,7 @@ jobs:
 
   # Deploy job
   deploy:
-    needs: package-site
+    needs: build-site
 
     # Grant GITHUB_TOKEN the permissions required to make a Pages deployment
     permissions:

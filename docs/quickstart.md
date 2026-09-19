@@ -71,6 +71,13 @@ print("MolecularFormula:", props.get("MolecularFormula"))
 print("InChIKey:", props.get("InChIKey"))
 ```
 
+Those are one request per compound. For many compounds at once use
+`pc.get_compound_properties_batch(cids, properties)`, which asks PubChem about
+200 CIDs per request, and for most properties you can skip the network
+altogether: `PubChemID().properties(cid, properties)` reads the local database
+first and only falls back online for what it cannot answer. See
+[the PubChem API page](api/pubchem.md#properties-without-the-network).
+
 ## 4. Experimental property table with PubChemView
 
 ```{code-cell} ipython3

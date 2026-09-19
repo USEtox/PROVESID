@@ -22,12 +22,77 @@ class TestOPSIN:
     
     def test_initialization(self, opsin):
         """Test OPSIN initialization"""
-        assert opsin.base_url == "https://opsin.ch.cam.ac.uk/opsin/"
-        assert hasattr(opsin, 'responses')
-        
-        expected_responses = {200: "SUCCESS", 404: "FAILURE", 500: "Internal server error"}
-        assert opsin.responses == expected_responses
+        # The Cambridge host answers every request with a 301 to this one.
+        assert opsin.base_url == "https://www.ebi.ac.uk/opsin/ws/"
+        assert opsin.use_cache is True
     
+    def test_failure_carries_opsins_explanation(self, opsin):
+        """A name OPSIN cannot parse comes back with the reason, not a blank."""
+        result = opsin.get_id('notachemical12345')
+
+        assert result['status'] == 'FAILURE'
+        assert result['iupac_name'] == 'notachemical12345'
+        assert 'uninterpretable' in result['message']
+        assert result['smiles'] == ''
+
+    def test_service_failure_is_not_a_parse_failure(self, opsin, monkeypatch):
+        """A 503 is retried and reported, never read as an unparseable name."""
+        import requests
+        from provesid.http import Outcome
+        from provesid.opsin import opsin_classify
+
+        class _Busy:
+            status_code = 503
+            headers = {}
+            text = "Service Unavailable"
+
+        assert opsin_classify(_Busy()) is Outcome.RETRY
+
+        attempts = []
+
+        def busy(url, timeout=None):
+            attempts.append(url)
+            return _Busy()
+
+        fresh = OPSIN(use_cache=False)
+        fresh._http.backoff = 0.0
+        monkeypatch.setattr(requests, "get", busy)
+
+        result = fresh.get_id('ethanol')
+
+        assert result['status'] == 'FAILURE'
+        assert result['smiles'] == ''
+        assert 'failed' in result['message']
+        assert len(attempts) == fresh._http.max_retries + 1
+
+    def test_a_404_is_read_as_an_answer_not_an_absence(self, opsin, monkeypatch):
+        """OPSIN's 404 body is the answer, so it must not burn retries."""
+        import requests
+
+        attempts = []
+
+        class _Unparseable:
+            status_code = 404
+            headers = {}
+            text = ''
+
+            @staticmethod
+            def json():
+                return {"status": "FAILURE", "message": "x was uninterpretable"}
+
+        def unparseable(url, timeout=None):
+            attempts.append(url)
+            return _Unparseable()
+
+        fresh = OPSIN(use_cache=False)
+        monkeypatch.setattr(requests, "get", unparseable)
+
+        result = fresh.get_id('x')
+
+        assert result['status'] == 'FAILURE'
+        assert result['message'] == 'x was uninterpretable'
+        assert len(attempts) == 1
+
     def test_empty_res_structure(self, opsin):
         """Test the structure of empty response"""
         empty_res = opsin._empty_res()
@@ -440,3 +505,21 @@ class TestOPSINErrorHandling:
 if __name__ == "__main__":
     # Run tests if executed directly
     pytest.main([__file__, "-v"])
+
+
+@pytest.mark.unit
+class TestOPSINCacheKey:
+    """The cache key has to be stable across processes, and retirable."""
+
+    def test_the_key_is_stable_and_carries_the_schema_version(self):
+        """
+        Version 1 entries were written by code that cached failures and never
+        read OPSIN's explanation, so they must not be served.
+        """
+        assert OPSIN().__cache_key__() == OPSIN().__cache_key__()
+        assert OPSIN().__cache_key__()[-1] == OPSIN.CACHE_SCHEMA_VERSION
+        assert OPSIN.CACHE_SCHEMA_VERSION >= 2
+
+    def test_the_key_carries_no_memory_address(self):
+        """The defect the cache-key fix was written for, pinned here too."""
+        assert "0x" not in str(OPSIN().__cache_key__())

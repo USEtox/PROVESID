@@ -205,35 +205,51 @@ MISSPELLINGS = [
 ]
 
 
+def _require_sources(**kwargs):
+    """Skip unless every source the given Search config targets is present.
+
+    Args:
+        **kwargs: Passed through to :class:`~provesid.Search`.
+
+    Returns:
+        True once all targeted sources initialised.
+    """
+    s = Search("name", fuzzy=True, show_progress=False, **kwargs)
+    s._ensure_clients()
+    if s.sources_unavailable:  # pragma: no cover - environment dependent
+        pytest.skip(f"Offline sources unavailable: {', '.join(s.sources_unavailable)}")
+    return True
+
+
 @pytest.fixture(scope="module")
 def all_sources_available():
-    """Skip unless every offline source Search needs is present."""
-    s = Search("name", fuzzy=True, show_progress=False)
-    s._ensure_clients()
-    missing = [
-        key
-        for key, client in [
-            ("chebi", s._chebi),
-            ("comptox", s._comptox),
-            ("pubchem", s._pubchem),
-            ("zeropm", s._zeropm),
-            ("chembl", s._chembl),
-        ]
-        if client is None
-    ]
-    if missing:  # pragma: no cover - environment dependent
-        pytest.skip(f"Offline sources unavailable: {', '.join(missing)}")
-    return True
+    """Skip unless every source Search targets by default is present."""
+    return _require_sources()
+
+
+@pytest.fixture(scope="module")
+def zeropm_available():
+    """Skip unless ZeroPM — the opt-in fifth source — is also present."""
+    return _require_sources(use_zeropm=True)
 
 
 @pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.parametrize("query,expected_skeleton", MISSPELLINGS)
 def test_misspelled_name_resolves_to_the_right_compound(
-    all_sources_available, query, expected_skeleton
+    zeropm_available, query, expected_skeleton
 ):
-    """A misspelled name must resolve to the intended compound, or to nothing."""
-    row = Search("name", fuzzy=True, show_progress=False).search(query).iloc[0]
+    """A misspelled name must resolve to the intended compound, or to nothing.
+
+    Runs with ``use_zeropm=True``: ZeroPM is the only source that does true
+    fuzzy *retrieval*, so it is the one that reaches a typo like "caffiene"
+    that shares no usable substring with the real name.
+    """
+    row = (
+        Search("name", fuzzy=True, show_progress=False, use_zeropm=True)
+        .search(query)
+        .iloc[0]
+    )
 
     got = row["InChIKey"]
     assert isinstance(got, str), f"{query!r} resolved to nothing"
@@ -245,12 +261,39 @@ def test_misspelled_name_resolves_to_the_right_compound(
 
 @pytest.mark.integration
 @pytest.mark.slow
+@pytest.mark.parametrize("query,expected_skeleton", MISSPELLINGS)
+def test_misspelling_never_resolves_to_a_wrong_compound(
+    all_sources_available, query, expected_skeleton
+):
+    """On the default sources a typo resolves correctly or not at all.
+
+    Dropping ZeroPM from the default target list costs *recall* on typos — it
+    was the only fuzzy-retrieval source — but it must never cost *precision*:
+    a misspelling may come back empty, never as a different compound.
+    """
+    row = Search("name", fuzzy=True, show_progress=False).search(query).iloc[0]
+
+    got = row["InChIKey"]
+    if not isinstance(got, str):
+        return  # not found is an accepted outcome here
+    assert _skeleton(got) == expected_skeleton, (
+        f"{query!r} resolved to {row['name']!r} ({got}), "
+        f"expected skeleton {expected_skeleton} or no match"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.slow
 @pytest.mark.parametrize("query,_expected", MISSPELLINGS)
 def test_misspelling_is_not_labelled_an_exact_match(
-    all_sources_available, query, _expected
+    zeropm_available, query, _expected
 ):
-    """A typo must never be reported as ``exact_name``."""
-    row = Search("name", fuzzy=True, show_progress=False).search(query).iloc[0]
+    """A typo that resolves must never be reported as ``exact_name``."""
+    row = (
+        Search("name", fuzzy=True, show_progress=False, use_zeropm=True)
+        .search(query)
+        .iloc[0]
+    )
     assert row["match_method"] != "exact_name", (
         f"{query!r} was labelled an exact name match "
         f"(resolved to {row['name']!r})"

@@ -4,27 +4,34 @@ The PubChem View module provides access to experimental property data from PubCh
 
 ::: provesid.pubchemview
 
+::: provesid.pubchemview_parse
+
 ## Quick Start
 
 ```python
 from provesid import PubChemView
-from provesid.pubchemview import get_experimental_properties_table
+from provesid.pubchemview import get_property_table
 
 # Initialize the view client
 view = PubChemView()
 
 # Get experimental melting points for aspirin (CID 2244)
-properties = view.get_experimental_properties(2244, 'Melting Point')
-for prop in properties:
-    print(f"Value: {prop.value} {prop.unit}")
-    print(f"Reference: {prop.reference_title}")
+for prop in view.extract_property_data(2244, 'Melting Point'):
+    p = prop.parsed
+    print(f"As deposited: {prop.value!r}")
+    # An entry may state a single value or a range, so read the bounds --
+    # they are filled for both.
+    print(f"Parsed:       {p.value_min}-{p.value_max} {p.unit}"
+          f" = {p.value_min_si}-{p.value_max_si} {p.unit_si}")
+    print(f"Reference:    {prop.reference}")
 
-# Get a structured DataFrame
-df = view.experimental_properties_to_dataframe(2244, 'Melting Point')
-print(df.head())
+# Or as a DataFrame, with the values parsed into numbers and the references
+# resolved to full citations
+df = view.get_property_table(2244, 'Melting Point')
+print(df[['StringWithMarkup', 'ExperimentalValue', 'Unit', 'ValueSI', 'UnitSI']])
 
-# Use the convenience function for a complete table
-table = get_experimental_properties_table(2244, 'Boiling Point')
+# The same table without building a client first
+table = get_property_table(2244, 'Boiling Point')
 print(table)
 ```
 
@@ -58,94 +65,159 @@ The PubChem View service provides access to various experimental properties:
 
 ### PropertyData Class
 
-The `PropertyData` dataclass represents a single experimental property measurement:
+`PropertyData` is one value PubChem holds for one property, with its provenance:
 
 ```python
 @dataclass
 class PropertyData:
-    cid: int
-    heading: str
-    string_with_markup: str
-    value: Optional[str]
-    unit: Optional[str] 
-    reference_number: Optional[str]
-    reference_title: Optional[str]
-    reference_authors: Optional[str]
-    reference_journal: Optional[str]
-    reference_year: Optional[str]
-    reference_doi: Optional[str]
-    reference_pmid: Optional[str]
-    full_reference: Optional[str]
+    value: str                          # the string exactly as PubChem wrote it
+    unit: Optional[str] = None          # normalised; a copy of parsed.unit
+    conditions: Optional[str] = None    # a copy of parsed.conditions
+    reference: Optional[str] = None
+    reference_number: Optional[int] = None
+    description: Optional[str] = None
+    name: Optional[str] = None
+    heading: Optional[str] = None       # e.g. "Melting Point"
+    parsed: Optional[ParsedValue] = None
 ```
 
-**Fields:**
-- `cid`: PubChem Compound ID
-- `heading`: Property type (e.g., "Melting Point")
-- `string_with_markup`: Original text with markup
-- `value`: Extracted numeric/text value
-- `unit`: Unit of measurement
-- `reference_*`: Citation information
-- `full_reference`: Complete formatted reference
+`value` is always the original text, so nothing the parser cannot read is lost.
+`parsed` holds the numbers recovered from it.
 
-## Advanced Usage
+### ParsedValue: the numbers behind the prose
 
-### Custom Value Parsing
-
-The module includes sophisticated value parsing that handles:
+PubChem reports experimental properties as prose written by whoever deposited
+them — `"138-140 °C"`, `"8.5X10-5 mm Hg at 25 °C"`, `"greater than or equal to
+100 mg/mL"`, `"Vapor pressure, kPa at 20°C: 24"`. `parse_value()` turns that
+into numbers. It is the only parser in the package for these strings, so a fix
+reaches every method that reports a value.
 
 ```python
-# Complex value strings
-examples = [
-    "139-140 °C",           # Range values
-    "25.5 ± 0.2 °C",       # Values with uncertainty
-    "< 100 °C",            # Comparison operators
-    "decomp. at 180 °C",   # Qualitative descriptions
-    "760 mmHg at 20 °C"    # Conditional values
-]
+from provesid import parse_value
 
-# The parser extracts the main numeric value
-for example in examples:
-    # Internal parsing would extract the primary value
-    pass
+v = parse_value("2.47 cP at 20 °C", "Viscosity")
+v.value        # 2.47
+v.unit         # 'cP'
+v.value_si     # 0.00247
+v.unit_si      # 'Pa·s'
+v.temperature_c  # 20.0  -- the condition, not the value
 ```
 
-### Reference Information Extraction
+| Field | Meaning |
+| --- | --- |
+| `text` | The original string. Always populated. |
+| `value` | The single number, or None for a range. |
+| `value_min`, `value_max` | The bounds. Equal to `value` for a single value, so a numeric filter needs no special case for ranges. |
+| `unit` | The unit as written, spelling normalised: `torr` and `mm Hg` both report as `mmHg`. |
+| `value_si`, `value_min_si`, `value_max_si`, `unit_si` | The same quantity in SI units: `K`, `Pa`, `kg/m³`, `mol/m³`, `Pa·s`, `m²/s` or `N/m`. |
+| `temperature_c` | The temperature the measurement was made at, in °C — a *condition*. For a melting point of 138 °C the value is 138 and this is None. |
+| `operator` | `>`, `<`, `>=`, `<=` or `~` when the entry bounds the value rather than stating it. |
+| `qualitative` | The word that replaced the number: `insoluble`, `miscible`, `negligible`. |
+| `conditions` | Remaining qualifying text, such as a pressure or a `/Estimated/` note. |
 
-Complete bibliographic information is extracted and structured:
+The second argument is the heading, and it settles two things a string alone
+cannot: a bare `138` under `"Melting Point"` is 138 °C, while a bare `1.19`
+under `"LogP"` is dimensionless and complete. Passing None declines both hints.
+
+Nothing is invented. An unrecognised unit is reported as written with no SI
+conversion, and `%`, `ppm` and `ppb` are never converted at all — turning a
+percentage into a concentration needs a density the string does not carry, so
+`unit_si` is None there rather than a guess.
+
+On a sample of 365 real value strings across ten compounds and ten properties,
+90% yield a number and 8% a qualitative term; the rest were entries where
+PubChem states no value at all (a pointer to one of its own external tables),
+and those are now left out of the results rather than returned blank.
+
+About three quarters of the numbers also carry an SI conversion. The rest are
+either dimensionless — logP, pKa, refractive index, where `value` is the whole
+answer — or compositions such as `%` and `ppm`, which cannot become
+concentrations without a density. So test `unit_si`, or filter on it, rather
+than assuming `value_si` is populated:
 
 ```python
-# Get properties with full reference details
-properties = view.get_experimental_properties(2244, 'Melting Point')
-for prop in properties:
-    if prop.reference_doi:
-        print(f"DOI: {prop.reference_doi}")
-    if prop.reference_pmid:
-        print(f"PubMed ID: {prop.reference_pmid}")
-    if prop.full_reference:
-        print(f"Full citation: {prop.full_reference}")
+# Comparing SI values only makes sense within one quantity
+concentrations = table[table["UnitSI"] == "kg/m³"]
 ```
 
-### DataFrame Operations
+### Property tables
 
-Convert to pandas DataFrame for data analysis:
+`get_property_table()` returns the parsed values as a DataFrame, one row per
+entry, with the reference resolved:
 
 ```python
 import pandas as pd
 
-# Get DataFrame with all experimental data
-df = view.experimental_properties_to_dataframe(2244, 'Solubility')
+table = view.get_property_table(2244, "Melting Point")
+table[["StringWithMarkup", "ExperimentalValue", "Unit", "ValueSI", "UnitSI"]]
+#      StringWithMarkup  ExperimentalValue Unit  ValueSI UnitSI
+# 0  275 °F (NTP, 1992)              275.0   °F   408.15      K
+# 1             138-140                NaN   °C      NaN      K
+# 2              135 °C              135.0   °C   408.15      K
+```
 
-# Filter by specific units
-water_solubility = df[df['Unit'].str.contains('g/L', na=False)]
+Row 1 shows the range convention: `ExperimentalValue` is NaN because the entry
+states no single number, while `ValueMin`/`ValueMax` hold 138 and 140 (and
+`ValueMinSI`/`ValueMaxSI` hold 411.15 and 413.15 — a temperature conversion is
+affine, so a range cannot simply be scaled).
 
-# Group by reference source
-by_source = df.groupby('Reference').agg({
-    'Value': ['count', 'mean'],
-    'Unit': lambda x: list(x.unique())
-})
+Because the numbers are numbers, the frame is directly usable:
 
-# Export to CSV
-df.to_csv('solubility_data.csv', index=False)
+```python
+# The mean melting point in kelvin, across entries reported in °C and °F alike
+table["ValueSI"].mean()
+
+# Only the entries that state a bound rather than a measurement
+table[table["Operator"].notna()]
+
+# Solubilities above 1 g/L, whatever unit they were deposited in
+sol = view.get_property_table(2244, "Solubility")
+sol[sol["ValueSI"] > 1.0]
+
+sol.to_csv("solubility.csv", index=False)
+```
+
+Any PUG-View heading works, not only the experimental ones. The parser walks the
+record rather than following one hard-coded path, so headings that live
+elsewhere in PubChem's table of contents — `"GHS Classification"` under *Safety
+and Hazards*, `"Drug Indication"` under *Drug and Medication Information* — now
+return their values instead of an empty frame.
+
+### Summaries and serialisation
+
+`get_property_summary()` reports the raw strings alongside the numbers:
+
+```python
+summary = view.get_property_summary(2244, "Melting Point")
+summary["values"]             # ['275 °F (NTP, 1992)', '138-140', '135 °C', ...]
+summary["numeric_values"]     # [275.0, 135.0, 135.0, 135.0, 275.0, 275.0]
+summary["numeric_values_si"]  # [408.15, 408.15, 408.15, 408.15, 408.15, 408.15]
+summary["units"]              # ['°F', '°C']
+summary["units_si"]           # ['K']
+```
+
+`numeric_values` mixes the two scales, which is exactly why
+`numeric_values_si` exists: every entry agrees on 408.15 K.
+
+`export_properties_to_dict()` flattens the same information into plain dicts,
+ready for `json.dumps` or `pd.DataFrame`:
+
+```python
+rows = view.export_properties_to_dict(view.get_melting_point(2244))
+rows[1]
+# {'value': '138-140', 'unit': '°C', 'heading': 'Melting Point',
+#  'numeric_value': None, 'value_min': 138.0, 'value_max': 140.0,
+#  'value_min_si': 411.15, 'value_max_si': 413.15, 'unit_si': 'K', ...}
+```
+
+### Reference information
+
+Each value carries the reference it came from. `get_property_table()` resolves
+PubChem's reference numbers to full citations in `FullReference`:
+
+```python
+for _, row in view.get_property_table(2244, "Melting Point").iterrows():
+    print(row["ExperimentalValue"], row["Unit"], "--", row["FullReference"][:60])
 ```
 
 ## Error Handling
@@ -175,12 +247,15 @@ def batch_extract_properties(cids, property_type):
     
     for cid in cids:
         try:
-            df = view.experimental_properties_to_dataframe(cid, property_type)
+            df = view.get_property_table(cid, property_type)
             if not df.empty:
                 results[cid] = {
                     'count': len(df),
-                    'mean_value': df['Value'].mean() if df['Value'].notna().any() else None,
-                    'units': df['Unit'].unique().tolist()
+                    # ValueSI, not ExperimentalValue: entries deposited in
+                    # different units only average meaningfully in SI.
+                    'mean_value_si': df['ValueSI'].mean(),
+                    'unit_si': df['UnitSI'].dropna().unique().tolist(),
+                    'units_as_deposited': df['Unit'].dropna().unique().tolist(),
                 }
         except Exception as e:
             results[cid] = {'error': str(e)}
@@ -214,7 +289,7 @@ def comprehensive_compound_analysis(cid):
     experimental = {}
     for prop_type in ['Melting Point', 'Boiling Point', 'Density']:
         try:
-            df = view.experimental_properties_to_dataframe(cid, prop_type)
+            df = view.get_property_table(cid, prop_type)
             if not df.empty:
                 experimental[prop_type] = df
         except:
@@ -233,15 +308,25 @@ analysis = comprehensive_compound_analysis(2244)
 
 ### Rate Limiting
 
-The PubChemView client includes automatic rate limiting:
+The PubChemView client paces its own requests, retries included, at PubChem's
+published limit of five per second. Adjust it on the instance:
 
 ```python
-# Adjust request frequency for large batch jobs
-view = PubChemView(pause_time=1.0)  # 1 second between requests
+view = PubChemView()
+view.min_request_interval          # 0.2 seconds, i.e. 5 requests/second
 
-# For development/testing with faster requests
-view_fast = PubChemView(pause_time=0.1)  # 100ms between requests
+# Gentler, for a long batch
+view.min_request_interval = 1.0
+
+# Retries are paced too, and back off exponentially. A service that sends
+# Retry-After gets to set the wait itself.
+view = PubChemView(max_retries=5, backoff_factor=2.0)
 ```
+
+Only transient conditions are retried — a `ServerBusy` or `Timeout` fault code,
+an HTTP 429 or 5xx, a request timeout, a refused connection. A compound with no
+such data and an unknown heading are permanent answers and are raised at once.
+See [HTTP Transport](http.md).
 
 ### Caching
 
@@ -261,7 +346,7 @@ def cached_property_extraction(cid, property_type, cache_dir='cache'):
     
     # Extract fresh data
     view = PubChemView()
-    df = view.experimental_properties_to_dataframe(cid, property_type)
+    df = view.get_property_table(cid, property_type)
     
     # Cache the results
     cache_path.parent.mkdir(exist_ok=True)

@@ -20,6 +20,7 @@ from provesid.pubchemview import (
     get_property_values_only,
     get_property_table
 )
+from provesid.pubchemview_parse import ParsedValue, parse_value
 
 
 class TestPubChemView:
@@ -185,22 +186,30 @@ class TestPubChemView:
         
         # Check that we have some non-null experimental values
         assert table["ExperimentalValue"].notna().any()
+
+        # Parsed numerically, not left as prose: aspirin melts at 135 °C, which
+        # is the same 408.15 K as the 275 °F some of its entries report.
+        assert table["ExperimentalValue"].dtype.kind == "f"
+        assert set(table["UnitSI"].dropna()) == {"K"}
+        assert 408.0 < table["ValueSI"].dropna().min() < 409.0
     
     def test_value_parsing(self, pugview):
-        """Test value and unit parsing"""
-        # Test various value strings
+        """Values parse into numbers, with the unit normalised."""
+        # (string, heading, value, value_min, value_max, unit)
         test_cases = [
-            ("275 °F", ("275", "F")),
-            ("2.47cP at 20 °C", ("2.47", "cP")),
-            ("138-140", ("138-140", None)),
-            ("1.95 mmÂ²/s", ("1.95", "mm")),
-            ("0.79 g/cm³", ("0.79", "g/cm³"))
+            ("275 °F", "Melting Point", 275.0, 275.0, 275.0, "°F"),
+            ("2.47cP at 20 °C", "Viscosity", 2.47, 2.47, 2.47, "cP"),
+            ("138-140", "Melting Point", None, 138.0, 140.0, "°C"),
+            ("0.79 g/cm³", "Density", 0.79, 0.79, 0.79, "g/cm³"),
+            ("1 g/L", "Solubility", 1.0, 1.0, 1.0, "g/L"),
         ]
-        
-        for value_str, expected in test_cases:
-            result = pugview._extract_experimental_value_and_unit(value_str)
-            assert result[0] == expected[0], f"Failed for {value_str}: expected {expected[0]}, got {result[0]}"
-            # Unit matching can be flexible due to complex patterns
+
+        for value_str, heading, value, low, high, unit in test_cases:
+            parsed = parse_value(value_str, heading)
+            assert parsed.value == value, f"value of {value_str!r}"
+            assert parsed.value_min == low, f"value_min of {value_str!r}"
+            assert parsed.value_max == high, f"value_max of {value_str!r}"
+            assert parsed.unit == unit, f"unit of {value_str!r}"
     
     def test_reference_extraction(self, pugview):
         """Test reference mapping extraction"""
@@ -344,18 +353,19 @@ class TestEdgeCases:
         """Test handling of special characters in property values"""
         pugview = PubChemView()
         
-        # Test with special characters
+        # Strings that have to parse without raising, whatever they contain
         test_values = [
-            "1.95 mmÂ²/s at 20Â °C",  # Contains special characters
+            "1.95 mmÂ²/s at 20Â °C",  # mojibake from a cp1252 round trip
             "",  # Empty string
             "no numeric value here",  # No numbers
             "multiple 123 numbers 456 here"  # Multiple numbers
         ]
-        
+
         for value in test_values:
-            result = pugview._extract_experimental_value_and_unit(value)
-            assert isinstance(result, tuple)
-            assert len(result) == 4  # Returns (value, unit, temperature, conditions)
+            parsed = parse_value(value, "Viscosity")
+            # The original is always kept, whether or not anything was parsed.
+            assert parsed.text == value
+            assert parsed.value is None or isinstance(parsed.value, float)
     
     def test_rate_limiting(self):
         """Test rate limiting functionality"""

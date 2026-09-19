@@ -238,22 +238,29 @@ Here are some commonly used ChEBI IDs:
 
 ## Error Handling
 
-The ChEBI class includes comprehensive error handling:
+Every method returns `None` rather than raising when a lookup fails, and logs a
+warning saying why. The exceptions below are what the methods catch internally;
+they are also what the [shared transport](http.md) raises, so you can use them
+if you call `_get` and friends directly.
 
 ```python
-from provesid import ChEBI, ChEBIError
+from provesid import ChEBI
+from provesid.chebi import ChEBIError, ChEBINotFoundError, ChEBITimeoutError
 
 chebi = ChEBI()
 
-try:
-    entity = chebi.get_complete_entity(15377)
-    if entity is None:
-        print("Entity not found")
-    else:
-        print(f"Found: {entity['chebiAsciiName']}")
-except ChEBIError as e:
-    print(f"ChEBI API error: {e}")
+entity = chebi.get_complete_entity(15377)
+if entity is None:
+    print("Not found, or ChEBI could not be reached — see the log")
+else:
+    print(f"Found: {entity['chebiAsciiName']}")
 ```
+
+`ChEBINotFoundError` and `ChEBITimeoutError` are both subclasses of
+`ChEBIError`, so catching that one still catches everything. Requests are paced
+at 10 per second, and a timeout, a connection failure or a `5xx` is retried
+twice with a half-second base back-off before the failure is reported. A `404`
+is absence and is never retried.
 
 ## Data Structures
 

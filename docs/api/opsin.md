@@ -4,7 +4,10 @@ The OPSIN (Open Parser for Systematic IUPAC Nomenclature) class provides an inte
 
 ## Overview
 
-OPSIN is a web service that converts systematic IUPAC chemical names into chemical structures. This class provides a Python interface to the OPSIN web API hosted at Cambridge University.
+OPSIN is a web service that converts systematic IUPAC chemical names into chemical structures. This class provides a Python interface to the OPSIN web API, which is hosted by EMBL-EBI. (The old Cambridge address, `opsin.ch.cam.ac.uk`, answers every request with a redirect to it.)
+
+For anything more than a handful of names, prefer `PYOPSIN` below: it runs the
+same parser locally through `py2opsin`, so it is faster and needs no network.
 
 ## Class: OPSIN
 
@@ -17,8 +20,9 @@ opsin = OPSIN()
 ```
 
 The OPSIN class initializes with:
-- `base_url`: "https://opsin.ch.cam.ac.uk/opsin/"
-- `responses`: Status code mappings
+- `base_url`: "https://www.ebi.ac.uk/opsin/ws/"
+- a shared [HTTP transport](http.md), which paces requests, retries a
+  momentarily unavailable service and honours `Retry-After`
 
 ### Methods
 
@@ -32,12 +36,17 @@ Convert a single IUPAC name to chemical identifiers.
 
 **Returns:**
 - `dict`: Dictionary containing:
-  - `status`: "SUCCESS", "FAILURE", or "Internal server error"
-  - `message`: Status message
+  - `status`: OPSIN's own, `"SUCCESS"` or `"FAILURE"`
+  - `message`: empty on success; on a failure, OPSIN's explanation of which
+    part of the name it could not read
   - `inchi`: InChI string
   - `stdinchi`: Standard InChI string
   - `stdinchikey`: Standard InChI Key
   - `smiles`: SMILES string
+
+Nothing is raised: a service failure is reported as a `"FAILURE"` whose
+`message` describes it, and neither a failure nor an unparseable name is
+cached.
 
 **Example:**
 ```python
@@ -48,6 +57,16 @@ if result['status'] == 'SUCCESS':
     print(f"SMILES: {result['smiles']}")
     print(f"InChI: {result['stdinchi']}")
     print(f"InChI Key: {result['stdinchikey']}")
+else:
+    print(result['message'])
+```
+
+OPSIN answers a name it cannot parse with HTTP 404 and a JSON body that says
+why, so the reason survives:
+
+```python
+>>> OPSIN().get_id('notachemical12345')['message']
+'notachemical12345 was uninterpretable due to the following section of the name: ...'
 ```
 
 #### `get_id_from_list(name_list, pause_time=1, timeout=30)`
@@ -168,12 +187,18 @@ if opsin_result['status'] == 'SUCCESS':
 
 #### Common Issues
 
-1. **Timeout errors**: Increase timeout parameter or check network connection
-2. **Name not recognized**: Verify IUPAC naming conventions
+1. **Timeout errors**: Increase timeout parameter or check network connection.
+   Timeouts and momentary server failures are retried before you hear about
+   them.
+2. **Name not recognized**: Verify IUPAC naming conventions. `message` names the
+   part of the name OPSIN could not read.
 3. **Empty results**: Check if the name is supported by OPSIN
 4. **Network errors**: Verify internet connectivity and server availability
 
 #### Debug Information
+
+`status` is OPSIN's own, so there are two values to check, and `message`
+explains both cases.
 
 ```python
 opsin = OPSIN()
@@ -182,8 +207,8 @@ result = opsin.get_id('problematic_name')
 print(f"Status: {result['status']}")
 print(f"Message: {result['message']}")
 
-if result['status'] == 'FAILURE':
-    print("Name not recognized by OPSIN")
-elif result['status'] == 'Internal server error':
-    print("OPSIN server error - try again later")
+if result['status'] != 'SUCCESS':
+    # Either the name is not valid IUPAC, or the service could not be reached;
+    # the message says which.
+    print(result['message'])
 ```

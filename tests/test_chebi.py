@@ -6,9 +6,17 @@ This module contains comprehensive tests for the ChEBI class and related functio
 
 import pytest
 import requests
+import unittest.mock
 from unittest.mock import patch, Mock, MagicMock
 
-from provesid.chebi import ChEBI, ChEBIError, get_chebi_entity, search_chebi
+from provesid.chebi import (
+    ChEBI,
+    ChEBIError,
+    ChEBINotFoundError,
+    ChEBITimeoutError,
+    get_chebi_entity,
+    search_chebi,
+)
 
 
 class TestChEBI:
@@ -61,21 +69,89 @@ class TestChEBI:
 
     @patch('requests.Session.get')
     def test_get_timeout(self, mock_get):
-        """Test request timeout handling."""
+        """A timeout that never clears is reported as a ChEBI timeout."""
         mock_get.side_effect = requests.exceptions.Timeout()
 
         chebi = ChEBI()
-        with pytest.raises(ChEBIError, match="Request timeout"):
+        with pytest.raises(ChEBITimeoutError, match="timed out"):
             chebi._get("compound/CHEBI:15377/")
 
     @patch('requests.Session.get')
+    def test_get_timeout_is_retried(self, mock_get):
+        """A timeout is transient, so every attempt in the budget is spent."""
+        mock_get.side_effect = requests.exceptions.Timeout()
+
+        chebi = ChEBI()
+        with pytest.raises(ChEBIError):
+            chebi._get("compound/CHEBI:15377/")
+
+        assert mock_get.call_count == chebi._http.max_retries + 1
+
+    @patch('requests.Session.get')
     def test_get_network_error(self, mock_get):
-        """Test network error handling."""
+        """A connection that cannot be made is a ChEBI timeout too."""
         mock_get.side_effect = requests.exceptions.ConnectionError("Network error")
 
         chebi = ChEBI()
-        with pytest.raises(ChEBIError, match="Request failed"):
+        with pytest.raises(ChEBITimeoutError, match="connection failed"):
             chebi._get("compound/CHEBI:15377/")
+
+    @patch('requests.Session.get')
+    def test_get_http_error_is_not_retried(self, mock_get):
+        """An HTTPError out of requests is permanent: report it, once."""
+        mock_get.side_effect = requests.exceptions.HTTPError("418 I am a teapot")
+
+        chebi = ChEBI()
+        with pytest.raises(ChEBIError, match="failed"):
+            chebi._get("compound/CHEBI:15377/")
+
+        assert mock_get.call_count == 1
+
+    @patch('requests.Session.get')
+    def test_absent_record_is_a_not_found_error(self, mock_get):
+        """ChEBI's 404 is absence, raised as such and never retried."""
+        mock_response = Mock()
+        mock_response.status_code = 404
+        mock_response.headers = {}
+        mock_response.text = "Not found"
+        mock_get.return_value = mock_response
+
+        chebi = ChEBI()
+        with pytest.raises(ChEBINotFoundError):
+            chebi._get("compound/CHEBI:99999999/")
+
+        assert mock_get.call_count == 1
+
+    @patch('requests.Session.get')
+    def test_server_error_is_retried_then_raised(self, mock_get):
+        """A 503 is transient: retry it, then report a plain ChEBIError."""
+        mock_response = Mock()
+        mock_response.status_code = 503
+        mock_response.headers = {}
+        mock_response.text = "Service Unavailable"
+        mock_get.return_value = mock_response
+
+        chebi = ChEBI()
+        with pytest.raises(ChEBIError) as excinfo:
+            chebi._get("compound/CHEBI:15377/")
+
+        assert not isinstance(excinfo.value, ChEBINotFoundError)
+        assert excinfo.value.status_code == 503
+        assert mock_get.call_count == chebi._http.max_retries + 1
+
+    @patch('requests.Session.get')
+    def test_transport_uses_the_session(self, mock_get):
+        """The session's persistent headers and pooling survive the transport."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json.return_value = {"ok": True}
+        mock_get.return_value = mock_response
+
+        chebi = ChEBI()
+        assert chebi._http.session is chebi.session
+        chebi._get("compound/CHEBI:15377/")
+        mock_get.assert_called_once()
 
     @patch('requests.Session.get')
     def test_get_compound_success(self, mock_get):
@@ -270,7 +346,12 @@ class TestChEBI:
         assert len(result) == 2
         assert "CHEBI:15377" in result
         assert "CHEBI:16236" in result
-        assert mock_sleep.call_count == 2
+        # Count only the batch's own pause: the shared transport paces requests
+        # as well, and patching provesid.chebi.time.sleep patches that too
+        # because both modules hold the same `time` module object.
+        own_pauses = [call for call in mock_sleep.call_args_list
+                      if call == unittest.mock.call(0.1)]
+        assert len(own_pauses) == 2
 
     @patch('requests.Session.get')
     def test_get_compound_structure_success(self, mock_get):

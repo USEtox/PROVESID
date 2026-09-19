@@ -7,6 +7,456 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **One shared HTTP transport, and `Retry-After` honoured for the first time.**
+  Every web-API client used to carry its own copy of "pause, request, decide
+  what the status code meant, maybe give up". The six copies had drifted
+  apart: only `pubchemview` retried at all, none honoured `Retry-After`, and
+  `chebi`, `cascommonchem` and `opsin` had no rate limiting whatsoever.
+
+  `provesid.http.HTTPClient` is now the single place that decides when to ask
+  again. It paces requests, retries HTTP 429, 5xx, timeouts and connection
+  errors with exponential back-off capped at `max_backoff`, and prefers a
+  `Retry-After` the service sent — in seconds or as an HTTP date — over its own
+  curve. The pacing applies to retries too: a service already shedding load is
+  not asked again faster than a healthy one. No raw `requests` exception
+  reaches a caller.
+
+  Every web-API client is migrated: `resolver`, `pubchemview`, `pubchem`,
+  `chebi`, `cascommonchem` and `opsin`. Only `classyfire` still holds
+  `requests` calls of its own, and only because its service has been down
+  since February 2023. The bulk database downloads
+  (`ChEBISDF.download_sdf`, `chembl`, `comptox`, `zeropm`, `pubchem`'s Zenodo
+  dataset) are deliberately left alone: a hundred-megabyte streamed file wants
+  resumption and checksums, not a 5-per-second pacer.
+
+  Nothing changes for a caller. Each client passes its own exception classes to
+  the transport, so `except NCIResolverError` and `except PubChemViewError`
+  work exactly as before; what is new is that those classes also descend from
+  `provesid.http.ServiceError` / `NotFoundError` / `ServiceTimeoutError`, so a
+  caller can now catch every service at once.
+
+- **Pacing is now shared per host, not per client object.** PubChem publishes
+  five requests per second **per IP**, and a `PubChemAPI` plus a `PubChemView`
+  in one process — which is the ordinary way to use this package, and what
+  `Search` does — each kept their own clock. Each believed it was pacing
+  correctly while together they asked twice as fast as PubChem allows.
+
+  `min_interval` stays the client's own promise about how fast it will ask; the
+  clock it is measured against now belongs to the host.
+  `provesid.http.RateLimiter` holds one host's clock behind a lock, and
+  `provesid.http.host_limiter(url_or_host)` hands every client aimed at that
+  host the same one. ChEBI and OPSIN are both served from `www.ebi.ac.uk`, so
+  they share a clock too — which is correct, the limit being the host's.
+
+  `last_request_time` still reports when *that* client last asked. The
+  effective rate for a host is set by its most impatient client, so this stops
+  two clients from doubling a limit but not one client configured at
+  `min_interval=0.01` from exceeding it alone.
+
+- **`max_elapsed`, a ceiling on the total time spent waiting between retries** —
+  "do not make the caller wait longer than this". PubChem answers a throttled or
+  blacklisted IP with `Retry-After: 30`, which the transport honours, so three
+  retries would be a ninety-second call;
+  `tests/test_pubchemview.py::TestPubChemView::test_error_handling` measured
+  92.5 s. Dropping the retry would be worse, because a caller resolving ten
+  thousand compounds loses one to every transient 503.
+
+  Both PubChem clients set `provesid.pubchem.RETRY_WAIT_BUDGET = 10.0`, which
+  leaves the cheap curve intact — 1 + 2 + 4 for a transient 500 or a timeout —
+  while declining the 30-second throttle. That block does not lift in thirty
+  seconds: measured on 2026-09-19, waiting the full thirty and asking again
+  returned the same 503, so the wait buys nothing while every call pays it. A
+  throttled `get_compound_by_cid` now fails in 1.1 s. Raise the budget with
+  `api._http.max_elapsed = 180` for an unattended bulk job that would rather
+  wait.
+
+  `max_elapsed` defaults to `None`, so every other client is unaffected.
+
+- **`HTTPClient(session=...)`**, so a client that keeps a `requests.Session`
+  for connection pooling and persistent headers makes its calls through it.
+  `chebi` uses this: its `User-Agent` and `Accept` live on the session, and an
+  ontology walk reuses one connection. Without a session the transport calls
+  `requests.get`/`requests.post` through the module, which is what lets a test
+  stub them.
+
+- **Exceptions carry the response detail.** `ServiceError` now has
+  `status_code`, `url` and `response`, keyword-only and defaulting to None, so
+  `raise PubChemError("...")` by hand is unchanged. CAS Common Chemistry needs
+  this: it reports a rejected key as 401 and an unknown CAS number as 404, and
+  both have to become different strings in the dict it returns.
+
+- **`retry_exhausted_cls`**, raised when a transient condition outlives the
+  retry budget, as distinct from a permanent error. PubChem passes
+  `PubChemServerError`, because its callers catch that one to skip and
+  `PubChemError` to fail. Defaults to `error_cls`, so no other client notices.
+
+- **New exception classes**, all exported from `provesid` and all descending
+  from the shared bases: `ChEBINotFoundError`, `ChEBITimeoutError`,
+  `CASCommonChemError`, `CASCommonChemNotFoundError`,
+  `CASCommonChemTimeoutError`, `OPSINError`, `OPSINNotFoundError`,
+  `OPSINTimeoutError`. `PubChemServerError` and `PubChemTimeoutError` are now
+  exported too. `ChEBIError` was a bare `Exception` and is now a
+  `ServiceError`, so `except ServiceError` catches ChEBI as well.
+
+- **`tests/test_cascommonchem_offline.py`**, 19 offline tests.
+  `tests/test_cascommonchem.py` skips itself entirely without a CAS API key, so
+  the module that gained the most in this change had no coverage on a developer
+  machine at all. The key is only a header, so a stub key and a stubbed
+  `requests.get` cover the lot.
+
+- **`provesid.cache.is_empty_result`**, the `skip_if` predicate that keeps an
+  empty answer out of the cache. It was written twice, identically, in
+  `pubchem` and `pubchemview`; it now lives beside `is_failure_result`, which
+  is where `skip_if` belongs.
+
+- **One parser for PUG-View's free-text values, with typed output.** PubChem
+  reports every experimental property as prose written by whoever deposited it —
+  `"138-140 °C"`, `"8.5X10-5 mm Hg at 25 °C"`, `"greater than or equal to 100
+  mg/mL"`, `"Vapor pressure, kPa at 20°C: 24"` — and PROVESID had two parsers
+  for it that disagreed with each other: a 25-line one behind `PropertyData` and
+  a 390-line property-specific regex cascade behind `get_property_table`, both
+  returning strings.
+
+  The new `provesid.pubchemview_parse` module holds the only one.
+  `parse_value(text, heading)` returns a `ParsedValue` carrying:
+
+  - `value`, or `value_min`/`value_max` for a range (a single value fills both
+    bounds too, so a numeric filter needs no special case);
+  - `unit`, spelling normalised — `torr` and `mm Hg` both report as `mmHg`;
+  - `value_si`/`value_min_si`/`value_max_si`/`unit_si`, the same quantity in
+    `K`, `Pa`, `kg/m³`, `mol/m³`, `Pa·s`, `m²/s` or `N/m`;
+  - `temperature_c`, the temperature the measurement was made *at*, which is a
+    condition rather than the value and was the largest source of wrong answers;
+  - `operator` (`>`, `<`, `>=`, `<=`, `~`) when the entry bounds the value;
+  - `qualitative` (`insoluble`, `miscible`, `negligible`) when a word replaced
+    the number;
+  - `text`, always — nothing the parser cannot read is lost.
+
+  The `heading` argument settles what a string alone cannot: a bare `138` under
+  "Melting Point" is 138 °C, while a bare `1.19` under "LogP" is dimensionless
+  and complete.
+
+  Measured on 366 real value strings across ten compounds and ten properties:
+  90% yield a number, 8% a qualitative term, and the remaining 2% are entries
+  where PubChem states no value at all. Aspirin's melting point entries, which
+  are deposited variously as `135 °C` and `275 °F`, now all read 408.15 K.
+
+  Nothing is invented: an unrecognised unit is reported as written with no SI
+  conversion, and `%`, `ppm` and `ppb` are never converted, since a composition
+  needs a density to become a concentration. `M` for molar is not recognised
+  either — it is indistinguishable from metres and from a stray capital.
+
+- **`get_property_table` now returns numbers.** New columns `ValueMin`,
+  `ValueMax`, `ValueSI`, `ValueMinSI`, `ValueMaxSI`, `UnitSI`, `Operator`,
+  `Qualitative` and `Heading` join the existing ones, and the full list is
+  published as `PubChemView.PROPERTY_TABLE_COLUMNS`.
+
+- **Every PUG-View heading works, not only the experimental ones.** Both
+  response parsers hard-coded the path *Chemical and Physical Properties →
+  Experimental Properties → \*​*, but PUG-View nests a requested heading
+  wherever it sits in the compound's table of contents: "GHS Classification"
+  under *Safety and Hazards*, "Drug Indication" under *Drug and Medication
+  Information*. Those returned a full response and an empty result — data
+  reported as absent while it was right there. `_iter_information` walks the
+  record instead, and `get_property_table(2244, "GHS Classification")` now
+  returns its 18 rows.
+
+- `get_property_summary` gained `numeric_values`, `numeric_values_si` and
+  `units_si`; `export_properties_to_dict` gained the parsed numbers as flat,
+  JSON-serialisable keys. `PropertyData` gained `heading` and `parsed`.
+
+- `PubChemView.CACHE_SCHEMA_VERSION` is part of the client's cache key, so an
+  entry written before the shape of a result changed becomes unreachable rather
+  than being deserialised into the wrong structure. This mattered immediately: a
+  `PropertyData` pickled by the previous version restores without a `parsed`
+  attribute, and everything reading it would raise. Bump the constant whenever a
+  cached return shape changes.
+
+- **Bulk property retrieval.** `PubChemAPI.get_properties_for_cids(cids,
+  properties)` asks PubChem about a whole list of compounds in one request
+  rather than one request per compound: 450 compounds now cost 3 requests and
+  about 2 seconds, where the per-CID loop cost 450 requests and a minute and a
+  half. Lists are split into `PROPERTY_CHUNK_SIZE` (200) CIDs per request, so a
+  retry redoes a chunk rather than everything.
+
+- **POST for long identifier lists.** PUG-REST caps a URL at roughly 2000
+  characters, which a few hundred CIDs exceed. `_build_post_url` builds the
+  same endpoint without the identifier segment, and the bulk property path
+  switches to POST — identifiers in the body — once the list outgrows
+  `URL_IDENTIFIER_LIMIT`. Below that it keeps using GET, which PubChem prefers.
+
+- **Offline-first property lookup.** `PubChemID.properties(cid, properties)`
+  reads the local SQLite database first and consults PUG-REST only for what it
+  cannot answer, per the two-stage lookup the development principles ask for.
+  For most property work this means no network traffic at all: 473 of 1000 low
+  CIDs were served from disk in the same call, and the remaining 527 in three
+  batched requests.
+
+  `properties_for_cids()` does the same for a list, and `properties_table()`
+  returns a DataFrame with a row for every CID asked about. Each record carries
+  a `Source` key reading `offline`, `online` or (in the table) `missing`.
+  `use_online_fallback=False` keeps a lookup strictly local.
+
+  `PubChemID.OFFLINE_PROPERTIES` maps the 16 property names the database can
+  answer — formula, weight, exact mass, isomeric SMILES, InChI, InChIKey, IUPAC
+  name, title, XLogP, TPSA, complexity, charge and the H-bond, rotatable-bond
+  and heavy-atom counts — to their columns. Anything else
+  (`MonoisotopicMass`, `ConnectivitySMILES`, the 3D descriptors, the patent and
+  literature counts) is online-only, and asking for one sends the whole request
+  online rather than assembling a row from two different PubChem snapshots.
+
+  A property with no value is absent from the result rather than `None`, which
+  is how PubChem reports it — `'XLogP' not in result` means PubChem computes no
+  logP for that compound, not that the lookup fell short. Values are normalised
+  to one type across both sources, since PUG-REST returns `MolecularWeight` as
+  a string where the database holds a float.
+
+- `PubChemID(api=...)` accepts the `PubChemAPI` used for fallback; one is
+  created on first use otherwise, so a strictly offline session never builds
+  one.
+
+### Fixed
+- **OPSIN threw away the reason for every failure it reported.** OPSIN answers a
+  name it cannot parse with HTTP 404 and a complete JSON body —
+  `{"status": "FAILURE", "message": "notachemical12345 was uninterpretable due
+  to the following section of the name: ..."}` — and the body is the only place
+  that explanation exists. `OPSIN.get_id` mapped the status code through a
+  lookup table and returned without reading it, so `message` was empty for
+  every failure the module ever reported, including in the WARNING
+  `get_id_from_list` logs, which therefore always read
+  `Failed to get ID for x: ` with nothing after the colon.
+
+  `provesid.opsin.opsin_classify` treats a 404 as a success for exactly this
+  reason, and `get_id` reads `status` and `message` out of the body. The
+  status-code table, `OPSIN.responses`, is gone — there is nothing left for it
+  to do.
+
+- **CAS Common Chemistry cached its own failures as answers.** `cas_to_detail`
+  and `name_to_detail` report a failure in-band, by returning
+  `{"status": "Timeout", "found": False, ...}`, and both were `@cached` with no
+  `skip_if`. One timed-out request became a permanent "no such CAS number" on
+  disk. This is the same defect fixed elsewhere in this release:
+  `is_failure_result` looks for `success: False`, and CAS says `found: False`.
+  Both methods now skip the cache unless `found` is True — absence included, for
+  the reason `is_empty_result` gives.
+
+- **Old OPSIN and CAS cache entries are retired.** Both clients cached failures
+  before this release, so a name or CAS number looked up during one momentary
+  outage sits on disk as a permanent failure for a record that exists — and
+  every cached OPSIN failure carries an empty `message`, because the old code
+  never read the body that explains it. Neither is fixable in place, so both
+  clients gained a `CACHE_SCHEMA_VERSION = 2` inside a new `__cache_key__`,
+  which makes version 1 entries unreachable. The CAS key deliberately excludes
+  the API key: two keys reach the same registry and get the same answer.
+
+- **A momentary OPSIN outage raised a bare `KeyError`.** `get_id` looked the
+  status code up in a three-entry table, so a 503 — not one of the three —
+  failed inside the lookup rather than being reported. It is retried now, and
+  reported as a `"FAILURE"` whose `message` says what happened.
+
+- `docs/api/pubchemview.md` documented `PubChemView(pause_time=...)`, a
+  parameter that has never existed — both snippets raised `TypeError`.
+  `docs/api/nci_resolver.md` described the default pacing as "3 requests per
+  second"; it is 0.1 s between requests, so at most 10.
+
+- **The persistent cache never hit across processes.** `CacheManager._get_cache_key`
+  built its key with `json.dumps(..., default=str)` over the call's arguments.
+  For a bound method the first argument is `self`, and the default `str()` of a
+  client object embeds its memory address
+  (`<PubChemView object at 0x7f...>`), so every instance — and every
+  interpreter — produced a different key. No entry written by one run was ever
+  reachable from the next: every "cached" method in `pubchem`, `pubchemview`,
+  `resolver`, `cascommonchem`, `classyfire` and `opsin` re-fetched from the
+  network on every call while the cache directory filled with unreachable
+  duplicates.
+
+  Arguments are now normalised by `cache.stable_key_part` into a form that is
+  stable across processes: objects reduce to the value they declare through
+  `__cache_key__()`, or to their fully qualified class name. `PubChemAPI`,
+  `PubChemView` and `NCIChemicalIdentifierResolver` declare
+  `__cache_key__` as `(class path, base_url)`, so two clients pointing at the
+  same endpoint share cache entries while two different endpoints stay apart.
+
+  **Existing cache entries are orphaned** by the new key scheme. They are inert,
+  not incorrect; run `provesid.cache.clear_cache()` (or
+  `clear_all_service_caches()`) to reclaim the disk space.
+
+- **A cached `None` was indistinguishable from a cache miss.** `_load_from_disk`
+  returned `None` both for "no entry" and for "the stored value is `None`", so
+  any function whose result is `None` re-ran on every call. It now returns a
+  `_MISS` sentinel.
+
+- **Failed lookups were cached as answers.** `@cached` stored whatever a
+  function returned, including the `{'success': False, 'error': ...}` dicts and
+  the empty lists that the clients hand back after an HTTP 429, a PUG-View
+  `ServerBusy` (503) or a timeout. A single transient error therefore became a
+  permanent "this compound has no data". `@cached` now skips storage for any
+  result that `cache.is_failure_result` recognises, and takes an optional
+  `skip_if` predicate for clients that signal failure some other way.
+
+- **`PubChemView` reported a failed fetch as an absent property.**
+  `extract_property_data` caught `PubChemViewError` — the base class, which
+  covers an exhausted retry budget — logged "not found", and returned `[]`.
+  Combined with the caching bug above, a 503 during
+  `get_melting_point(2244)` was stored as "aspirin has no melting point".
+  Transport failures now propagate; only a genuine 404 yields `[]`.
+  `get_property_table` makes the same distinction: an empty frame always means
+  "no such data", never "the fetch failed".
+
+- **`PubChemAPI.get_compound_synonyms` swallowed every error** into `[]`, with
+  the same consequence. A 404 still returns `[]`; anything else raises.
+  `get_compound_properties` keeps returning the properties it retrieved when the
+  follow-up synonym request fails, but now records the failure under
+  `synonyms_error` and, via `skip_if`, is not cached while incomplete.
+
+- **PubChem sheds load behind 4xx statuses, so absence is now decided by the
+  fault code, not the HTTP status.** Both services describe every error in the
+  body — `{"Fault": {"Code": "PUGVIEW.NotFound", ...}}` for a compound that
+  genuinely has no such data, `PUGVIEW.BadRequest` for an unknown heading,
+  `...ServerBusy` when the service is merely busy. `pubchem.fault_code` and
+  `pubchemview.fault_code` read it: a transient code is retried whatever status
+  carries it, `NotFound`/`BadRequest` is absence and is not retried, and any
+  other 4xx is a non-retryable error. Previously an unknown heading (HTTP 400)
+  cost four requests to learn a permanent answer.
+
+- **Absence is no longer persisted at all.** Even with the classification above,
+  a wrongly-reported empty result would be permanent once cached, while
+  re-fetching an empty one costs a single cheap request. Every cached extraction
+  method in `pubchemview` and `PubChemAPI.get_compound_synonyms` now carries a
+  `skip_if` predicate, so only positive results are stored. The raw response
+  fetchers (`get_property`, `get_experimental_properties`) are unaffected: they
+  raise on absence and so never had an empty to store.
+
+- Removed an unreachable `return cache_info` left behind in
+  `PubChemAPI.get_cache_info`.
+
+### Changed
+- **`OPSIN.base_url` is `https://www.ebi.ac.uk/opsin/ws/`.** The Cambridge
+  address it used to name, `opsin.ch.cam.ac.uk`, answers every request with a
+  301 to it (verified live, 2026-09-19), so the old URL worked and cost a
+  redirect per name. `OPSIN.responses` is removed with it.
+
+- **PUG-REST and PUG-View read a bare 400 differently, so they have separate
+  classifiers.** `pubchem_classify` is now `pugrest_classify` and
+  `pugview_classify`. PUG-View takes the heading as a query parameter, so a 400
+  means "no such heading" — absence. PUG-REST takes its whole query in the URL
+  path, so a 400 means the path was wrong, and the caller needs PubChem's own
+  explanation of which property name it misspelled, which absence would discard.
+  The fault code still decides first for both, so the split only governs a 400
+  carrying no fault at all.
+
+- **`PubChemAPI.pause_time` and `last_request_time` are properties** over the
+  shared transport rather than plain attributes. `pause_time` is still settable
+  mid-batch and still takes effect on the next request, retries included;
+  `last_request_time` is read-only.
+
+- **ChEBI paces itself at 10 requests per second and retries twice** with a
+  half-second base back-off, where it previously did neither. Two retries rather
+  than the transport's three: an ontology walk makes many small requests to a
+  fast service, where a 1-2-4 second curve costs more than the request it is
+  protecting. EBI publishes no per-IP figure for the ChEBI 2.0 API, so the
+  pacing is politeness rather than a quoted limit.
+
+  A ChEBI timeout message changed with the move: it now names the URL and the
+  number of attempts.
+
+- **CAS Common Chemistry paces itself at 5 requests per second and retries**,
+  where it previously did neither. A 401 is never retried, because asking again
+  with the same key cannot help.
+
+- **An unresolvable identifier now costs the NCI resolver one request instead
+  of four.** CACTUS answers an identifier it cannot resolve with **HTTP 500**
+  carrying the body `<h1>Page not found (404)</h1>` — verified live on
+  2026-09-19 against `this_is_definitely_not_a_chemical_12345`, while
+  `α-glucose` answers 200. Its status code is not a reliable guide, so
+  `provesid.resolver.nci_classify` reads the body: a 5xx carrying that page is
+  absence and is raised at once, every other 5xx keeps its usual retryable
+  reading. Two live tests that took 10.1 s and 9.6 s now take 0.57 s each.
+
+  The exception type changes with it: an unresolvable identifier now raises
+  `NCIResolverNotFoundError`, which is what it always meant, rather than
+  `NCIResolverError("Internal server error")`. `NCIResolverNotFoundError` is a
+  subclass, so `except NCIResolverError` is unaffected.
+
+  Conversely, a *genuine* transient failure from CACTUS — a 429, a real 5xx, a
+  timeout — is now retried, where before it was raised on the first attempt.
+
+- **PubChem's fault-code classification has one home.** `fault_code` and
+  `TRANSIENT_FAULT_CODES` were duplicated verbatim in `pubchem` and
+  `pubchemview`, with `pubchemview` carrying the larger set. Both now live in
+  `provesid.pubchem`, joined by `ABSENCE_FAULT_CODES` and by
+  `pubchem_classify`, the classifier both services share.
+  `provesid.pubchemview.fault_code` is gone; import it from `provesid.pubchem`.
+
+- `NCIChemicalIdentifierResolver.pause_time` and
+  `PubChemView.min_request_interval` are now properties over the transport's
+  interval. Reading them is unchanged; setting one still takes effect on the
+  next request, retries included.
+
+- `NCIChemicalIdentifierResolver` logs to a module logger instead of the root
+  logger, and `download_image` gains the retry and pacing the rest of the
+  client already had.
+
+- **`get_property_table`'s `ExperimentalValue` column is now a float**, not a
+  string. An entry that reports a range leaves it NaN and fills `ValueMin` and
+  `ValueMax` instead, rather than putting `"138-140"` in a column callers were
+  expected to plot. `Unit` is normalised, and `Temperature` is a float in °C
+  instead of a string like `"25°C"`.
+
+- **`PubChemView._extract_experimental_value_and_unit` and `_parse_value_string`
+  are gone**, replaced by `parse_value`. Between them they were 415 lines of
+  property-specific regex cascade, and the two disagreed: the same string parsed
+  one way through `get_melting_point` and another through `get_property_table`.
+
+- Entries that state no value — PubChem's pointers to its own external tables,
+  such as `{"Value": {"ExternalTableName": "iupacpka"}}` — are left out of
+  property results instead of appearing as blank rows.
+
+- The four module-level convenience functions in `pubchemview`
+  (`get_experimental_property`, `get_all_experimental_properties`,
+  `get_property_values_only`, `get_property_table`) are no longer cached
+  themselves. Each delegates to a cached `PubChemView` method, so the second
+  cache only kept a duplicate copy of the same payload on disk — under a key
+  that did not carry `CACHE_SCHEMA_VERSION`, which is exactly how an upgrade
+  would have served a stale shape.
+
+- **`get_compound_properties_batch` now issues one request per 200 CIDs**
+  instead of one per CID, having been rebuilt on `get_properties_for_cids`. The
+  return shape is unchanged — one dict per CID with the properties plus
+  `success`, `cid` and `error` — except that a CID PubChem has no record of is
+  now reported with `success=False` and `"No such compound"` rather than
+  whatever the single-CID path happened to return. The `output_format`
+  parameter is gone: only JSON can be reshaped into per-CID dicts, so the
+  parameter promised something it never delivered. Synonyms are not included,
+  as they need a request per compound; the method never returned them.
+
+- **`Search` no longer targets the ZeroPM database.** ZeroPM harvests regulatory
+  inventories rather than curating compounds, so its name→structure rows are
+  noisier than ChEBI/CompTox/PubChem/ChEMBL — while counting as a full
+  independent vote in the corroboration ranking that 0.6.0 made drive
+  `confidence` and `min_source_support`. The resolver now queries four sources
+  by default, and ZeroPM's database is not even opened.
+
+  The `ZeroPM` class is untouched and stays fully available for direct use; only
+  `Search` stopped consulting it. Pass `use_zeropm=True` to restore the previous
+  five-source behaviour. A `zeropm=` client handed to the constructor is ignored
+  (with a warning) unless `use_zeropm=True` is set too, so "disabled" does not
+  depend on how the caller happened to build the instance.
+
+  Consequences: `source_details` no longer carries a `"ZeroPM"` entry,
+  `sources_available` lists four keys, and confidence values shift slightly
+  wherever ZeroPM used to vote. Fuzzy name queries lose recall — ZeroPM was the
+  only source doing true fuzzy *retrieval*, so a typo sharing no substring with
+  the real name (e.g. `"caffiene"`) now returns no match instead of a guess.
+  Precision is unaffected: a misspelling still never resolves to a *different*
+  compound, which `tests/test_search_precision_regression.py` now asserts
+  explicitly for the default source set.
+
+- `Search._SOURCE_KEYS` is now a per-instance attribute reflecting the sources
+  that instance targets; the full catalogue lives in `Search._ALL_SOURCE_KEYS`
+  and the default set in `Search._DEFAULT_SOURCE_KEYS`.
+
 ## [0.7.0] - 2026-08-17
 
 ### Fixed

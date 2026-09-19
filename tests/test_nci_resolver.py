@@ -9,10 +9,12 @@ import os
 # Add the src directory to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
+from provesid.http import NotFoundError, Outcome, ServiceError
 from provesid.resolver import (
     NCIChemicalIdentifierResolver, 
     NCIResolverError, 
     NCIResolverNotFoundError,
+    nci_classify,
     nci_cas_to_mol,
     nci_id_to_mol,
     nci_resolver,
@@ -408,6 +410,69 @@ class TestErrorHandling:
         # Note: We can't test None directly due to type hints, so test empty string
         with pytest.raises((NCIResolverError, NCIResolverNotFoundError)):
             resolver.resolve('', 'smiles')
+
+
+class TestNCIClassification:
+    """
+    What a CACTUS response means, which its status code does not say.
+
+    Verified live on 2026-09-19: ``this_is_definitely_not_a_chemical_12345``
+    answers HTTP 500 with the body ``<h1>Page not found (404)</h1>``, while
+    ``\u03b1-glucose`` answers 200. Reading the status alone therefore costs
+    four requests and several seconds of back-off to learn a permanent answer.
+    These tests are offline; they pin the classification, not the service.
+    """
+
+    class _Response:
+        def __init__(self, status_code, text=""):
+            self.status_code = status_code
+            self.text = text
+            self.headers = {}
+
+    def test_not_found_behind_a_500_is_absence(self):
+        """The body is believed over the status."""
+        response = self._Response(500, "<h1>Page not found (404)</h1>\n")
+        assert nci_classify(response) is Outcome.ABSENT
+
+    def test_a_real_server_error_is_still_retryable(self):
+        """A 500 that is not the not-found page keeps its usual reading."""
+        response = self._Response(503, "<h1>Service temporarily unavailable</h1>")
+        assert nci_classify(response) is Outcome.RETRY
+
+    def test_a_404_is_absence(self):
+        """The honest form of the same answer."""
+        assert nci_classify(self._Response(404, "")) is Outcome.ABSENT
+
+    def test_a_200_is_an_answer(self):
+        assert nci_classify(self._Response(200, "CCO")) is Outcome.OK
+
+    def test_unresolvable_identifier_costs_one_request(self, monkeypatch):
+        """
+        The point of the classifier: no back-off for a permanent answer.
+
+        Before it, an unresolvable identifier cost four requests and about
+        seven seconds of exponential back-off.
+        """
+        import requests
+
+        calls = []
+
+        def not_found(url, timeout=None):
+            calls.append(url)
+            return TestNCIClassification._Response(500, "<h1>Page not found (404)</h1>")
+
+        monkeypatch.setattr(requests, "get", not_found)
+        resolver = NCIChemicalIdentifierResolver(pause_time=0)
+
+        with pytest.raises(NCIResolverNotFoundError):
+            resolver.resolve("this_is_definitely_not_a_chemical_12345", "smiles")
+        assert len(calls) == 1
+
+    def test_the_exceptions_carry_the_shared_bases(self):
+        """A caller can catch this service, or every service at once."""
+        assert issubclass(NCIResolverError, ServiceError)
+        assert issubclass(NCIResolverNotFoundError, NCIResolverError)
+        assert issubclass(NCIResolverNotFoundError, NotFoundError)
 
 
 if __name__ == "__main__":

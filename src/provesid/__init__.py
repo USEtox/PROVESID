@@ -1,16 +1,38 @@
 # chemid __init__.py
 __version__ = "0.7.0"
 
-from .cascommonchem import CASCommonChem
-from .chebi import ChEBI, ChEBIError, ChebiSDF, get_chebi_entity, search_chebi
+from .http import (
+    HTTPClient,
+    ServiceError,
+    NotFoundError,
+    RateLimitError,
+    ServiceTimeoutError,
+)
+from .cascommonchem import (
+    CASCommonChem,
+    CASCommonChemError,
+    CASCommonChemNotFoundError,
+    CASCommonChemTimeoutError,
+)
+from .chebi import (
+    ChEBI,
+    ChEBIError,
+    ChEBINotFoundError,
+    ChEBITimeoutError,
+    ChebiSDF,
+    get_chebi_entity,
+    search_chebi,
+)
 from .chembl import CheMBL, ChEMBLError
 from .classyfire import ClassyFireAPI
-from .opsin import OPSIN, PYOPSIN
+from .opsin import OPSIN, OPSINError, OPSINNotFoundError, OPSINTimeoutError, PYOPSIN
 from .pubchem import (
     PubChemAPI,
     CompoundProperties,
     PubChemNotFoundError,
     PubChemError,
+    PubChemServerError,
+    PubChemTimeoutError,
     Domain,
     PubChemID,
 )
@@ -25,6 +47,7 @@ from .pubchemview import (
     get_property_values_only,
     get_property_table,
 )
+from .pubchemview_parse import ParsedValue, parse_value
 from .config import set_cas_api_key, get_cas_api_key, remove_cas_api_key, show_config
 from .cache import (
     clear_cache,

@@ -1,17 +1,38 @@
-import requests
 import logging
-import time
 from urllib.parse import quote
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, Iterator, List, Optional, Any, Tuple, Union
 from dataclasses import dataclass
 import pandas as pd
 import re
-from .cache import cached
+from .cache import cached, is_empty_result
+from .http import HTTPClient, ServiceError, NotFoundError
+from .pubchem import RETRY_WAIT_BUDGET, pugview_classify
+from .pubchemview_parse import ParsedValue, parse_value
 
 
 @dataclass
 class PropertyData:
-    """Data structure for holding extracted property information"""
+    """
+    One value PubChem holds for one property, with its provenance.
+
+    Attributes:
+        value: The value exactly as PUG-View reported it, e.g. ``"138-140 °C"``.
+            Always populated; nothing the parser cannot read is ever lost.
+        unit: The unit, normalised — a convenience copy of ``parsed.unit``.
+        conditions: The measurement conditions, a copy of ``parsed.conditions``.
+        reference: The first reference string attached to the value.
+        reference_number: PubChem's reference number, which
+            :meth:`PubChemView.get_property_table` resolves to a full citation.
+        description: PUG-View's own description of the value, when it gives one.
+        name: PUG-View's ``Name`` field for the value, when it gives one.
+        heading: The section heading the value was found under, e.g.
+            ``"Melting Point"``. This is what tells the parser that a bare
+            number is a temperature.
+        parsed: The value turned into numbers: see :class:`ParsedValue` for the
+            range, the SI conversion, the measurement temperature and any
+            comparison operator or qualitative term. None only when the value
+            string was empty.
+    """
     value: str
     unit: Optional[str] = None
     conditions: Optional[str] = None
@@ -19,14 +40,16 @@ class PropertyData:
     reference_number: Optional[int] = None
     description: Optional[str] = None
     name: Optional[str] = None
+    heading: Optional[str] = None
+    parsed: Optional[ParsedValue] = None
 
 
-class PubChemViewError(Exception):
+class PubChemViewError(ServiceError):
     """Base exception class for PubChem View API errors"""
     pass
 
 
-class PubChemViewNotFoundError(PubChemViewError):
+class PubChemViewNotFoundError(PubChemViewError, NotFoundError):
     """Exception raised when compound or property is not found"""
     pass
 
@@ -58,10 +81,25 @@ class PubChemView:
         self.backoff_factor = backoff_factor
         self.logger = logging.getLogger(__name__)
         self.use_cache = use_cache
-        
-        # Rate limiting
-        self.last_request_time = 0
-        self.min_request_interval = 0.2  # 5 requests per second max
+
+        # One shared transport. PubChem describes every error in the body, so
+        # it supplies its own classifier rather than trusting the status code:
+        # see :func:`provesid.pubchem.pugview_classify`.
+        self._http = HTTPClient(
+            min_interval=0.2,          # 5 requests per second max
+            timeout=timeout,
+            max_retries=max_retries,
+            backoff=backoff_factor,
+            max_elapsed=RETRY_WAIT_BUDGET,
+            classify=pugview_classify,
+            error_cls=PubChemViewError,
+            not_found_cls=PubChemViewNotFoundError,
+            # PubChem's five requests per second is a per-IP budget, so this
+            # client shares its pacing clock with every other client aimed at
+            # the same host --- a PubChemAPI in the same process, above all.
+            pace_host=self.base_url,
+            logger=self.logger,
+        )
         
         # Standard experimental property headings
         self.experimental_properties = {
@@ -111,6 +149,29 @@ class PubChemView:
             "Viscosity": "Viscosity"
         }
     
+    #: Bumped whenever the *shape* of what a cached method returns changes, so
+    #: that entries written by an earlier version become unreachable instead of
+    #: being deserialised into the wrong structure. Version 2 introduced
+    #: ``PropertyData.parsed``: a version-1 entry unpickles into an object with
+    #: no such attribute, and every caller that reads it would raise.
+    CACHE_SCHEMA_VERSION = 2
+
+    def __cache_key__(self) -> tuple:
+        """
+        Identify this client for cache-key purposes.
+
+        Only the endpoint distinguishes two clients' results; timeout, retry and
+        ``use_cache`` settings change how a call is made, not what it returns.
+        The schema version is part of the key so that an upgrade cannot serve a
+        stale entry of the previous shape.
+
+        Returns:
+            Tuple of the class path, the configured base URL and
+            :attr:`CACHE_SCHEMA_VERSION`.
+        """
+        return ("provesid.pubchemview.PubChemView", self.base_url,
+                self.CACHE_SCHEMA_VERSION)
+
     def clear_cache(self):
         """Clear all cached results for PubChem View"""
         from .cache import clear_pubchemview_cache
@@ -121,53 +182,85 @@ class PubChemView:
         from .cache import get_pubchemview_cache_info
         return get_pubchemview_cache_info()
     
+    @property
+    def min_request_interval(self) -> float:
+        """
+        Minimum seconds between two requests from this client.
+
+        Held by the transport, and settable: raising it slows a long batch
+        down, and the new value takes effect on the next request, retries
+        included.
+
+        Example:
+            >>> view = PubChemView()
+            >>> view.min_request_interval
+            0.2
+            >>> view.min_request_interval = 1.0   # gentler, for a long batch
+        """
+        return self._http.min_interval
+
+    @min_request_interval.setter
+    def min_request_interval(self, seconds: float) -> None:
+        self._http.min_interval = seconds
+
     def _rate_limit(self):
-        """Implement rate limiting to respect PubChem's usage policy"""
-        current_time = time.time()
-        time_since_last = current_time - self.last_request_time
-        if time_since_last < self.min_request_interval:
-            time.sleep(self.min_request_interval - time_since_last)
-        self.last_request_time = time.time()
-    
+        """
+        Sleep, if needed, so this client's requests stay
+        ``min_request_interval`` apart.
+
+        Delegates to the shared transport, which paces every request it makes
+        including retries.
+
+        Example:
+            >>> PubChemView()._rate_limit()   # doctest: +SKIP
+        """
+        self._http.rate_limit()
+
+    @property
+    def last_request_time(self) -> float:
+        """
+        When this client last made a request, as a Unix timestamp.
+
+        Kept on the transport; exposed here because it describes the client's
+        own pacing.
+
+        Returns:
+            Seconds since the epoch, or 0.0 before the first request.
+
+        Example:
+            >>> PubChemView().last_request_time
+            0.0
+        """
+        return self._http.last_request_time
+
     def _make_request(self, url: str) -> Dict[str, Any]:
         """
-        Make HTTP request with retries and error handling
-        
+        Make one request to PUG-View and return its parsed JSON body.
+
+        The transport handles the pacing, the retries and the back-off; what
+        stays here is the shape of a PUG-View request. Classification is
+        :func:`provesid.pubchem.pugview_classify`, which reads the fault code
+        in the body because PubChem's status codes alone do not distinguish a
+        compound that has no such data from a service shedding load.
+
         Args:
             url: Request URL
-            
+
         Returns:
             JSON response as dictionary
-            
+
         Raises:
-            PubChemViewError: For API errors
-            PubChemViewNotFoundError: When resource not found
+            PubChemViewNotFoundError: When the compound or heading does not
+                exist. PUG-View answers 404 for an unknown compound and 400
+                (``PUGVIEW.BadRequest``) for an unknown heading; both are
+                permanent, so both are reported as absence rather than retried.
+            PubChemViewError: For any other API error, including a transient
+                ``ServerBusy`` that survived every retry. Only transient fault
+                codes, 429, 5xx, timeouts and connection errors are retried ---
+                a permanent 4xx cannot be fixed by asking again.
         """
-        self._rate_limit()
-        
-        for attempt in range(self.max_retries + 1):
-            try:
-                self.logger.debug(f"Making request to: {url}")
-                response = requests.get(url, timeout=self.timeout)
-                
-                if response.status_code == 200:
-                    return response.json()
-                elif response.status_code == 404:
-                    raise PubChemViewNotFoundError(f"Resource not found: {url}")
-                else:
-                    response.raise_for_status()
-                    
-            except requests.exceptions.RequestException as e:
-                if attempt == self.max_retries:
-                    raise PubChemViewError(f"Request failed after {self.max_retries + 1} attempts: {e}")
-                
-                wait_time = self.backoff_factor * (2 ** attempt)
-                self.logger.warning(f"Request failed, retrying in {wait_time:.1f}s: {e}")
-                time.sleep(wait_time)
-        
-        # This should never be reached due to exceptions above
-        raise PubChemViewError("Unexpected error in request handling")
-        
+        return self._http.get_json(url)
+
     @cached(service='pubchemview')
     def get_experimental_properties(self, cid: Union[int, str]) -> Dict[str, Any]:
         """
@@ -204,138 +297,171 @@ class PubChemView:
         return self._make_request(url)
     
 
-    def _extract_value_info(self, info_item: Dict[str, Any]) -> PropertyData:
+    def _extract_value_info(self, info_item: Dict[str, Any],
+                            heading: Optional[str] = None) -> PropertyData:
         """
-        Extract structured information from an Information item
-        
+        Turn one PUG-View ``Information`` item into a :class:`PropertyData`.
+
         Args:
-            info_item: Single Information dictionary from PUG View response
-            
+            info_item: A single ``Information`` dictionary from a PUG-View
+                response.
+            heading: The section heading the item was found under. Passed
+                through to :func:`~provesid.pubchemview_parse.parse_value`,
+                which needs it to read a bare number: 138 under "Melting Point"
+                is 138 °C, while 1.19 under "LogP" is dimensionless.
+
         Returns:
-            PropertyData object with extracted information
+            A PropertyData carrying the original string, the parsed numbers and
+            the reference it came from.
         """
-        # Extract value
         value_str = ""
         if "Value" in info_item and "StringWithMarkup" in info_item["Value"]:
-            value_str = info_item["Value"]["StringWithMarkup"][0]["String"]
-        
-        # Extract reference
+            markup = info_item["Value"]["StringWithMarkup"]
+            if markup:
+                value_str = markup[0].get("String", "")
+
+        # Some headings report a plain number instead of prose, with the unit
+        # in its own field; the computed-property sections do this throughout.
+        value_block = info_item.get("Value", {})
+        if not value_str and value_block.get("Number"):
+            number = value_block["Number"][0]
+            unit = value_block.get("Unit", "")
+            value_str = f"{number} {unit}".strip()
+
         reference = None
         reference_number = info_item.get("ReferenceNumber")
         if "Reference" in info_item and info_item["Reference"]:
             reference = info_item["Reference"][0]
-        
-        # Extract name/description if available
+
         name = info_item.get("Name", "")
         description = info_item.get("Description", "")
-        
-        # Attempt to parse units and conditions from value string
-        unit, conditions = self._parse_value_string(value_str)
-        
+
+        parsed = parse_value(value_str, heading)
+
         return PropertyData(
             value=value_str,
-            unit=unit,
-            conditions=conditions,
+            unit=parsed.unit,
+            conditions=parsed.conditions,
             reference=reference,
             reference_number=reference_number,
             description=description if description else None,
-            name=name if name else None
+            name=name if name else None,
+            heading=heading,
+            parsed=parsed,
         )
-    
-    def _parse_value_string(self, value_str: str) -> tuple[Optional[str], Optional[str]]:
+
+    def _iter_information(self, response: Dict[str, Any]
+                          ) -> Iterator[Tuple[Optional[str], Dict[str, Any]]]:
         """
-        Attempt to parse units and conditions from a value string
-        
+        Walk a PUG-View record and yield every value with its heading.
+
+        PUG-View nests a requested heading wherever it sits in the compound's
+        table of contents, and that position differs by heading: "Melting Point"
+        arrives under *Chemical and Physical Properties → Experimental
+        Properties*, "GHS Classification" under *Safety and Hazards → Hazards
+        Identification*, "Drug Indication" under *Drug and Medication
+        Information*. Walking the tree instead of following one hard-coded path
+        is what lets every heading work, rather than only the experimental ones.
+
         Args:
-            value_str: Value string from PUG View
-            
-        Returns:
-            Tuple of (unit, conditions)
+            response: Raw JSON response from PUG-View.
+
+        Yields:
+            ``(heading, information_item)`` pairs, the heading being the
+            innermost ``TOCHeading`` that owns the item.
         """
-        import re
-        
-        # Common temperature patterns
-        temp_pattern = r'at\s+(-?\d+(?:\.\d+)?)\s*°?C'
-        temp_match = re.search(temp_pattern, value_str)
-        conditions = None
-        if temp_match:
-            conditions = f"at {temp_match.group(1)}°C"
-        
-        # Common unit patterns
-        unit_patterns = [
-            r'(\d+(?:\.\d+)?)\s*(cP|mPa·s|Pa·s)', # viscosity
-            r'(\d+(?:\.\d+)?)\s*(°C|K)', # temperature  
-            r'(\d+(?:\.\d+)?)\s*(g/cm³|g/mL|kg/m³)', # density
-            r'(\d+(?:\.\d+)?)\s*(mmHg|kPa|Pa|atm|bar)', # pressure
-            r'(\d+(?:\.\d+)?)\s*(mN/m|N/m|dyn/cm)', # surface tension
-            r'(\d+(?:\.\d+)?)\s*(g/L|mg/L|%|ppm)', # solubility/concentration
-        ]
-        
-        unit = None
-        for pattern in unit_patterns:
-            match = re.search(pattern, value_str)
-            if match:
-                unit = match.group(2)
-                break
-        
-        return unit, conditions
-    
-    @cached(service='pubchemview')
+        def walk(node: Dict[str, Any], inherited: Optional[str]):
+            """Yield this node's values, then recurse into its subsections."""
+            # A subsection without its own heading belongs to its parent's.
+            heading = node.get("TOCHeading", inherited)
+            for item in node.get("Information", []) or []:
+                yield heading, item
+            for child in node.get("Section", []) or []:
+                yield from walk(child, heading)
+
+        if not isinstance(response, dict):
+            return
+        record = response.get("Record", {})
+        for section in record.get("Section", []) or []:
+            yield from walk(section, None)
+
+    @staticmethod
+    def _carries_a_value(info_item: Dict[str, Any]) -> bool:
+        """
+        Whether an ``Information`` item states a value at all.
+
+        Some items are pointers rather than measurements — PubChem records a
+        compound's IUPAC pKa data as ``{"Value": {"ExternalTableName":
+        "iupacpka"}}``, which carries a reference and nothing else. Including
+        one would put a blank row in a property table.
+
+        Args:
+            info_item: A single ``Information`` dictionary.
+
+        Returns:
+            True when the item has a string or a number to parse.
+        """
+        value = info_item.get("Value", {})
+        markup = value.get("StringWithMarkup") or []
+        return bool((markup and markup[0].get("String")) or value.get("Number"))
+
+    @cached(service='pubchemview', skip_if=is_empty_result)
     def extract_property_data(self, cid: Union[int, str], property_name: str) -> List[PropertyData]:
         """
-        Extract structured property data for a specific property
-        
+        Extract structured property data for a specific property.
+
         Args:
             cid: PubChem Compound ID
-            property_name: Name of the property to extract
-            
+            property_name: The PUG-View heading, e.g. ``"Melting Point"``. Any
+                heading works, not only the experimental ones.
+
         Returns:
-            List of PropertyData objects with extracted information
+            List of PropertyData objects, each carrying the value as PubChem
+            wrote it plus a ``parsed`` :class:`ParsedValue` holding the numbers
+            recovered from it. An empty list means PubChem holds no such
+            property for this compound.
+
+        Raises:
+            PubChemViewError: If the request could not be completed, for example
+                a PUG-View ``ServerBusy`` response that survived every retry.
+                This is deliberately *not* reported as an empty list: a
+                transient failure must stay distinguishable from real absence,
+                or it gets cached as "no data" and never retried.
+
+        Example:
+            >>> view = PubChemView()
+            >>> data = view.extract_property_data(2244, "Dissociation Constants")
+            >>> data[0].value
+            '3.47'
+            >>> data[0].parsed.value
+            3.47
         """
         try:
             response = self.get_property(cid, property_name)
-            return self._parse_property_response(response)
-        except (PubChemViewNotFoundError, PubChemViewError):
-            self.logger.warning(f"Property '{property_name}' not found for CID {cid}")
+        except PubChemViewNotFoundError:
+            self.logger.debug(f"Property '{property_name}' not present for CID {cid}")
             return []
+        return self._parse_property_response(response)
     
     def _parse_property_response(self, response: Dict[str, Any]) -> List[PropertyData]:
         """
-        Parse a property response and extract structured data
-        
+        Parse a single-heading response into structured values.
+
         Args:
-            response: Raw JSON response from PUG View
-            
+            response: Raw JSON response from PUG-View, as returned by
+                :meth:`get_property`.
+
         Returns:
-            List of PropertyData objects
+            One PropertyData per value in the response, in document order.
+            Items that carry no value — PubChem's pointers to its own external
+            tables — are left out rather than returned blank. An empty list
+            means the response carried no values, not that parsing failed.
         """
-        property_data = []
-        
-        try:
-            # Navigate to the Information section
-            record = response.get("Record", {})
-            sections = record.get("Section", [])
-            
-            # Find the experimental properties section
-            for section in sections:
-                if section.get("TOCHeading") == "Chemical and Physical Properties":
-                    exp_sections = section.get("Section", [])
-                    for exp_section in exp_sections:
-                        if exp_section.get("TOCHeading") == "Experimental Properties":
-                            prop_sections = exp_section.get("Section", [])
-                            
-                            # Find the specific property section
-                            for prop_section in prop_sections:
-                                information_items = prop_section.get("Information", [])
-                                for info_item in information_items:
-                                    property_data.append(self._extract_value_info(info_item))
-                                        
-        except Exception as e:
-            self.logger.error(f"Error parsing property response: {e}")
-            
-        return property_data
-    
-    @cached(service='pubchemview')
+        return [self._extract_value_info(item, heading)
+                for heading, item in self._iter_information(response)
+                if self._carries_a_value(item)]
+
+    @cached(service='pubchemview', skip_if=is_empty_result)
     def extract_all_experimental_properties(self, cid: Union[int, str]) -> Dict[str, List[PropertyData]]:
         """
         Extract all experimental properties for a compound in structured format
@@ -353,48 +479,28 @@ class PubChemView:
             self.logger.warning(f"No experimental properties found for CID {cid}")
             return {}
     
-    def _parse_all_properties_response(self, response: Dict[str, Any]) -> Dict[str, List[PropertyData]]:
+    def _parse_all_properties_response(self, response: Dict[str, Any]
+                                       ) -> Dict[str, List[PropertyData]]:
         """
-        Parse a full experimental properties response
-        
+        Parse a multi-property response, grouped by heading.
+
         Args:
-            response: Raw JSON response from PUG View
-            
+            response: Raw JSON response from PUG-View, as returned by
+                :meth:`get_experimental_properties`.
+
         Returns:
-            Dictionary mapping property names to PropertyData lists
+            A dict mapping each heading that carried values to its
+            PropertyData list, in the order PubChem listed them.
         """
-        all_properties = {}
-        
-        try:
-            # Navigate to the experimental properties section
-            record = response.get("Record", {})
-            sections = record.get("Section", [])
-            
-            for section in sections:
-                if section.get("TOCHeading") == "Chemical and Physical Properties":
-                    exp_sections = section.get("Section", [])
-                    for exp_section in exp_sections:
-                        if exp_section.get("TOCHeading") == "Experimental Properties":
-                            prop_sections = exp_section.get("Section", [])
-                            
-                            # Extract each property
-                            for prop_section in prop_sections:
-                                prop_name = prop_section.get("TOCHeading", "Unknown")
-                                property_data = []
-                                
-                                information_items = prop_section.get("Information", [])
-                                for info_item in information_items:
-                                    property_data.append(self._extract_value_info(info_item))
-                                
-                                if property_data:
-                                    all_properties[prop_name] = property_data
-                                        
-        except Exception as e:
-            self.logger.error(f"Error parsing all properties response: {e}")
-            
-        return all_properties
-    
-    @cached(service='pubchemview')
+        grouped: Dict[str, List[PropertyData]] = {}
+        for heading, item in self._iter_information(response):
+            if not self._carries_a_value(item):
+                continue
+            grouped.setdefault(heading or "Unknown", []).append(
+                self._extract_value_info(item, heading))
+        return grouped
+
+    @cached(service='pubchemview', skip_if=is_empty_result)
     def get_available_properties(self, cid: Union[int, str]) -> List[str]:
         """
         Get list of available experimental properties for a compound
@@ -411,7 +517,7 @@ class PubChemView:
         except PubChemViewNotFoundError:
             return []
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=lambda result: not result.get('values'))
     def get_property_summary(self, cid: Union[int, str], property_name: str) -> Dict[str, Any]:
         """
         Get a summary of a property including all values, units, and references
@@ -421,18 +527,34 @@ class PubChemView:
             property_name: Name of the property
             
         Returns:
-            Dictionary with property summary
+            Dictionary with the raw strings under ``values``, the numbers
+            recovered from them under ``numeric_values`` and
+            ``numeric_values_si``, plus the references, units and conditions
+            seen across the entries and a ``count``.
         """
         property_data = self.extract_property_data(cid, property_name)
         
         if not property_data:
-            return {"property": property_name, "values": [], "references": [], "units": set()}
+            return {"property": property_name, "values": [], "numeric_values": [],
+                    "numeric_values_si": [], "references": [], "units": [],
+                    "units_si": [], "conditions": [], "count": 0}
         
+        parsed_values = [data.parsed or parse_value(data.value, data.heading)
+                         for data in property_data]
+
         summary = {
             "property": property_name,
             "values": [data.value for data in property_data],
+            # The numbers behind those strings, for the common case of wanting
+            # a range or a mean rather than the prose.
+            "numeric_values": [parsed.value for parsed in parsed_values
+                               if parsed.value is not None],
+            "numeric_values_si": [parsed.value_si for parsed in parsed_values
+                                  if parsed.value_si is not None],
             "references": [data.reference for data in property_data if data.reference],
             "units": list(set([data.unit for data in property_data if data.unit])),
+            "units_si": list({parsed.unit_si for parsed in parsed_values
+                              if parsed.unit_si}),
             "conditions": list(set([data.conditions for data in property_data if data.conditions])),
             "count": len(property_data)
         }
@@ -440,47 +562,47 @@ class PubChemView:
         return summary
     
     # Convenience methods for common properties
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=is_empty_result)
     def get_melting_point(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get melting point data for a compound"""
         return self.extract_property_data(cid, "Melting Point")
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=is_empty_result)
     def get_boiling_point(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get boiling point data for a compound"""
         return self.extract_property_data(cid, "Boiling Point")
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=is_empty_result)
     def get_density(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get density data for a compound"""
         return self.extract_property_data(cid, "Density")
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=is_empty_result)
     def get_solubility(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get solubility data for a compound"""
         return self.extract_property_data(cid, "Solubility")
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=is_empty_result)
     def get_flash_point(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get flash point data for a compound"""
         return self.extract_property_data(cid, "Flash Point")
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=is_empty_result)
     def get_vapor_pressure(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get vapor pressure data for a compound"""
         return self.extract_property_data(cid, "Vapor Pressure")
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=is_empty_result)
     def get_viscosity(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get viscosity data for a compound"""
         return self.extract_property_data(cid, "Viscosity")
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=is_empty_result)
     def get_logp(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get LogP data for a compound"""
         return self.extract_property_data(cid, "LogP")
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=is_empty_result)
     def get_refractive_index(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get refractive index data for a compound"""
         return self.extract_property_data(cid, "Refractive Index")
@@ -493,9 +615,16 @@ class PubChemView:
         Args:
             cid: PubChem Compound ID
             property_names: List of property names to extract
-            
+
         Returns:
-            Dictionary mapping property names to PropertyData lists
+            Dictionary mapping property names to PropertyData lists.
+
+        Note:
+            One property failing does not abort the batch: that entry is logged
+            at WARNING and comes back as an empty list, so here — unlike in
+            :meth:`extract_property_data` — an empty list does not prove the
+            property is absent. Call ``extract_property_data`` directly when the
+            difference matters.
         """
         results = {}
         for prop_name in property_names:
@@ -509,80 +638,142 @@ class PubChemView:
     
     def export_properties_to_dict(self, property_data_list: List[PropertyData]) -> List[Dict[str, Any]]:
         """
-        Convert PropertyData objects to dictionaries for easy serialization
-        
+        Convert PropertyData objects to plain dictionaries for serialization.
+
         Args:
-            property_data_list: List of PropertyData objects
-            
+            property_data_list: List of PropertyData objects, as returned by
+                :meth:`extract_property_data` or any of the convenience getters.
+
         Returns:
-            List of dictionaries
+            One dict per value, carrying the original string, the reference, and
+            the parsed numbers flattened into top-level keys
+            (``numeric_value``, ``value_min``, ``value_si``, ``unit_si``,
+            ``operator``, ``qualitative``, ``temperature_c``) so the result can
+            go straight into ``json.dumps`` or ``pd.DataFrame``.
         """
-        return [
-            {
+        rows = []
+        for data in property_data_list:
+            parsed = data.parsed or parse_value(data.value, data.heading)
+            rows.append({
                 "value": data.value,
                 "unit": data.unit,
                 "conditions": data.conditions,
                 "reference": data.reference,
                 "reference_number": data.reference_number,
                 "description": data.description,
-                "name": data.name
-            }
-            for data in property_data_list
-        ]
+                "name": data.name,
+                "heading": data.heading,
+                # The parsed numbers are flattened rather than nested, so the
+                # result stays directly serialisable to JSON or a DataFrame.
+                "numeric_value": parsed.value,
+                "value_min": parsed.value_min,
+                "value_max": parsed.value_max,
+                "value_si": parsed.value_si,
+                "value_min_si": parsed.value_min_si,
+                "value_max_si": parsed.value_max_si,
+                "unit_si": parsed.unit_si,
+                "operator": parsed.operator,
+                "qualitative": parsed.qualitative,
+                "temperature_c": parsed.temperature_c,
+            })
+        return rows
 
 
-    @cached(service='pubchemview')
+    #: Columns of the frame :meth:`get_property_table` returns, in order.
+    PROPERTY_TABLE_COLUMNS = [
+        "CID", "Heading", "StringWithMarkup", "ExperimentalValue",
+        "ValueMin", "ValueMax", "Unit", "ValueSI", "ValueMinSI", "ValueMaxSI",
+        "UnitSI", "Operator", "Qualitative", "Temperature", "Conditions",
+        "FullReference",
+    ]
+
+    @cached(service='pubchemview', skip_if=is_empty_result)
     def get_property_table(self, cid: Union[int, str], property_name: str) -> pd.DataFrame:
         """
-        Get a comprehensive table of property data with full reference information
-        
+        Get a table of property values, parsed into numbers, with references.
+
         Args:
-            cid: PubChem Compound ID
-            property_name: Name of the experimental property
-            
+            cid: PubChem Compound ID.
+            property_name: The PUG-View heading, e.g. ``"Melting Point"``. Any
+                heading works, not only the experimental ones.
+
         Returns:
-            pandas DataFrame with columns: CID, StringWithMarkup, ExperimentalValue, Unit, Temperature, Conditions, FullReference
+            A DataFrame with the columns in :attr:`PROPERTY_TABLE_COLUMNS`:
+
+            - ``StringWithMarkup`` — the value exactly as PubChem wrote it.
+            - ``ExperimentalValue`` — the single number, as a float; NaN when
+                the entry reports a range or no number at all.
+            - ``ValueMin`` / ``ValueMax`` — the bounds, equal to
+                ``ExperimentalValue`` for a single value, so a numeric filter
+                needs no special case for ranges.
+            - ``Unit`` — normalised, so ``torr`` and ``mm Hg`` agree.
+            - ``ValueSI`` / ``ValueMinSI`` / ``ValueMaxSI`` / ``UnitSI`` — the
+                same quantity in SI units, or NaN where the unit has no
+                unambiguous SI equivalent (a percentage, a ppm).
+            - ``Operator`` — ``>``, ``<``, ``>=``, ``<=`` or ``~`` when the
+                entry bounds the value rather than stating it.
+            - ``Qualitative`` — the word that replaced the number, such as
+                ``insoluble``.
+            - ``Temperature`` — the temperature the measurement was made at, in
+                °C. A *condition*, not the value.
+            - ``FullReference`` — the resolved citation.
+
+            The frame is empty, with these columns, when PubChem holds no such
+            property for this compound.
+
+        Raises:
+            PubChemViewError: If the request could not be completed. An empty
+                frame always means "no such data", never "the fetch failed".
+
+        Example:
+            >>> view = PubChemView()
+            >>> table = view.get_property_table(2244, "Melting Point")
+            >>> table[["ExperimentalValue", "Unit", "ValueSI", "UnitSI"]].head(1)
+               ExperimentalValue Unit  ValueSI UnitSI
+            0              135.0   °C   408.15      K
         """
         try:
-            # Get the raw response to extract full reference information
             response = self.get_property(cid, property_name)
-            
-            # Extract reference mapping from the response
             reference_map = self._extract_reference_map(response)
-            
-            # Get structured property data
             property_data = self._parse_property_response(response)
-            
-            # Build table data
-            table_data = []
-            for data in property_data:
-                # Get full reference string
-                full_reference = ""
-                if data.reference_number and data.reference_number in reference_map:
-                    full_reference = reference_map[data.reference_number]
-                elif data.reference:
-                    full_reference = data.reference
-                
-                # Parse experimental value, unit, temperature, and conditions from the StringWithMarkup
-                exp_value, unit, temperature, conditions = self._extract_experimental_value_and_unit(data.value, property_name)
-                
-                table_data.append({
-                    "CID": cid,
-                    "StringWithMarkup": data.value,
-                    "ExperimentalValue": exp_value,
-                    "Unit": unit,  # Use only the parsed unit from improved extraction
-                    "Temperature": temperature,
-                    "Conditions": conditions,
-                    "FullReference": full_reference
-                })
-            
-            return pd.DataFrame(table_data)
-            
-        except Exception as e:
-            self.logger.error(f"Error creating property table for CID {cid}, property {property_name}: {e}")
-            # Return empty DataFrame with expected columns
-            return pd.DataFrame(columns=["CID", "StringWithMarkup", "ExperimentalValue", "Unit", "Temperature", "Conditions", "FullReference"])
-    
+        except PubChemViewNotFoundError:
+            self.logger.debug(f"Property '{property_name}' not present for CID {cid}")
+            return pd.DataFrame(columns=self.PROPERTY_TABLE_COLUMNS)
+        except PubChemViewError:
+            # Transport failure: let it surface rather than pass an empty table
+            # off as "this compound has no data".
+            raise
+
+        rows = []
+        for data in property_data:
+            full_reference = ""
+            if data.reference_number and data.reference_number in reference_map:
+                full_reference = reference_map[data.reference_number]
+            elif data.reference:
+                full_reference = data.reference
+
+            parsed = data.parsed or parse_value(data.value, data.heading)
+            rows.append({
+                "CID": cid,
+                "Heading": data.heading,
+                "StringWithMarkup": data.value,
+                "ExperimentalValue": parsed.value,
+                "ValueMin": parsed.value_min,
+                "ValueMax": parsed.value_max,
+                "Unit": parsed.unit,
+                "ValueSI": parsed.value_si,
+                "ValueMinSI": parsed.value_min_si,
+                "ValueMaxSI": parsed.value_max_si,
+                "UnitSI": parsed.unit_si,
+                "Operator": parsed.operator,
+                "Qualitative": parsed.qualitative,
+                "Temperature": parsed.temperature_c,
+                "Conditions": parsed.conditions,
+                "FullReference": full_reference,
+            })
+
+        return pd.DataFrame(rows, columns=self.PROPERTY_TABLE_COLUMNS)
+
     def _extract_reference_map(self, response: Dict[str, Any]) -> Dict[int, str]:
         """
         Extract mapping of reference numbers to full reference strings
@@ -634,397 +825,13 @@ class PubChemView:
             
         return reference_map
     
-    def _extract_experimental_value_and_unit(self, value_str: str, property_name: str = None) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
-        """
-        Extract numerical experimental value, unit, temperature, and conditions from StringWithMarkup
-        
-        Args:
-            value_str: Full StringWithMarkup value
-            property_name: Name of the property being extracted (for property-specific patterns)
-            
-        Returns:
-            Tuple of (experimental_value, unit, temperature, conditions)
-        """
-        if not value_str:
-            return None, None, None, None
-        
-        # Helper function to extract temperature and conditions
-        def extract_temperature_and_conditions(text: str) -> tuple[Optional[str], Optional[str]]:
-            """Extract temperature and conditions from text"""
-            # Pattern for "at 25°C", "@ 25°C", "at 20 °C", etc.
-            temp_match = re.search(r'(?:at|@)\s+(-?\d+(?:\.\d+)?)\s*[°]?\s*([CF]|K)\b', text, re.IGNORECASE)
-            if temp_match:
-                temp_value = temp_match.group(1)
-                temp_unit = temp_match.group(2)
-                temperature = f"{temp_value}°{temp_unit}"
-                
-                # Extract any additional conditions
-                conditions_parts = []
-                # Look for pressure conditions
-                pressure_cond = re.search(r'(\d+(?:\.\d+)?)\s*(mmHg|kPa|Pa|atm|bar)', text, re.IGNORECASE)
-                if pressure_cond:
-                    conditions_parts.append(f"{pressure_cond.group(1)} {pressure_cond.group(2)}")
-                
-                # Look for other descriptive conditions
-                descriptors = re.findall(r'/([^/]+)/', text)
-                conditions_parts.extend(descriptors)
-                
-                conditions = "; ".join(conditions_parts) if conditions_parts else None
-                return temperature, conditions
-            
-            return None, None
-        
-        # Property-specific patterns (highest priority)
-        if property_name:
-            prop_name_lower = property_name.lower()
-            
-            # Vapor Pressure specific patterns
-            if 'vapor pressure' in prop_name_lower:
-                # Pattern: "Vapor pressure at 20°C: negligible" - return None for both value and unit
-                negligible_match = re.search(r'negligible', value_str, re.IGNORECASE)
-                if negligible_match:
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return None, None, temperature, conditions
-                
-                # Pattern: "8.5X10-5 mm Hg at 25 °C" (X represents multiplication)
-                scientific_x_match = re.search(r'^(\d+(?:\.\d+)?)X10([+-]?\d+)\s*(mmHg|mm\s+Hg|kPa|Pa|atm|bar|torr)', value_str, re.IGNORECASE)
-                if scientific_x_match:
-                    # Convert XNotation to E notation
-                    mantissa = scientific_x_match.group(1)
-                    exponent = scientific_x_match.group(2)
-                    unit = scientific_x_match.group(3)
-                    scientific_value = f"{mantissa}e{exponent}"
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return scientific_value, unit, temperature, conditions
-                
-                # Pattern: "2.7X10+0 at 25 °C /Estimated/" (X notation without unit)
-                scientific_x_no_unit_match = re.search(r'^(\d+(?:\.\d+)?)X10([+-]?\d+)\s', value_str, re.IGNORECASE)
-                if scientific_x_no_unit_match:
-                    # Convert XNotation to E notation
-                    mantissa = scientific_x_no_unit_match.group(1)
-                    exponent = scientific_x_no_unit_match.group(2)
-                    scientific_value = f"{mantissa}e{exponent}"
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return scientific_value, None, temperature, conditions
-                
-                # Pattern: "0.05 [mmHg]" (brackets around unit)
-                bracketed_unit_match = re.search(r'^(-?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)\s*\[(mmHg|mm\s+Hg|kPa|Pa|atm|bar|torr)\]', value_str, re.IGNORECASE)
-                if bracketed_unit_match:
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return bracketed_unit_match.group(1), bracketed_unit_match.group(2), temperature, conditions
-                
-                # Pattern: "Vapor pressure, kPa at 20°C: 24"
-                vp_colon_match = re.search(r'vapor\s+pressure[^:]*:\s*(-?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)', value_str, re.IGNORECASE)
-                if vp_colon_match:
-                    # Extract unit from before the colon
-                    unit_match = re.search(r'vapor\s+pressure[,\s]*([a-zA-Z]+)', value_str, re.IGNORECASE)
-                    unit = unit_match.group(1) if unit_match else None
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return vp_colon_match.group(1), unit, temperature, conditions
-                
-                # Pattern: "kPa at 20°C: 24" or similar
-                unit_colon_match = re.search(r'(mmHg|mm\s+Hg|kPa|Pa|atm|bar|torr)[^:]*:\s*(-?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)', value_str, re.IGNORECASE)
-                if unit_colon_match:
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return unit_colon_match.group(2), unit_colon_match.group(1), temperature, conditions
-                
-                # Standard pressure patterns at start
-                pressure_match = re.search(r'^(-?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)\s*(mmHg|mm\s+Hg|kPa|Pa|atm|bar|torr)\b', value_str, re.IGNORECASE)
-                if pressure_match:
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return pressure_match.group(1), pressure_match.group(2), temperature, conditions
-                
-                # If no vapor pressure pattern matched, return None (no fallback for property-specific extraction)
-                return None, None, None, None
-            
-            # LogP specific patterns
-            elif 'logp' in prop_name_lower:
-                # Pattern: "LogP: -2.3" or "log P = 1.5" or "log Kow = 1.19"
-                logp_colon_match = re.search(r'log\s*(?:p|kow|k[ow]{1,2})\s*[=:]\s*(-?\d+(?:\.\d+)?)', value_str, re.IGNORECASE)
-                if logp_colon_match:
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return logp_colon_match.group(1), None, temperature, conditions
-                
-                # Simple number at start for LogP (usually unitless)
-                logp_start_match = re.search(r'^(-?\d+(?:\.\d+)?)\s*$', value_str.strip())
-                if logp_start_match:
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return logp_start_match.group(1), None, temperature, conditions
-                
-                # If no LogP pattern matched, return None (no fallback for property-specific extraction)
-                return None, None, None, None
-            
-            # Dissociation Constants specific patterns
-            elif 'dissociation' in prop_name_lower:
-                # Pattern: "pKa = 14.31 @ 25 °C" or "pKa: 3.6" or "pKb = 10.2"
-                pka_colon_match = re.search(r'p[Kk][abAB]\s*[=:@]\s*(-?\d+(?:\.\d+)?)', value_str, re.IGNORECASE)
-                if pka_colon_match:
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return pka_colon_match.group(1), None, temperature, conditions
-                
-                # Pattern: "Ka: 2.5e-4" or "Kb = 1.0e-10" or "K1=3.3X10-5"
-                ka_colon_match = re.search(r'[Kk][abAB\d]*[=:]\s*([^\s;]+)', value_str, re.IGNORECASE)
-                if ka_colon_match:
-                    # Convert X notation to e notation if present (X10 -> e)
-                    value = re.sub(r'([Xx])10', r'e', ka_colon_match.group(1))
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return value, None, temperature, conditions
-                
-                # Pattern: "2.91 (at 25 °C)" - just a number with temperature in parentheses
-                number_with_temp_match = re.search(r'^([^\s;]+)\s*\(.*?°.*?\)', value_str.strip())
-                if number_with_temp_match:
-                    # Convert X notation to e notation if present (X10 -> e)
-                    value = re.sub(r'([Xx])10', r'e', number_with_temp_match.group(1))
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return value, None, temperature, conditions
-                
-                # Simple number at start for dissociation constants (usually unitless pKa/pKb values)
-                dc_start_match = re.search(r'^([^\s;]+)\s*$', value_str.strip())
-                if dc_start_match:
-                    # Convert X notation to e notation if present (X10 -> e)
-                    value = re.sub(r'([Xx])10', r'e', dc_start_match.group(1))
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return value, None, temperature, conditions
-                
-                # If no dissociation constants pattern matched, return None (no fallback for property-specific extraction)
-                return None, None, None, None
-            
-            # Melting Point / Boiling Point specific patterns
-            elif any(temp_prop in prop_name_lower for temp_prop in ['melting point', 'boiling point', 'temperature']):
-                # Range patterns with temperature units
-                temp_range_match = re.search(r'^(-?\d+(?:\.\d+)?-\d+(?:\.\d+)?)\s*[°]?\s*([CF]|K)\b', value_str)
-                if temp_range_match:
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return temp_range_match.group(1), f"°{temp_range_match.group(2)}", temperature, conditions
-                
-                # Single temperature values
-                temp_match = re.search(r'^(-?\d+(?:\.\d+)?)\s*[°]?\s*([CF]|K)\b', value_str)
-                if temp_match:
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return temp_match.group(1), f"°{temp_match.group(2)}", temperature, conditions
-                
-                # If no temperature pattern matched, return None (no fallback for property-specific extraction)
-                return None, None, None, None
-            
-            # Density specific patterns
-            elif 'density' in prop_name_lower:
-                density_match = re.search(r'^(-?\d+(?:\.\d+)?)\s*(g/cm³|g/mL|kg/m³|g/L)\b', value_str)
-                if density_match:
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return density_match.group(1), density_match.group(2), temperature, conditions
-                
-                # If no density pattern matched, return None (no fallback for property-specific extraction)
-                return None, None, None, None
-            
-            # Viscosity specific patterns
-            elif 'viscosity' in prop_name_lower:
-                viscosity_match = re.search(r'^(-?\d+(?:\.\d+)?)\s*(cP|mPa·s|Pa·s|cSt)\b', value_str)
-                if viscosity_match:
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return viscosity_match.group(1), viscosity_match.group(2), temperature, conditions
-                
-                # If no viscosity pattern matched, return None (no fallback for property-specific extraction)
-                return None, None, None, None
-            
-            # Solubility specific patterns
-            elif 'solubility' in prop_name_lower:
-                # Pattern: "greater than or equal to 100 mg/mL" - comparison operators
-                # Split into two separate searches for clarity
-                sol_comparison_match = re.search(r'(?:greater than or equal to|greater than|less than or equal to|less than|≥|≤|>|<|>=|<=)\s*(-?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)\s*(μg|ug|ng|pg|g|mg|kg)/(mL|L|l|100mL|100ml|dl|dL)', value_str, re.IGNORECASE)
-                if not sol_comparison_match:
-                    sol_comparison_match = re.search(r'(?:greater than or equal to|greater than|less than or equal to|less than|≥|≤|>|<|>=|<=)\s*(-?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)\s*(g/L|g/l|mg/L|mg/l|g/100mL|mg/mL|mol/L|M|%|ppm|ppb)', value_str, re.IGNORECASE)
-                
-                if sol_comparison_match:
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    value = sol_comparison_match.group(1)
-                    unit = sol_comparison_match.group(2)
-                    
-                    # Handle the compound unit format (e.g., μg/mL) vs simple unit format (e.g., g/L)
-                    if '/' in unit:
-                        # Simple unit format like g/L, mg/L
-                        return value, unit, temperature, conditions
-                    else:
-                        # Compound unit format - need to get the volume part from the original match
-                        if sol_comparison_match.lastindex >= 3:
-                            volume_part = sol_comparison_match.group(3) if sol_comparison_match.group(3) else ''
-                            if unit.lower() in ['μg', 'ug']:
-                                unit = 'μg'
-                            final_unit = f"{unit}/{volume_part}" if volume_part else unit
-                            return value, final_unit, temperature, conditions
-                        else:
-                            return value, unit, temperature, conditions
-                
-                # Pattern: "1.2 [ug/mL] (additional info)" - bracketed units with microgram notation
-                sol_bracketed_unit_match = re.search(r'(-?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)\s*\[(μg|ug|ng|pg|g|mg|kg)/(?:mL|L|100mL|100ml)\]', value_str, re.IGNORECASE)
-                if sol_bracketed_unit_match:
-                    value = sol_bracketed_unit_match.group(1)
-                    unit_part = sol_bracketed_unit_match.group(2)
-                    # Normalize microgram notation
-                    if unit_part.lower() in ['μg', 'ug']:
-                        unit_part = 'μg'
-                    elif unit_part.lower() == 'ng':
-                        unit_part = 'ng'
-                    elif unit_part.lower() == 'pg':
-                        unit_part = 'pg'
-                    
-                    # Extract volume part from the match
-                    if '/mL' in sol_bracketed_unit_match.group(0):
-                        unit = f"{unit_part}/mL"
-                    elif '/L' in sol_bracketed_unit_match.group(0):
-                        unit = f"{unit_part}/L"
-                    elif '/100mL' in sol_bracketed_unit_match.group(0) or '/100ml' in sol_bracketed_unit_match.group(0):
-                        unit = f"{unit_part}/100mL"
-                    else:
-                        unit = sol_bracketed_unit_match.group(2)
-                    
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return value, unit, temperature, conditions
-                
-                # Pattern: "Soluble in water: 5.6 g/L at 20°C"
-                sol_colon_match = re.search(r'[sS]olub[a-z]*[^:]*:\s*(-?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)\s*(μg|ug|ng|pg|g|mg|kg)/(mL|L|100mL|100ml|dl|dL)|[sS]olub[a-z]*[^:]*:\s*(-?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)\s*(g/L|mg/L|g/100mL|mg/mL|mol/L|M|%|ppm|ppb)\b', value_str, re.IGNORECASE)
-                if sol_colon_match:
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    if sol_colon_match.group(1):  # First pattern (microgram notation)
-                        unit_part = sol_colon_match.group(2)
-                        if unit_part.lower() in ['μg', 'ug']:
-                            unit_part = 'μg'
-                        volume_part = sol_colon_match.group(3)
-                        return sol_colon_match.group(1), f"{unit_part}/{volume_part}", temperature, conditions
-                    else:  # Second pattern (standard units)
-                        return sol_colon_match.group(4), sol_colon_match.group(5), temperature, conditions
-                
-                # Pattern: "5.6 g/L at 20°C" (starts with value and unit) - updated with microgram support
-                sol_start_match = re.search(r'^(-?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)\s*(μg|ug|ng|pg|g|mg|kg)/(mL|L|100mL|100ml|dl|dL)|^(-?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)\s*(g/L|mg/L|g/100mL|mg/mL|mol/L|M|%|ppm|ppb)\b', value_str, re.IGNORECASE)
-                if sol_start_match:
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    if sol_start_match.group(1):  # First pattern (microgram notation)
-                        unit_part = sol_start_match.group(2)
-                        if unit_part.lower() in ['μg', 'ug']:
-                            unit_part = 'μg'
-                        volume_part = sol_start_match.group(3)
-                        return sol_start_match.group(1), f"{unit_part}/{volume_part}", temperature, conditions
-                    else:  # Second pattern (standard units)
-                        return sol_start_match.group(4), sol_start_match.group(5), temperature, conditions
-                
-                # Pattern: "2.5X10-3 g/L" (X notation)
-                sol_scientific_x_match = re.search(r'^(-?\d+(?:\.\d+)?)X10([+-]?\d+)\s*(g/L|mg/L|g/100mL|mg/mL|mol/L|M|%|ppm|ppb)\b', value_str, re.IGNORECASE)
-                if sol_scientific_x_match:
-                    # Convert XNotation to E notation
-                    mantissa = sol_scientific_x_match.group(1)
-                    exponent = sol_scientific_x_match.group(2)
-                    unit = sol_scientific_x_match.group(3)
-                    scientific_value = f"{mantissa}e{exponent}"
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return scientific_value, unit, temperature, conditions
-                
-                # Pattern: "[2.5] g/L" (brackets around value)
-                sol_bracketed_val_match = re.search(r'^\[(-?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)\]\s*(g/L|mg/L|g/100mL|mg/mL|mol/L|M|%|ppm|ppb)\b', value_str, re.IGNORECASE)
-                if sol_bracketed_val_match:
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return sol_bracketed_val_match.group(1), sol_bracketed_val_match.group(2), temperature, conditions
-                
-                # Pattern: "1.35X10+5 mg/l" appearing anywhere in text (X notation anywhere)
-                sol_scientific_x_anywhere_match = re.search(r'(-?\d+(?:\.\d+)?)X10([+-]?\d+)\s*(mg/l|g/L|mg/L|g/100mL|mg/mL|mol/L|M|%|ppm|ppb)\b', value_str, re.IGNORECASE)
-                if sol_scientific_x_anywhere_match:
-                    # Convert XNotation to E notation
-                    mantissa = sol_scientific_x_anywhere_match.group(1)
-                    exponent = sol_scientific_x_anywhere_match.group(2)
-                    unit = sol_scientific_x_anywhere_match.group(3)
-                    scientific_value = f"{mantissa}e{exponent}"
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return scientific_value, unit, temperature, conditions
-                
-                # Pattern: "0.9%" or "0.86% wt" (standalone percentage values)
-                sol_percentage_match = re.search(r'^(-?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)%(?:\s+wt|w/w|v/v)?$', value_str, re.IGNORECASE)
-                if sol_percentage_match:
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return sol_percentage_match.group(1), "%", temperature, conditions
-                
-                # Pattern: "Solubility in water: 0.86% wt" (colon-based percentage)
-                sol_colon_percentage_match = re.search(r'[sS]olub[a-z]*[^:]*:\s*(-?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)%(?:\s+wt|w/w|v/v)?$', value_str, re.IGNORECASE)
-                if sol_colon_percentage_match:
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return sol_colon_percentage_match.group(1), "%", temperature, conditions
-                
-                # Pattern: "Insoluble" or "slightly soluble" - return None for both value and unit
-                insoluble_match = re.search(r'(insoluble|practically insoluble|very slightly soluble)', value_str, re.IGNORECASE)
-                if insoluble_match:
-                    temperature, conditions = extract_temperature_and_conditions(value_str)
-                    return None, None, temperature, conditions
-                
-                # If no solubility pattern matched, return None (no fallback for property-specific extraction)
-                return None, None, None, None
-            
-            # For other property types, return None to avoid fallback to generic patterns
-            return None, None, None, None
-        
-        # General patterns (fallback only when no property name is specified)
-        
-        # 1. Range patterns at start (e.g., "138-140", "135-140 °C")
-        range_match = re.search(r'^(-?\d+(?:\.\d+)?-\d+(?:\.\d+)?)\s*([°]?[CF]|K)?\b', value_str)
-        if range_match:
-            temperature, conditions = extract_temperature_and_conditions(value_str)
-            return range_match.group(1), range_match.group(2), temperature, conditions
-        
-        # 2. Temperature patterns at start (main value, not conditions)
-        temp_match = re.search(r'^(-?\d+(?:\.\d+)?)\s*[°]?([CF]|K)\b', value_str)
-        if temp_match:
-            temperature, conditions = extract_temperature_and_conditions(value_str)
-            return temp_match.group(1), temp_match.group(2), temperature, conditions
-        
-        # 3. Density patterns
-        density_match = re.search(r'^(-?\d+(?:\.\d+)?)\s*(g/cm³|g/mL|kg/m³|g/L)\b', value_str)
-        if density_match:
-            temperature, conditions = extract_temperature_and_conditions(value_str)
-            return density_match.group(1), density_match.group(2), temperature, conditions
-        
-        # 4. Pressure patterns (not conditions)
-        pressure_match = re.search(r'^(-?\d+(?:\.\d+)?)\s*(mmHg|mm Hg|kPa|Pa|atm|bar|torr)\b', value_str)
-        if pressure_match:
-            temperature, conditions = extract_temperature_and_conditions(value_str)
-            return pressure_match.group(1), pressure_match.group(2), temperature, conditions
-        
-        # 5. Viscosity patterns
-        viscosity_match = re.search(r'^(\d+(?:\.\d+)?)\s*(cP|mPa·s|Pa·s|cSt)\b', value_str)
-        if viscosity_match:
-            temperature, conditions = extract_temperature_and_conditions(value_str)
-            return viscosity_match.group(1), viscosity_match.group(2), temperature, conditions
-        
-        # 6. General numeric value at the start with various units
-        general_match = re.search(r'^(-?\d+(?:\.\d+)?)\s*([a-zA-Z/²³·°%]+)?', value_str)
-        if general_match:
-            value = general_match.group(1)
-            unit = general_match.group(2) if general_match.group(2) else None
-            
-            # Clean up unit
-            if unit:
-                unit = unit.strip()
-                # Filter out common non-unit words that might be captured
-                if unit.lower() in ['at', 'in', 'on', 'to', 'from', 'with', 'and', 'or']:
-                    unit = None
-                elif not unit or unit in ['', ' ']:
-                    unit = None
-            
-            temperature, conditions = extract_temperature_and_conditions(value_str)
-            return value, unit, temperature, conditions
-        
-        # 7. Scientific notation
-        sci_match = re.search(r'^(-?\d+(?:\.\d+)?[Ee][+-]?\d+)\s*([a-zA-Z/²³·°%]+)?', value_str)
-        if sci_match:
-            temperature, conditions = extract_temperature_and_conditions(value_str)
-            return sci_match.group(1), sci_match.group(2), temperature, conditions
-        
-        # 8. Fallback: any number in the string
-        number_match = re.search(r'(-?\d+(?:\.\d+)?)', value_str)
-        if number_match:
-            temperature, conditions = extract_temperature_and_conditions(value_str)
-            return number_match.group(1), None, temperature, conditions
-        
-        return None, None, None, None
 
-
-# Convenience functions for easy access
-@cached(service='pubchemview')
+# Convenience functions for easy access.
+#
+# These are not cached themselves: each one delegates to a cached PubChemView
+# method, so a second cache here would keep a duplicate copy of the same payload
+# on disk — and one whose key does not carry PubChemView.CACHE_SCHEMA_VERSION,
+# which is how an upgrade would end up serving an entry of the previous shape.
 def get_experimental_property(cid: Union[int, str], property_name: str) -> List[PropertyData]:
     """
     Convenience function to get experimental property data
@@ -1040,7 +847,6 @@ def get_experimental_property(cid: Union[int, str], property_name: str) -> List[
     return pugview.extract_property_data(cid, property_name)
 
 
-@cached(service='pubchemview')
 def get_all_experimental_properties(cid: Union[int, str]) -> Dict[str, List[PropertyData]]:
     """
     Convenience function to get all experimental properties
@@ -1055,7 +861,6 @@ def get_all_experimental_properties(cid: Union[int, str]) -> Dict[str, List[Prop
     return pugview.extract_all_experimental_properties(cid)
 
 
-@cached(service='pubchemview')
 def get_property_values_only(cid: Union[int, str], property_name: str) -> List[str]:
     """
     Convenience function to get just the property values as strings
@@ -1072,7 +877,6 @@ def get_property_values_only(cid: Union[int, str], property_name: str) -> List[s
     return [data.value for data in property_data if data.value]
 
 
-@cached(service='pubchemview')
 def get_property_table(cid: Union[int, str], property_name: str) -> pd.DataFrame:
     """
     Convenience function to get a comprehensive property table with full references
@@ -1082,7 +886,8 @@ def get_property_table(cid: Union[int, str], property_name: str) -> pd.DataFrame
         property_name: Name of the experimental property
         
     Returns:
-        pandas DataFrame with columns: CID, StringWithMarkup, ExperimentalValue, Unit, FullReference
+        pandas DataFrame with the columns listed in
+        :attr:`PubChemView.PROPERTY_TABLE_COLUMNS`.
     """
     pugview = PubChemView()
     return pugview.get_property_table(cid, property_name)

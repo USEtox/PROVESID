@@ -1,7 +1,36 @@
 # Search API Reference
 
 The `Search` class is the primary entry point for resolving chemical identifiers
-across all offline databases (ChEBI, CompTox, PubChemID, ZeroPM, ChEMBL).
+across the offline databases ChEBI, CompTox, PubChemID and ChEMBL.
+
+## Targeted sources
+
+`Search` queries four sources by default: **ChEBI**, **CompTox**, **PubChemID**
+and **ChEMBL**.
+
+**ZeroPM is not among them.** It aggregates regulatory inventories rather than
+curating compounds, so its name→structure rows are noticeably noisier than the
+other four — yet it counted as a full independent vote in the corroboration
+ranking that drives `confidence` and `min_source_support`. The
+`ZeroPM` class itself is unchanged and remains fully available for direct use
+(see the [ZeroPM tutorial](../examples/zeropm/zeropm-example.md)); only the
+resolver stopped targeting it.
+
+Pass `use_zeropm=True` to put it back in the pool:
+
+```python
+from provesid import Search
+
+# Default: four sources, ZeroPM absent from source_details.
+Search("cas").search("50-00-0")
+
+# Opt back in — mainly useful for fuzzy name queries, since ZeroPM is the only
+# source that does true fuzzy *retrieval* (e.g. "caffiene" -> caffeine).
+Search("name", fuzzy=True, use_zeropm=True).search("caffiene")
+```
+
+A `zeropm=` client passed to the constructor is ignored (with a warning) unless
+`use_zeropm=True` is also set.
 
 ::: provesid.search.Search
     options:

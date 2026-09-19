@@ -21,7 +21,7 @@ from provesid.search import (
     _candidate_cluster_keys,
     _cluster_candidates,
 )
-from provesid.tools import _make_candidate
+from provesid.tools import make_candidate
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -93,26 +93,26 @@ def _name_search(rows, **kwargs):
 
 class TestClustering:
     def test_same_inchikey_merges(self):
-        a = _tag(_make_candidate("ChEBI", name="aspirin", inchikey="BSYNRYMUTXBXSQ-UHFFFAOYSA-N"), "chebi")
-        b = _tag(_make_candidate("CompTox", name="Aspirin", inchikey="BSYNRYMUTXBXSQ-UHFFFAOYSA-N"), "comptox")
-        c = _tag(_make_candidate("PubChemID", name="caffeine", inchikey="RYYVLZVUVIJVGH-UHFFFAOYSA-N"), "pubchem")
+        a = _tag(make_candidate("ChEBI", name="aspirin", inchikey="BSYNRYMUTXBXSQ-UHFFFAOYSA-N"), "chebi")
+        b = _tag(make_candidate("CompTox", name="Aspirin", inchikey="BSYNRYMUTXBXSQ-UHFFFAOYSA-N"), "comptox")
+        c = _tag(make_candidate("PubChemID", name="caffeine", inchikey="RYYVLZVUVIJVGH-UHFFFAOYSA-N"), "pubchem")
         clusters = _cluster_candidates([a, b, c], by_skeleton=True)
         assert len(clusters) == 2
         assert sorted(len(cl["members"]) for cl in clusters) == [1, 2]
 
     def test_skeleton_merge_toggle(self):
-        d = _tag(_make_candidate("ChEBI", name="x", inchikey="ABCDEFGHIJKLMN-AAAAAAAAAA-N"), "chebi")
-        e = _tag(_make_candidate("CompTox", name="y", inchikey="ABCDEFGHIJKLMN-BBBBBBBBBB-N"), "comptox")
+        d = _tag(make_candidate("ChEBI", name="x", inchikey="ABCDEFGHIJKLMN-AAAAAAAAAA-N"), "chebi")
+        e = _tag(make_candidate("CompTox", name="y", inchikey="ABCDEFGHIJKLMN-BBBBBBBBBB-N"), "comptox")
         assert len(_cluster_candidates([d, e], by_skeleton=True)) == 1
         assert len(_cluster_candidates([d, e], by_skeleton=False)) == 2
 
     def test_name_only_fallback_singletons(self):
-        a = _tag(_make_candidate("ChEBI", name="foo"), "chebi")
-        b = _tag(_make_candidate("CompTox", name="bar"), "comptox")
+        a = _tag(make_candidate("ChEBI", name="foo"), "chebi")
+        b = _tag(make_candidate("CompTox", name="bar"), "comptox")
         assert len(_cluster_candidates([a, b], by_skeleton=True)) == 2
 
     def test_cluster_keys_priority(self):
-        ik = _make_candidate("X", inchikey="BSYNRYMUTXBXSQ-UHFFFAOYSA-N", smiles="CCO")
+        ik = make_candidate("X", inchikey="BSYNRYMUTXBXSQ-UHFFFAOYSA-N", smiles="CCO")
         keys = _candidate_cluster_keys(ik, by_skeleton=True)
         # InChIKey present -> ik + skel keys, no smiles key
         assert ("ik", "BSYNRYMUTXBXSQ-UHFFFAOYSA-N") in keys

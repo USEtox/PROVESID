@@ -310,11 +310,73 @@ cache_dir = info['cache_directory']
 print(f"Directory writable: {os.access(cache_dir, os.W_OK)}")
 ```
 
+## What Is and Is Not Cached
+
+### Failed lookups are never stored
+
+A cache that remembers errors is worse than no cache: one HTTP 429 or one
+PUG-View `ServerBusy` would turn into a permanent "this compound has no data".
+So `@cached` writes nothing when:
+
+- the function raises — the exception propagates uncached; or
+- the return value is an in-band failure report, i.e. a dict whose `success`
+  key is `False` (`provesid.cache.is_failure_result` recognises these); or
+- an optional `skip_if` predicate on the decorator accepts the value.
+
+```python
+from provesid import PubChemView
+
+view = PubChemView()
+
+# A transient PUG-View failure raises instead of returning an empty list,
+# and nothing is written to the cache, so the next call retries.
+data = view.extract_property_data(2244, "Melting Point")
+
+# An empty list therefore has one meaning only: PubChem holds no such
+# property for this compound.
+assert isinstance(data, list)
+```
+
+`use_cache=False` means "do not *read* the cache". A successful result is still
+written, so later calls benefit.
+
+### Absence is not cached either
+
+A lookup that legitimately finds nothing is also not stored. PubChem reports a
+genuinely empty result with a `NotFound` fault code, but it has been observed
+sending one while merely under load, and a wrongly cached "this compound has no
+melting point" would be permanent. Re-checking an empty result costs one cheap
+request, so that is the trade taken:
+
+- positive results are cached (chemical data rarely changes);
+- empty results are re-fetched every time;
+- the raw response fetchers (`get_property`, `get_experimental_properties`)
+  raise on absence, so they cache unconditionally.
+
+### Cache keys are stable across processes
+
+The key is a SHA-256 digest of the function's qualified name plus its
+normalised arguments. Normalisation matters for methods: the first argument is
+the client instance, and its default `repr` contains a memory address, which
+would make every key unique to one object in one process. Clients therefore
+declare their identity:
+
+```python
+class PubChemView:
+    def __cache_key__(self):
+        return ("provesid.pubchemview.PubChemView", self.base_url)
+```
+
+Two clients pointing at the same endpoint share cache entries; two different
+endpoints keep separate ones. Any class whose cached methods should behave this
+way can declare `__cache_key__`; without it, the class's fully qualified name is
+used.
+
 ## Technical Details
 
 ### Cache Implementation
 - **Storage**: Pickle serialization for Python objects
-- **Indexing**: SHA256 hashes of function calls + arguments
+- **Indexing**: SHA256 hashes of function calls + normalised arguments (see above)
 - **Metadata**: JSON tracking for size and timestamps
 - **Memory**: LRU memory cache backed by persistent disk storage
 

@@ -210,6 +210,14 @@ except NCIResolverError as e:
     print(f"General resolver error: {e}")
 ```
 
+Transient failures — HTTP 429, a 5xx, a timeout, a refused connection — are
+retried with exponential back-off before any of these is raised, so an
+exception means the condition outlived the retry budget. Absence is not
+retried: CACTUS reports an identifier it cannot resolve with an HTTP 500 whose
+body is a not-found page, and the resolver reads the body rather than the
+status, so an unresolvable identifier costs one request and raises
+`NCIResolverNotFoundError` immediately. See [HTTP Transport](http.md).
+
 ## Advanced Usage
 
 ### Custom Configuration
@@ -325,10 +333,11 @@ pipeline_results = chemical_identifier_pipeline(identifiers)
 
 ### Rate Limiting
 
-The resolver includes automatic rate limiting to respect server limits:
+The resolver paces its own requests, retries included, to respect server
+limits:
 
 ```python
-# Default rate limiting (3 requests per second)
+# Default pacing: 0.1 s between requests, so at most 10 per second
 resolver = NCIChemicalIdentifierResolver()
 
 # Slower rate for large batch jobs

@@ -570,8 +570,9 @@ class CheMBL:
 
         A substring search matches more broadly:
 
-        >>> [r["pref_name"] for r in chembl.search_by_name('asprin')]
-        ['PHENYRAMIDOL']
+        >>> for r in chembl.search_by_name('asprin'):
+        ...     print(r["pref_name"])
+        PHENYRAMIDOL
         >>> chembl.search_by_name('asprin', exact=True)
         []
         """

@@ -97,15 +97,20 @@ compound = pc.get_compounds_by_inchikey(inchi_key)
 
 ### Property Methods
 - `get_basic_compound_info()` - Essential compound properties
-- `get_compound_properties()` - Selected properties
+- `get_compound_properties()` - Selected properties for one compound, with synonyms
 - `get_all_compound_info()` - All available properties
-- `get_compound_properties_batch()` - Batch processing
+- `get_properties_for_cids()` - Raw property table for many CIDs, in bulk
+- `get_compound_properties_batch()` - Bulk retrieval reshaped to one dict per CID
 
 ### Utility Methods
 - `get_compound_synonyms()` - Get compound synonyms
 - `get_compound_identifiers()` - Extract specific identifiers
 
 ## Batch Processing
+
+PubChem's property endpoint answers a whole list of CIDs in one round trip, so
+asking about a thousand compounds costs a handful of requests rather than a
+thousand.
 
 ```python
 # Process multiple compounds efficiently
@@ -118,12 +123,83 @@ for name in compound_names:
         all_cids.append(cids[0])
 
 # Batch property retrieval
-properties = [CompoundProperties.MOLECULAR_WEIGHT, 
+properties = [CompoundProperties.MOLECULAR_WEIGHT,
               CompoundProperties.MOLECULAR_FORMULA,
               CompoundProperties.SMILES]
 
 batch_results = pc.get_compound_properties_batch(all_cids, properties)
 ```
+
+`get_compound_properties_batch()` returns one dict per CID, in the order asked,
+each carrying the retrieved properties plus `success`, `cid` and `error`. A CID
+PubChem has no record of comes back with `success=False` rather than being
+dropped, so the result can be zipped against the input.
+
+`get_properties_for_cids()` is the same request without the reshaping — it
+returns PubChem's own `PropertyTable` rows, where a compound with no record
+yields a row holding only `CID`:
+
+```python
+rows = pc.get_properties_for_cids(range(2000, 3000), ["MolecularWeight"])
+# 1000 compounds, 5 requests (PROPERTY_CHUNK_SIZE = 200 CIDs each)
+```
+
+Both methods switch from a URL path to a POST body once the identifier list
+outgrows `URL_IDENTIFIER_LIMIT`, which is how PubChem asks for long lists to be
+sent. Neither includes synonyms: those need one request per compound, which
+would defeat the batching. Use `get_compound_synonyms()` where they are needed.
+
+## Properties Without the Network
+
+`PubChemID` — the local SQLite database of ~1.6M compounds — carries the
+identifiers and the cheap computed descriptors, so most property lookups need no
+request at all. `properties()` reads it first and consults PUG-REST only for
+what it cannot answer:
+
+```python
+from provesid import PubChemID
+
+db = PubChemID()
+
+db.properties(2244, ["MolecularFormula", "MolecularWeight"])
+# {'CID': 2244, 'Source': 'offline', 'MolecularFormula': 'C9H8O4',
+#  'MolecularWeight': 180.16}
+
+db.properties(2244, ["MonoisotopicMass"])
+# {'CID': 2244, 'Source': 'online', 'MonoisotopicMass': 180.04225873}
+```
+
+The `Source` key records which one answered. Two rules decide it:
+
+- a CID with no row in the local database goes online;
+- a property with no local column sends the *whole* request online, because that
+  property would need a request anyway and a row assembled from two PubChem
+  snapshots is worse than a row from one.
+
+`PubChemID.OFFLINE_PROPERTIES` lists what can be served locally: the formula,
+weight, exact mass, isomeric SMILES, InChI, InChIKey, IUPAC name, title, XLogP,
+TPSA, complexity, charge and the H-bond, rotatable-bond and heavy-atom counts.
+Everything else — `MonoisotopicMass`, `ConnectivitySMILES`, the 3D descriptors,
+the patent and literature counts — is online-only.
+
+Bulk lookups split themselves between the two sources automatically, and the
+online remainder is fetched in one batched request:
+
+```python
+rows = db.properties_for_cids(my_ten_thousand_cids, ["MolecularWeight", "InChIKey"])
+table = db.properties_table(my_ten_thousand_cids, ["MolecularWeight"])
+```
+
+`properties_table()` returns a DataFrame with a row for every CID asked about,
+`Source` reading `offline`, `online` or `missing`, so it can be joined against
+your own table. Pass `use_online_fallback=False` to keep a lookup strictly
+local — a hard guarantee, not a preference.
+
+A property the compound has no value for is **absent** from the result rather
+than `None`, which is how PubChem itself reports it: `'XLogP' not in result`
+means PubChem computes no logP for that compound, not that the lookup fell
+short. Values are normalised to one type across both sources, since PUG-REST
+reports `MolecularWeight` as a string where the local database holds a float.
 
 ## Error Handling
 

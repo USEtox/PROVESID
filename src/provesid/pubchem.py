@@ -17,6 +17,17 @@ from .utils import user_dataset_path
 pugrest_prolog = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
 pause_between_calls = 0.2 # seconds
 
+#: Longest identifier list PROVESID will put in a URL path before switching to
+#: POST. PUG-REST documents a ceiling of about 2000 characters for the whole
+#: URL; the margin left here covers the prolog, the operation and the property
+#: list that share the path with the identifiers.
+URL_IDENTIFIER_LIMIT = 1600
+
+#: Default number of CIDs per bulk property request. PubChem answers several
+#: hundred at a time without complaint, but a smaller chunk costs less to redo
+#: when one request has to be retried.
+PROPERTY_CHUNK_SIZE = 200
+
 # create an enumerate class called domain
 # <domain> = substance | compound | assay | gene | protein | pathway | taxonomy | cell
 class Domain:
@@ -718,33 +729,223 @@ class PubChemAPI:
         properties_tuple = tuple(properties)
         return self._cached_get_compound_properties(cid, properties_tuple, include_synonyms, output_format)
 
-    def get_compound_properties_batch(self, cids: List[Union[int, str]], 
-                                     properties: List[str], 
-                                     output_format: str = OutputFormat.JSON) -> List[Dict[str, Any]]:
+    def _build_post_url(self, domain: str, namespace: str,
+                        operation: Optional[str] = None,
+                        output_format: str = OutputFormat.JSON) -> str:
         """
-        Get compound properties for multiple CIDs (legacy batch method)
-        
+        Build a PUG-REST URL whose identifiers travel in the request body.
+
+        A GET request carries its identifiers in the path, which PubChem caps at
+        roughly 2000 characters. The POST form of the same call leaves the
+        identifier segment out of the path entirely and takes it as a form
+        field instead, so the only limit is the body size.
+
         Args:
-            cids: List of CIDs
-            properties: List of property names
-            output_format: Desired output format
-            
+            domain: API domain (compound, substance, assay, ...).
+            namespace: Namespace within the domain (cid, name, smiles, ...).
+            operation: Operation to perform, e.g. ``"property/MolecularWeight"``.
+            output_format: Desired output format.
+
         Returns:
-            List of dictionaries, each with flat structure like get_compound_properties
+            URL string with no identifier segment, for use with
+            ``self._make_request(url, method='POST', data={namespace: ...})``.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> api._build_post_url('compound', 'cid', 'property/MolecularWeight')
+            'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/property/MolecularWeight/JSON'
         """
-        results = []
-        for cid in cids:
-            try:
-                result = self.get_compound_properties(cid, properties, include_synonyms=False, output_format=output_format)
-                results.append(result)
-            except Exception as e:
+        url_parts = [self.base_url, domain, namespace]
+        if operation:
+            url_parts.append(operation)
+        if output_format:
+            url_parts.append(output_format)
+        return '/'.join(url_parts)
+
+    @cached(service='pubchem', skip_if=_is_empty_lookup)
+    def _get_property_rows(self, cids_tuple: tuple, properties_tuple: tuple) -> List[Dict[str, Any]]:
+        """
+        Fetch one ``PropertyTable`` covering several CIDs in a single request.
+
+        The identifiers go in the URL path while they fit within
+        :data:`URL_IDENTIFIER_LIMIT`, and in a POST body when they do not. Both
+        forms hit the same endpoint and return the same payload; the choice is
+        purely about the URL length ceiling.
+
+        Args:
+            cids_tuple: CIDs to look up, as a tuple so the result is cacheable.
+            properties_tuple: Property names, as a tuple for the same reason.
+
+        Returns:
+            The rows of ``PropertyTable.Properties``, one per CID that PubChem
+            recognised. A CID it does not know still yields a row, but that row
+            carries only the ``CID`` key. An empty list means the request
+            reported no data at all.
+
+        Raises:
+            PubChemError: If the request could not be completed. A failed fetch
+                is never reported as an empty list, so a transient error cannot
+                be mistaken for — or cached as — "these compounds have no data".
+        """
+        cids = list(cids_tuple)
+        properties = list(properties_tuple)
+        operation = f"{Operation.PROPERTY}/{','.join(properties)}"
+        identifiers = ','.join(str(cid) for cid in cids)
+
+        try:
+            if len(identifiers) > URL_IDENTIFIER_LIMIT:
+                url = self._build_post_url(Domain.COMPOUND, CompoundDomainNamespace.CID,
+                                           operation, OutputFormat.JSON)
+                logging.debug(f"POSTing {len(cids)} CIDs to {url}")
+                response = self._make_request(url, method='POST',
+                                              data={CompoundDomainNamespace.CID: identifiers})
+            else:
+                url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.CID, cids,
+                                      operation, OutputFormat.JSON)
+                response = self._make_request(url)
+            data = self._parse_response(response, OutputFormat.JSON)
+        except PubChemNotFoundError:
+            logging.debug(f"No property record for any of {len(cids)} CIDs")
+            return []
+
+        if isinstance(data, dict):
+            return data.get('PropertyTable', {}).get('Properties', [])
+        return []
+
+    def get_properties_for_cids(self, cids: List[Union[int, str]],
+                                properties: List[str],
+                                chunk_size: int = PROPERTY_CHUNK_SIZE) -> List[Dict[str, Any]]:
+        """
+        Get a property table for many CIDs, a few hundred compounds per request.
+
+        This is the bulk counterpart to :meth:`get_compound_properties`, which
+        asks about one compound at a time. PubChem's property endpoint accepts a
+        comma-separated CID list and answers the whole set in one round trip, so
+        a thousand compounds cost five requests here instead of a thousand.
+
+        Args:
+            cids: CIDs to look up. Duplicates are collapsed, and the original
+                order of first appearance is preserved.
+            properties: Property names, e.g.
+                ``['MolecularWeight', 'SMILES']``. See
+                :class:`CompoundProperties` for the full list.
+            chunk_size: How many CIDs to put in one request. The default is
+                deliberately below what PubChem tolerates: a smaller chunk
+                wastes less work when a request has to be retried.
+
+        Returns:
+            One row per distinct CID PubChem answered for, each a dict with a
+            ``CID`` key plus the properties it holds. A CID PubChem does not
+            know yields a row carrying only ``CID``; a property the compound has
+            no value for is absent from the row rather than ``None``, which is
+            how PubChem itself reports it.
+
+        Raises:
+            ValueError: If ``properties`` is empty or ``chunk_size`` is not positive.
+            PubChemError: If a request could not be completed. Partial results
+                are not returned: either every chunk succeeded or the failure
+                surfaces, so a short table never has to be second-guessed.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> rows = api.get_properties_for_cids([2244, 702],
+            ...                                    ['MolecularFormula', 'MolecularWeight'])
+            >>> {row['CID']: row['MolecularFormula'] for row in rows}
+            {2244: 'C9H8O4', 702: 'C2H6O'}
+        """
+        if not properties:
+            raise ValueError("properties must name at least one property")
+        if chunk_size <= 0:
+            raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+
+        unique_cids = list(dict.fromkeys(cids))
+        if not unique_cids:
+            return []
+
+        rows: List[Dict[str, Any]] = []
+        for start in range(0, len(unique_cids), chunk_size):
+            chunk = unique_cids[start:start + chunk_size]
+            rows.extend(self._get_property_rows(tuple(chunk), tuple(properties)))
+        return rows
+
+    def get_compound_properties_batch(self, cids: List[Union[int, str]],
+                                      properties: List[str],
+                                      chunk_size: int = PROPERTY_CHUNK_SIZE) -> List[Dict[str, Any]]:
+        """
+        Get compound properties for multiple CIDs, one row per CID.
+
+        A convenience layer over :meth:`get_properties_for_cids` that reshapes
+        the raw property table into the flat, self-describing dicts
+        :meth:`get_compound_properties` returns, so a caller can iterate over
+        the result without checking which CIDs came back.
+
+        Args:
+            cids: List of CIDs. Duplicates are answered once each, in the order
+                they first appear.
+            properties: List of property names.
+            chunk_size: How many CIDs to put in one request.
+
+        Returns:
+            One dict per distinct CID, in the order requested, each carrying the
+            retrieved properties plus ``success``, ``cid`` and ``error`` keys. A
+            CID PubChem does not know is reported with ``success=False`` and an
+            explanatory ``error`` rather than being dropped, so the result can
+            be zipped against the input.
+
+        Raises:
+            ValueError: If ``properties`` is empty or ``chunk_size`` is not positive.
+            PubChemError: If a request could not be completed. A transport
+                failure is not reported as a row of missing properties.
+
+        Note:
+            This asks PubChem about ``chunk_size`` compounds per request rather
+            than one compound per request, so it does not share cache entries
+            with :meth:`get_compound_properties`. Synonyms are not included;
+            they need one request per compound, which defeats the point of
+            batching. Use :meth:`get_compound_synonyms` where they are needed.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> rows = api.get_compound_properties_batch([2244, 702], ['MolecularFormula'])
+            >>> [(row['cid'], row.get('MolecularFormula')) for row in rows]
+            [(2244, 'C9H8O4'), (702, 'C2H6O')]
+        """
+        unique_cids = list(dict.fromkeys(cids))
+        rows = self.get_properties_for_cids(unique_cids, properties, chunk_size=chunk_size)
+
+        # PubChem answers with whatever CIDs it recognised, in its own order, so
+        # index the table before walking the caller's list.
+        by_cid = {str(row.get('CID')): row for row in rows}
+
+        results: List[Dict[str, Any]] = []
+        for cid in unique_cids:
+            row = by_cid.get(str(cid))
+            if row is None:
                 results.append({
                     "success": False,
                     "cid": cid,
-                    "error": str(e)
+                    "error": "CID not present in the property table returned by PubChem",
                 })
+                continue
+
+            record = {key: value for key, value in row.items() if key != 'CID'}
+            if not record:
+                # A bare CID row is how PubChem reports a compound it has no
+                # record for; it is an answer, not a failed request.
+                results.append({
+                    "success": False,
+                    "cid": cid,
+                    "error": "No such compound",
+                })
+                continue
+
+            record['success'] = True
+            record['cid'] = cid
+            record['error'] = None
+            results.append(record)
+
         return results
-    
+
     @cached(service='pubchem', skip_if=_is_empty_lookup)
     def get_compound_synonyms(self, cid: Union[int, str], output_format: str = OutputFormat.JSON) -> List[str]:
         """
@@ -1645,6 +1846,59 @@ class PubChemID:
     DEFAULT_DB_NAME = "pubchem_id.db"
     DEFAULT_DB_URL = "https://zenodo.org/records/18173204/files/pubchem_id.db"
 
+    #: PubChem property names the local database can answer, mapped to their
+    #: column in the ``compounds`` table. The database is built from PubChem's
+    #: CAS export, which carries the identifiers and the cheap computed
+    #: descriptors but not the full property set, so anything outside this
+    #: mapping — ``MonoisotopicMass``, ``ConnectivitySMILES``, the 3D
+    #: descriptors, the patent and literature counts — needs the online API.
+    #: Note that ``smiles`` holds the isomeric SMILES, which is what PubChem now
+    #: calls ``SMILES``; the stereochemistry-free ``ConnectivitySMILES`` is not
+    #: stored locally.
+    OFFLINE_PROPERTIES = {
+        'MolecularFormula': 'mf',
+        'MolecularWeight': 'mw',
+        'SMILES': 'smiles',
+        'InChI': 'inchi',
+        'InChIKey': 'inchikey',
+        'IUPACName': 'iupacname',
+        'Title': 'cmpdname',
+        'XLogP': 'xlogp',
+        'TPSA': 'polararea',
+        'Complexity': 'complexity',
+        'Charge': 'charge',
+        'HBondDonorCount': 'hbonddonor',
+        'HBondAcceptorCount': 'hbondacc',
+        'RotatableBondCount': 'rotbonds',
+        'HeavyAtomCount': 'heavycnt',
+        'ExactMass': 'exactmass',
+    }
+
+    #: What :meth:`properties` retrieves when the caller names no properties:
+    #: everything available without touching the network.
+    DEFAULT_PROPERTIES = tuple(OFFLINE_PROPERTIES)
+
+    #: Type each property is normalised to, so that a table assembled from both
+    #: sources is usable as one table. PUG-REST reports ``MolecularWeight`` and
+    #: ``ExactMass`` as strings while the local database holds floats.
+    _PROPERTY_CASTS = {
+        'MolecularWeight': float,
+        'ExactMass': float,
+        'MonoisotopicMass': float,
+        'XLogP': float,
+        'TPSA': float,
+        'Complexity': float,
+        'Charge': int,
+        'HBondDonorCount': int,
+        'HBondAcceptorCount': int,
+        'RotatableBondCount': int,
+        'HeavyAtomCount': int,
+    }
+
+    #: Bound parameters per ``IN`` clause. SQLite's own default ceiling is 999.
+    _SQL_PARAMETER_LIMIT = 500
+
+
     def __init__(
         self,
         db_path: Optional[str] = None,
@@ -1652,6 +1906,7 @@ class PubChemID:
         data_dir: Optional[str] = None,
         db_url: Optional[str] = None,
         redownload: bool = False,
+        api: Optional['PubChemAPI'] = None,
     ):
         """
         Initialize PubChemID database connection.
@@ -1667,6 +1922,11 @@ class PubChemID:
                 uses the package default URL.
             redownload (bool): If True, force re-download when
                 ``auto_download`` is enabled.
+            api (PubChemAPI, optional): Online client used by
+                :meth:`properties` when the local database cannot answer a
+                request. One is created on first use if none is given, so
+                passing this is only needed to share a client or to configure
+                its pause time.
         
         Raises:
             FileNotFoundError: If database file doesn't exist and auto_download is False
@@ -1675,6 +1935,7 @@ class PubChemID:
 
         self.logger = logging.getLogger(__name__)
         self.db_url = db_url or self.DEFAULT_DB_URL
+        self._api = api
         
         if db_path is None:
             base_dir = data_dir or user_dataset_path()
@@ -2522,6 +2783,323 @@ class PubChemID:
         """
         return {formula: self.formula_to_cas(formula, limit=limit) for formula in formula_list}
     
+    @property
+    def api(self) -> 'PubChemAPI':
+        """
+        The online client used to answer what the local database cannot.
+
+        Created on first use rather than in ``__init__``, so a strictly offline
+        session never builds one.
+
+        Returns:
+            The :class:`PubChemAPI` instance passed to ``__init__``, or one
+            created with default settings.
+        """
+        if self._api is None:
+            self._api = PubChemAPI()
+        return self._api
+
+    def properties(self, cid: Union[int, str],
+                   properties: Optional[List[str]] = None,
+                   use_online_fallback: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        Look up computed properties for one compound, offline first.
+
+        The local database answers from disk in microseconds; the online API is
+        consulted only when the local database cannot serve the request, either
+        because it holds no row for this CID or because a requested property is
+        not one of the columns it carries (see :attr:`OFFLINE_PROPERTIES`).
+
+        Args:
+            cid: PubChem Compound ID.
+            properties: Property names to retrieve, e.g.
+                ``['MolecularWeight', 'XLogP']``. Defaults to every property the
+                local database can answer, :attr:`DEFAULT_PROPERTIES`.
+            use_online_fallback: When True (default), fall back to PUG-REST for
+                anything the local database cannot answer. When False, the
+                lookup is strictly offline and an unavailable property is simply
+                absent from the result.
+
+        Returns:
+            A dict carrying ``CID``, a ``Source`` of ``'offline'`` or
+            ``'online'``, and one key per property that has a value. A property
+            the compound has no value for is omitted rather than set to None,
+            which is how PubChem itself reports it — so ``'XLogP' not in
+            result`` means PubChem computes no logP for this compound, not that
+            the lookup fell short. Returns None when neither source knows the
+            CID.
+
+        Raises:
+            ValueError: If ``cid`` is not an integer, or ``properties`` is an
+                empty list.
+            PubChemError: If the online fallback was needed and its request
+                could not be completed. An incomplete answer is never passed off
+                as a complete one.
+
+        Example:
+            >>> db = PubChemID()
+            >>> db.properties(2244, ['MolecularFormula', 'MolecularWeight'])
+            {'CID': 2244, 'Source': 'offline', 'MolecularFormula': 'C9H8O4', 'MolecularWeight': 180.16}
+            >>> # MonoisotopicMass is not in the local database, so this one goes online
+            >>> db.properties(2244, ['MonoisotopicMass'])['Source']
+            'online'
+        """
+        rows = self.properties_for_cids([cid], properties,
+                                        use_online_fallback=use_online_fallback)
+        return rows[0] if rows else None
+
+    def properties_for_cids(self, cids: List[Union[int, str]],
+                            properties: Optional[List[str]] = None,
+                            use_online_fallback: bool = True,
+                            chunk_size: int = PROPERTY_CHUNK_SIZE) -> List[Dict[str, Any]]:
+        """
+        Look up computed properties for many compounds, offline first.
+
+        Everything the local database can answer is read in a handful of SQL
+        statements; only the remainder is requested from PubChem, in bulk, a few
+        hundred compounds per request. A list of ten thousand CIDs that the
+        local database covers therefore costs no network traffic at all.
+
+        Args:
+            cids: PubChem Compound IDs. Duplicates are collapsed and the order
+                of first appearance is preserved.
+            properties: Property names to retrieve. Defaults to
+                :attr:`DEFAULT_PROPERTIES`.
+            use_online_fallback: When True (default), CIDs the local database
+                does not cover are requested from PUG-REST.
+            chunk_size: How many CIDs to put in one online request.
+
+        Returns:
+            One dict per CID that could be answered, in the order requested,
+            each carrying ``CID``, a ``Source`` of ``'offline'`` or
+            ``'online'``, and one key per property that has a value. CIDs
+            neither source knows are omitted; use :meth:`properties_table` to
+            get a row for every CID asked about.
+
+        Raises:
+            ValueError: If a CID is not an integer, ``properties`` is an empty
+                list, or ``chunk_size`` is not positive.
+            PubChemError: If an online request could not be completed.
+
+        Note:
+            If *any* requested property lies outside
+            :attr:`OFFLINE_PROPERTIES`, the whole request goes online: the
+            missing property would need a request per compound anyway, so
+            splitting the property list between the two sources would cost the
+            same traffic and return rows assembled from two different PubChem
+            snapshots.
+
+        Example:
+            >>> db = PubChemID()
+            >>> rows = db.properties_for_cids([2244, 702], ['MolecularFormula'])
+            >>> [(row['CID'], row['MolecularFormula'], row['Source']) for row in rows]
+            [(2244, 'C9H8O4', 'offline'), (702, 'C2H6O', 'offline')]
+        """
+        if properties is not None and not properties:
+            raise ValueError("properties must name at least one property, or be None")
+        if chunk_size <= 0:
+            raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+
+        requested_properties = list(properties) if properties else list(self.DEFAULT_PROPERTIES)
+        wanted_cids = [self._coerce_cid(cid) for cid in cids]
+        wanted_cids = list(dict.fromkeys(wanted_cids))
+        if not wanted_cids:
+            return []
+
+        online_only = [name for name in requested_properties
+                       if name not in self.OFFLINE_PROPERTIES]
+
+        found: Dict[int, Dict[str, Any]] = {}
+        if online_only:
+            self.logger.debug(
+                "Going straight online for %d CIDs: %s not in the local database",
+                len(wanted_cids), ', '.join(online_only))
+            missing = wanted_cids
+        else:
+            found = self._offline_properties(wanted_cids, requested_properties)
+            missing = [cid for cid in wanted_cids if cid not in found]
+            self.logger.debug("Served %d/%d CIDs offline", len(found), len(wanted_cids))
+
+        if missing and use_online_fallback:
+            self.logger.debug("Falling back online for %d CIDs", len(missing))
+            found.update(self._online_properties(missing, requested_properties, chunk_size))
+
+        return [found[cid] for cid in wanted_cids if cid in found]
+
+    def properties_table(self, cids: List[Union[int, str]],
+                         properties: Optional[List[str]] = None,
+                         use_online_fallback: bool = True,
+                         chunk_size: int = PROPERTY_CHUNK_SIZE) -> 'pd.DataFrame':
+        """
+        Offline-first property lookup for many compounds, as a DataFrame.
+
+        Same lookup as :meth:`properties_for_cids`, reshaped so that every CID
+        asked about has a row whether or not it could be answered. That makes
+        the frame safe to concatenate or join against the caller's own table.
+
+        Args:
+            cids: PubChem Compound IDs. Duplicates are collapsed.
+            properties: Property names to retrieve. Defaults to
+                :attr:`DEFAULT_PROPERTIES`.
+            use_online_fallback: When True (default), consult PUG-REST for CIDs
+                the local database does not cover.
+            chunk_size: How many CIDs to put in one online request.
+
+        Returns:
+            A DataFrame with one row per distinct CID in the order requested.
+            Columns are ``CID``, ``Source`` and the requested properties.
+            ``Source`` reads ``'offline'``, ``'online'``, or ``'missing'`` for a
+            CID neither source knows; a property with no value is NaN/None.
+
+        Raises:
+            ValueError: If a CID is not an integer, ``properties`` is an empty
+                list, or ``chunk_size`` is not positive.
+            PubChemError: If an online request could not be completed.
+
+        Example:
+            >>> db = PubChemID()
+            >>> table = db.properties_table([2244, 702], ['MolecularWeight'])
+            >>> table[['CID', 'MolecularWeight', 'Source']].to_dict('records')
+            [{'CID': 2244, 'MolecularWeight': 180.16, 'Source': 'offline'},
+             {'CID': 702, 'MolecularWeight': 46.07, 'Source': 'offline'}]
+        """
+        requested_properties = list(properties) if properties else list(self.DEFAULT_PROPERTIES)
+        rows = self.properties_for_cids(cids, requested_properties,
+                                        use_online_fallback=use_online_fallback,
+                                        chunk_size=chunk_size)
+        by_cid = {row['CID']: row for row in rows}
+
+        records = []
+        for cid in dict.fromkeys(self._coerce_cid(cid) for cid in cids):
+            row = by_cid.get(cid, {'CID': cid, 'Source': 'missing'})
+            records.append({'CID': cid, 'Source': row['Source'],
+                            **{name: row.get(name) for name in requested_properties}})
+
+        return pd.DataFrame(records, columns=['CID', 'Source'] + requested_properties)
+
+    @staticmethod
+    def _coerce_cid(cid: Union[int, str]) -> int:
+        """
+        Normalise a CID to an int so that ``2244`` and ``"2244"`` share a row.
+
+        Args:
+            cid: CID as an int or a string of digits.
+
+        Returns:
+            The CID as an int.
+
+        Raises:
+            ValueError: If ``cid`` is not an integer. PubChem answers a
+                malformed CID with a blanket ``PUGREST.BadRequest`` that fails
+                the whole batch, so it is worth catching here, where the
+                offending value can be named.
+        """
+        try:
+            return int(cid)
+        except (TypeError, ValueError):
+            raise ValueError(f"CID must be an integer, got {cid!r}")
+
+    def _offline_properties(self, cids: List[int],
+                            properties: List[str]) -> Dict[int, Dict[str, Any]]:
+        """
+        Read properties for the given CIDs from the local database.
+
+        Args:
+            cids: CIDs to look up, already coerced to int.
+            properties: Property names, all of which must be keys of
+                :attr:`OFFLINE_PROPERTIES`.
+
+        Returns:
+            A dict keyed by CID, holding one record per CID present in the
+            database. A record carries ``CID``, ``Source='offline'`` and the
+            properties that have a value; a NULL column is left out, matching
+            PubChem, which omits a property rather than reporting it as null.
+        """
+        columns = [self.OFFLINE_PROPERTIES[name] for name in properties]
+        cursor = self.conn.cursor()
+        found: Dict[int, Dict[str, Any]] = {}
+
+        # SQLite allows a limited number of bound parameters per statement
+        # (999 by default), so the IN list is filled in batches.
+        for start in range(0, len(cids), self._SQL_PARAMETER_LIMIT):
+            batch = cids[start:start + self._SQL_PARAMETER_LIMIT]
+            placeholders = ','.join('?' * len(batch))
+            cursor.execute(
+                f"SELECT cid, {', '.join(columns)} FROM compounds "
+                f"WHERE cid IN ({placeholders})", batch)
+            for row in cursor.fetchall():
+                record = {'CID': row['cid'], 'Source': 'offline'}
+                for name, column in zip(properties, columns):
+                    value = row[column]
+                    if value is not None and value != '':
+                        record[name] = self._cast_property(name, value)
+                found[row['cid']] = record
+
+        return found
+
+    def _online_properties(self, cids: List[int], properties: List[str],
+                           chunk_size: int) -> Dict[int, Dict[str, Any]]:
+        """
+        Fetch properties for the given CIDs from PUG-REST.
+
+        Args:
+            cids: CIDs the local database could not answer.
+            properties: Property names to request.
+            chunk_size: How many CIDs to put in one request.
+
+        Returns:
+            A dict keyed by CID, holding one record per CID PubChem answered
+            for, shaped like the offline records but with
+            ``Source='online'``. PubChem returns a bare CID for a compound it
+            has no record of; such a row is dropped, so the CID is reported as
+            unknown rather than as a compound with no properties.
+
+        Raises:
+            PubChemError: If a request could not be completed.
+        """
+        rows = self.api.get_properties_for_cids(cids, properties, chunk_size=chunk_size)
+
+        found: Dict[int, Dict[str, Any]] = {}
+        for row in rows:
+            values = {name: self._cast_property(name, row[name])
+                      for name in properties
+                      if row.get(name) is not None and row.get(name) != ''}
+            if not values:
+                continue
+            cid = self._coerce_cid(row['CID'])
+            found[cid] = {'CID': cid, 'Source': 'online', **values}
+
+        return found
+
+    @classmethod
+    def _cast_property(cls, name: str, value: Any) -> Any:
+        """
+        Coerce a property value to one consistent type across both sources.
+
+        The two sources disagree on types for the same property: PUG-REST
+        returns ``MolecularWeight`` as the string ``"180.16"`` while the local
+        database holds it as a float, and a table assembled from both sources
+        has to be usable as one table.
+
+        Args:
+            name: Property name.
+            value: Raw value from either source.
+
+        Returns:
+            The value cast to the type recorded in ``_PROPERTY_CASTS``, or
+            unchanged when no cast is recorded or the cast does not apply. An
+            uncastable value is returned as-is rather than discarded: a
+            surprising value is more useful to the caller than a silent hole.
+        """
+        cast = cls._PROPERTY_CASTS.get(name)
+        if cast is None:
+            return value
+        try:
+            return cast(value)
+        except (TypeError, ValueError):
+            logging.debug("Could not cast %s=%r with %s", name, value, cast.__name__)
+            return value
+
     def get_stats(self) -> Dict[str, int]:
         """
         Get database statistics.

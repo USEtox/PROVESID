@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Bulk property retrieval.** `PubChemAPI.get_properties_for_cids(cids,
+  properties)` asks PubChem about a whole list of compounds in one request
+  rather than one request per compound: 450 compounds now cost 3 requests and
+  about 2 seconds, where the per-CID loop cost 450 requests and a minute and a
+  half. Lists are split into `PROPERTY_CHUNK_SIZE` (200) CIDs per request, so a
+  retry redoes a chunk rather than everything.
+
+- **POST for long identifier lists.** PUG-REST caps a URL at roughly 2000
+  characters, which a few hundred CIDs exceed. `_build_post_url` builds the
+  same endpoint without the identifier segment, and the bulk property path
+  switches to POST — identifiers in the body — once the list outgrows
+  `URL_IDENTIFIER_LIMIT`. Below that it keeps using GET, which PubChem prefers.
+
+- **Offline-first property lookup.** `PubChemID.properties(cid, properties)`
+  reads the local SQLite database first and consults PUG-REST only for what it
+  cannot answer, per the two-stage lookup the development principles ask for.
+  For most property work this means no network traffic at all: 473 of 1000 low
+  CIDs were served from disk in the same call, and the remaining 527 in three
+  batched requests.
+
+  `properties_for_cids()` does the same for a list, and `properties_table()`
+  returns a DataFrame with a row for every CID asked about. Each record carries
+  a `Source` key reading `offline`, `online` or (in the table) `missing`.
+  `use_online_fallback=False` keeps a lookup strictly local.
+
+  `PubChemID.OFFLINE_PROPERTIES` maps the 16 property names the database can
+  answer — formula, weight, exact mass, isomeric SMILES, InChI, InChIKey, IUPAC
+  name, title, XLogP, TPSA, complexity, charge and the H-bond, rotatable-bond
+  and heavy-atom counts — to their columns. Anything else
+  (`MonoisotopicMass`, `ConnectivitySMILES`, the 3D descriptors, the patent and
+  literature counts) is online-only, and asking for one sends the whole request
+  online rather than assembling a row from two different PubChem snapshots.
+
+  A property with no value is absent from the result rather than `None`, which
+  is how PubChem reports it — `'XLogP' not in result` means PubChem computes no
+  logP for that compound, not that the lookup fell short. Values are normalised
+  to one type across both sources, since PUG-REST returns `MolecularWeight` as
+  a string where the database holds a float.
+
+- `PubChemID(api=...)` accepts the `PubChemAPI` used for fallback; one is
+  created on first use otherwise, so a strictly offline session never builds
+  one.
+
 ### Fixed
 - **The persistent cache never hit across processes.** `CacheManager._get_cache_key`
   built its key with `json.dumps(..., default=str)` over the call's arguments.
@@ -78,6 +122,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Removed an unreachable `return cache_info` left behind in
   `PubChemAPI.get_cache_info`.
+
+### Changed
+- **`get_compound_properties_batch` now issues one request per 200 CIDs**
+  instead of one per CID, having been rebuilt on `get_properties_for_cids`. The
+  return shape is unchanged — one dict per CID with the properties plus
+  `success`, `cid` and `error` — except that a CID PubChem has no record of is
+  now reported with `success=False` and `"No such compound"` rather than
+  whatever the single-CID path happened to return. The `output_format`
+  parameter is gone: only JSON can be reshaped into per-CID dicts, so the
+  parameter promised something it never delivered. Synonyms are not included,
+  as they need a request per compound; the method never returned them.
 
 ## [0.7.0] - 2026-08-17
 

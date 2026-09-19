@@ -1023,3 +1023,100 @@ the key made the pre-existing defect reproducible, which is how it got found.
   design, so one bad property does not abort a batch. Documented as such; a
   proper `errors` mapping fits better once Workstream A lands.
 - The 14 `clear_<svc>_cache` / `get_<svc>_cache_info` pairs are untouched (§5 B.7).
+
+## 18. Landed on 2026-09-19 — bulk and offline-first properties
+
+Item 3 of the PubChem assessment: the property layer asked PubChem about one
+compound at a time and never consulted the local database it ships with.
+
+### 18.1 One request per compound (new)
+
+`get_compound_properties_batch` looped over `get_compound_properties`, so N
+compounds cost N requests plus the 0.2 s pause between each. PubChem's property
+endpoint has always accepted a comma-separated CID list and answered the whole
+set in one payload.
+
+`PubChemAPI.get_properties_for_cids(cids, properties)` does that, in chunks of
+`PROPERTY_CHUNK_SIZE` (200). Measured against the live API: 450 CIDs in 3
+requests and 2.1 s, versus 450 requests and roughly 95 s for the loop. The chunk
+is deliberately well below what PubChem tolerates — a 500-CID POST returns fine,
+throttling green — because a smaller chunk wastes less work on a retry.
+
+`get_compound_properties_batch` is now a reshaping layer over it and keeps its
+return contract, with one improvement: a CID PubChem has no record of is
+reported with `success=False` instead of being dropped, so the result can be
+zipped against the input. Its `output_format` parameter is gone; only JSON was
+ever reshapeable into per-CID dicts.
+
+### 18.2 Long identifier lists need POST (new)
+
+PUG-REST caps a URL at about 2000 characters. Two hundred CIDs is roughly 1400,
+so the chunk size alone nearly reaches it, and any larger `chunk_size` a caller
+passes would break. `_build_post_url` builds the endpoint without the identifier
+segment and `_get_property_rows` switches to POST above
+`URL_IDENTIFIER_LIMIT` (1600), identifiers in the body. Below the limit it stays
+with GET, which PubChem prefers and which caches at intermediaries.
+
+### 18.3 The local database was never consulted for properties (§2/§9, new)
+
+`pubchem_id.db` holds 1.59M compounds and its `compounds` table carries 16
+columns that are PubChem properties under another name — `mf`, `mw`,
+`polararea`, `xlogp`, `exactmass` and so on. Nothing in the package read them:
+every property lookup went to the network, including for the 1.59M compounds
+already on disk.
+
+`PubChemID.properties()`, `.properties_for_cids()` and `.properties_table()`
+implement the two-stage lookup from §9. Routing rules:
+
+- A CID with no local row goes online.
+- A requested property with no local column sends the *whole* request online.
+  Splitting the property list would cost the same traffic — that property needs
+  a request either way — and would return a row assembled from two different
+  PubChem snapshots.
+- `use_online_fallback=False` is a hard guarantee; the tests assert no request
+  is made.
+
+Measured: 473 of 1000 low CIDs served from disk, the remaining 527 in three
+batched requests, 1.9 s total. Strictly offline, 5000 CIDs resolved in 0.05 s.
+
+Three details the schema forced:
+
+- The `smiles` column is the **isomeric** SMILES, verified against CID 5793
+  (D-glucose): the column carries the stereocentres, matching what PubChem now
+  calls `SMILES`. `ConnectivitySMILES` is not stored and stays online-only.
+- A NULL column means the compound genuinely has no such value, not a gap in the
+  export. Checked against the live API for five CIDs whose `xlogp` is NULL
+  (233, 234, 271, 533, 544): PubChem omits `XLogP` from its own answer for all
+  five. So a NULL is reported as an absent key — matching PubChem, which omits
+  a property rather than reporting it as null — and does not trigger a fallback.
+- The two sources disagree on types: PUG-REST returns `MolecularWeight` and
+  `ExactMass` as strings, SQLite as floats. `_cast_property` normalises both, or
+  a table assembled from the two sources would not be usable as one table. An
+  uncastable value passes through unchanged rather than being dropped.
+
+### 18.4 Tests, docs, example
+
+`tests/test_pubchem_properties.py` — 27 tests, fully offline. The transport is a
+recorder, so a test asserts both the answer and *how many requests it took*,
+which is the only way to test a batching or an offline-first decision. The local
+database is a temporary SQLite file with the real schema, holding a complete
+compound, one with a NULL `xlogp`, and deliberately omitting a CID so it can
+stand for an online-only one.
+
+`docs/api/pubchem.md` gained "Properties Without the Network";
+`examples/pubchem_properties_demo.py` runs all of it against the live API and
+prints which source answered.
+
+### 18.5 Still open
+
+- Item 4 of the assessment is untouched: `pubchemview` still has two divergent
+  parsers and no numeric/unit normalisation, so an experimental property comes
+  back as the string `"140 °C"`. That is the remaining sense in which "the API
+  for retrieving chemical properties is incomplete".
+- `PubChemID.properties()` takes CIDs only. Resolving a CAS or an InChIKey to a
+  CID first is already offline (`cas_to_cid` and friends), but a caller has to
+  chain the two calls.
+- The offline route does not serve synonyms, though the database has a
+  `synonyms` table; `get_compound_properties(include_synonyms=True)` is still
+  online-only.
+

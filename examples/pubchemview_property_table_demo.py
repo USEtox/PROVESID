@@ -3,10 +3,6 @@
 Demonstration of the new get_property_table functionality
 """
 
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
-
 from provesid import get_property_table, PubChemView
 
 def demo_property_table():

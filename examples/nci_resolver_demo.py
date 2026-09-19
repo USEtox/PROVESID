@@ -4,10 +4,6 @@ Demonstration script for the NCI Chemical Identifier Resolver
 Shows practical usage examples for chemical identifier conversion
 """
 
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
-
 from provesid.resolver import (
     NCIChemicalIdentifierResolver,
     nci_cas_to_mol,

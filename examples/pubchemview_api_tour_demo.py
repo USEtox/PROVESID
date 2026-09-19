@@ -4,10 +4,6 @@ Demonstration script for the PubChem PUG View implementation
 Shows practical usage examples for extracting experimental properties
 """
 
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
-
 from provesid.pubchemview import (
     PubChemView, 
     PropertyData,

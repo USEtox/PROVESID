@@ -234,22 +234,15 @@ def chebi():
 
 @pytest.fixture(scope="module")
 def all_sources():
-    """Skip unless every offline source Search resolves against is present."""
+    """Skip unless every offline source Search targets by default is present.
+
+    ZeroPM is deliberately not among them — see :class:`~provesid.Search` and
+    its ``use_zeropm`` flag.
+    """
     s = Search("cas", show_progress=False)
     s._ensure_clients()
-    missing = [
-        key
-        for key, client in [
-            ("chebi", s._chebi),
-            ("comptox", s._comptox),
-            ("pubchem", s._pubchem),
-            ("zeropm", s._zeropm),
-            ("chembl", s._chembl),
-        ]
-        if client is None
-    ]
-    if missing:  # pragma: no cover - environment dependent
-        pytest.skip(f"Offline sources unavailable: {', '.join(missing)}")
+    if s.sources_unavailable:  # pragma: no cover - environment dependent
+        pytest.skip(f"Offline sources unavailable: {', '.join(s.sources_unavailable)}")
     return s
 
 

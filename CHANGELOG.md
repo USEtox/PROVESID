@@ -220,6 +220,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameter promised something it never delivered. Synonyms are not included,
   as they need a request per compound; the method never returned them.
 
+- **`Search` no longer targets the ZeroPM database.** ZeroPM harvests regulatory
+  inventories rather than curating compounds, so its name→structure rows are
+  noisier than ChEBI/CompTox/PubChem/ChEMBL — while counting as a full
+  independent vote in the corroboration ranking that 0.6.0 made drive
+  `confidence` and `min_source_support`. The resolver now queries four sources
+  by default, and ZeroPM's database is not even opened.
+
+  The `ZeroPM` class is untouched and stays fully available for direct use; only
+  `Search` stopped consulting it. Pass `use_zeropm=True` to restore the previous
+  five-source behaviour. A `zeropm=` client handed to the constructor is ignored
+  (with a warning) unless `use_zeropm=True` is set too, so "disabled" does not
+  depend on how the caller happened to build the instance.
+
+  Consequences: `source_details` no longer carries a `"ZeroPM"` entry,
+  `sources_available` lists four keys, and confidence values shift slightly
+  wherever ZeroPM used to vote. Fuzzy name queries lose recall — ZeroPM was the
+  only source doing true fuzzy *retrieval*, so a typo sharing no substring with
+  the real name (e.g. `"caffiene"`) now returns no match instead of a guess.
+  Precision is unaffected: a misspelling still never resolves to a *different*
+  compound, which `tests/test_search_precision_regression.py` now asserts
+  explicitly for the default source set.
+
+- `Search._SOURCE_KEYS` is now a per-instance attribute reflecting the sources
+  that instance targets; the full catalogue lives in `Search._ALL_SOURCE_KEYS`
+  and the default set in `Search._DEFAULT_SOURCE_KEYS`.
+
 ## [0.7.0] - 2026-08-17
 
 ### Fixed

@@ -19,8 +19,10 @@ cas_list = [
 ]
 
 # Create a Search instance for CAS number lookup.
-# Clients (ChEBI, CompTox, PubChemID, ZeroPM, ChEMBL) are initialised
-# lazily on the first call to search().
+# Clients (ChEBI, CompTox, PubChemID, ChEMBL) are initialised lazily on the
+# first call to search().  ZeroPM is not targeted by default — its
+# inventory-derived rows are less reliable than the other four — but it can be
+# added back with Search("cas", use_zeropm=True).
 s = Search("cas", show_progress=True)
 
 df = s.search(cas_list)

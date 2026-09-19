@@ -229,14 +229,20 @@ _ASPIRIN_CHEMBL = {
 
 
 def _make_search(**clients) -> Search:
-    """Build a Search("cas") instance injecting the given stub clients."""
+    """Build a Search("cas") instance injecting the given stub clients.
+
+    ZeroPM is not one of the sources Search targets by default, so it is wired
+    in (and opted into) only when a ``zeropm`` stub is passed explicitly.
+    """
+    zeropm = clients.get("zeropm")
     return Search(
         "cas",
         show_progress=False,
+        use_zeropm=zeropm is not None,
         chebi=clients.get("chebi", _ChebiStub()),
         comptox=clients.get("comptox", _CompToxStub()),
         pubchem=clients.get("pubchem", _PubChemStub()),
-        zeropm=clients.get("zeropm", _ZeroPMStub()),
+        zeropm=zeropm,
         chembl=clients.get("chembl", _ChEMBLStub()),
     )
 
@@ -514,6 +520,7 @@ class TestResolveName:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -529,6 +536,7 @@ class TestResolveName:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -543,6 +551,7 @@ class TestResolveName:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -562,6 +571,7 @@ class TestResolveSmiles:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -575,6 +585,7 @@ class TestResolveSmiles:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -589,6 +600,7 @@ class TestResolveSmiles:
             chebi=_ChebiStub(),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -606,6 +618,7 @@ class TestResolveSmiles:
             chebi=_ChebiStub(),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -630,6 +643,7 @@ class TestResolveInchi:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(_ASPIRIN_PUBCHEM),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -643,6 +657,7 @@ class TestResolveInchi:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -656,6 +671,7 @@ class TestResolveInchi:
             chebi=_ChebiStub(),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -678,6 +694,7 @@ class TestResolveInchikey:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -691,6 +708,7 @@ class TestResolveInchikey:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -704,6 +722,7 @@ class TestResolveInchikey:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -720,6 +739,7 @@ class TestResolveInchikey:
             chebi=_ChebiStub(),  # no exact match
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -735,6 +755,7 @@ class TestResolveInchikey:
             chebi=_ChebiStub(),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -755,6 +776,7 @@ class TestResolveDtxsid:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(_ASPIRIN_COMPTOX),
             pubchem=_PubChemStub(_ASPIRIN_PUBCHEM),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -768,6 +790,7 @@ class TestResolveDtxsid:
             chebi=_ChebiStub(),
             comptox=_CompToxStub(_ASPIRIN_COMPTOX),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -781,6 +804,7 @@ class TestResolveDtxsid:
             chebi=_ChebiStub(),
             comptox=_CompToxStub(_ASPIRIN_COMPTOX),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -800,6 +824,7 @@ class TestResolveFormula:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(_ASPIRIN_COMPTOX),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -814,6 +839,7 @@ class TestResolveFormula:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(_ASPIRIN_COMPTOX),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -828,6 +854,7 @@ class TestResolveFormula:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -980,12 +1007,22 @@ class TestSourceDetails:
         sd = df.iloc[0]["source_details"]
         assert len(sd["ChEBI"]["fields"]) > 0
 
-    def test_all_five_sources_present_in_source_details(self):
+    def test_all_default_sources_present_in_source_details(self):
         s = _make_search()
         df = s.search("50-78-2")
         sd = df.iloc[0]["source_details"]
-        for src in ["ChEBI", "CompTox", "PubChemID", "ZeroPM", "ChEMBL"]:
+        for src in ["ChEBI", "CompTox", "PubChemID", "ChEMBL"]:
             assert src in sd
+
+    def test_zeropm_absent_from_source_details_by_default(self):
+        s = _make_search()
+        df = s.search("50-78-2")
+        assert "ZeroPM" not in df.iloc[0]["source_details"]
+
+    def test_zeropm_present_in_source_details_when_opted_in(self):
+        s = _make_search(zeropm=_ZeroPMStub())
+        df = s.search("50-78-2")
+        assert "ZeroPM" in df.iloc[0]["source_details"]
 
     def test_smiles_field_recorded(self):
         s = _make_search(chebi=_ChebiStub(_ASPIRIN_CHEBI))
@@ -1007,6 +1044,7 @@ class TestSaltStrippingIntegration:
             chebi=_ChebiStub(),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -1021,6 +1059,7 @@ class TestSaltStrippingIntegration:
             chebi=_ChebiStub(),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -1035,6 +1074,7 @@ class TestSaltStrippingIntegration:
             chebi=_ChebiStub(),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -1115,8 +1155,8 @@ class TestMultiSourceConsensus:
 class TestSourceAvailability:
     """A source that fails to initialise must not vanish silently.
 
-    Since 0.6.0 corroboration drives confidence, so a run missing one of the five
-    databases scores every hit lower than a full-source run and is harder to pass
+    Since 0.6.0 corroboration drives confidence, so a run missing one of the
+    targeted databases scores every hit lower than a full-source run and is harder to pass
     through ``min_source_support``.  A degraded run therefore has to stay
     identifiable after the fact — this went unnoticed when EBI's moving
     ``latest/`` directory made the pinned ChEMBL archive 404 (2026-08-04).
@@ -1125,7 +1165,7 @@ class TestSourceAvailability:
     def test_all_sources_reported_available(self):
         s = _make_search()
         s.search("50-78-2")
-        assert s.sources_available == list(Search._SOURCE_KEYS)
+        assert s.sources_available == list(Search._DEFAULT_SOURCE_KEYS)
         assert s.sources_unavailable == []
 
     def test_missing_source_is_recorded(self):
@@ -1135,6 +1175,7 @@ class TestSourceAvailability:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(_ASPIRIN_COMPTOX),
             pubchem=_PubChemStub(),
+            use_zeropm=True,
             zeropm=_ZeroPMStub(),
             # chembl left out — as when its database cannot be initialised
         )
@@ -1145,7 +1186,7 @@ class TestSourceAvailability:
     def test_availability_is_attached_to_the_result_frame(self):
         s = _make_search()
         df = s.search("50-78-2")
-        assert df.attrs["sources_available"] == list(Search._SOURCE_KEYS)
+        assert df.attrs["sources_available"] == list(Search._DEFAULT_SOURCE_KEYS)
         assert df.attrs["sources_unavailable"] == []
 
     def test_availability_survives_enrich(self):
@@ -1160,9 +1201,59 @@ class TestSourceAvailability:
         with caplog.at_level("WARNING", logger="provesid.search"):
             s.search("50-78-2")
             s.search("50-78-2")
-        degraded = [r for r in caplog.records if "of 5 sources" in r.getMessage()]
+        degraded = [r for r in caplog.records if "of 4 sources" in r.getMessage()]
         assert len(degraded) == 1
         assert "ChEMBL" in degraded[0].getMessage()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ZeroPM opt-in
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestZeroPMOptIn:
+    """ZeroPM must stay off the target list unless explicitly asked for.
+
+    ZeroPM aggregates regulatory inventories rather than curating compounds, so
+    its name→structure rows are noisier than the other four sources while
+    counting as a full independent vote in the corroboration ranking.  It is
+    excluded by default; ``use_zeropm=True`` restores it.
+    """
+
+    def test_zeropm_not_targeted_by_default(self):
+        s = Search("cas", show_progress=False)
+        assert "zeropm" not in s._SOURCE_KEYS
+        assert s.use_zeropm is False
+
+    def test_zeropm_targeted_when_opted_in(self):
+        s = Search("cas", show_progress=False, use_zeropm=True)
+        assert "zeropm" in s._SOURCE_KEYS
+        assert s.use_zeropm is True
+
+    def test_zeropm_client_ignored_when_not_opted_in(self, caplog):
+        with caplog.at_level("WARNING", logger="provesid.search"):
+            s = Search("cas", show_progress=False, zeropm=_ZeroPMStub())
+        assert s._zeropm is None
+        assert any("use_zeropm=False" in r.getMessage() for r in caplog.records)
+
+    def test_zeropm_client_kept_when_opted_in(self):
+        stub = _ZeroPMStub()
+        s = Search("cas", show_progress=False, use_zeropm=True, zeropm=stub)
+        assert s._zeropm is stub
+
+    def test_zeropm_absent_from_reported_availability(self):
+        s = _make_search()
+        s.search("50-78-2")
+        assert "zeropm" not in s.sources_available
+        assert "zeropm" not in s.sources_unavailable
+
+    def test_zeropm_contributes_only_when_opted_in(self):
+        """The same ZeroPM row reaches the result only with ``use_zeropm=True``."""
+        without = _make_search().search("50-78-2").iloc[0]["source_details"]
+        with_zpm = _make_search(
+            zeropm=_ZeroPMStub(_ASPIRIN_ZEROPM)
+        ).search("50-78-2").iloc[0]["source_details"]
+        assert "ZeroPM" not in without
+        assert with_zpm["ZeroPM"]["found"] is True
 
 
 @pytest.mark.integration

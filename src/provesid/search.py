@@ -1,9 +1,17 @@
 """PROVESID Search module — unified chemical identifier resolver.
 
 Provides the :class:`Search` class for resolving chemical identifiers across multiple
-offline databases (ChEBI, CompTox, PubChemID, ZeroPM, ChEMBL) with structure-aware
+offline databases (ChEBI, CompTox, PubChemID, ChEMBL) with structure-aware
 matching, confidence scoring, fuzzy name search, Tanimoto similarity search,
 InChIKey-skeleton matching, and salt/solvent stripping.
+
+ZeroPM is **not** among the databases the resolver targets by default.  Its records
+are harvested from regulatory inventories rather than curated compound-by-compound,
+so its name→structure mappings are noisier than the other four sources and, being
+counted as an independent vote, they used to push wrong structures up the
+corroboration ranking.  The ZeroPM client itself is untouched and remains available
+as :class:`~provesid.ZeroPM`; pass ``use_zeropm=True`` to let :class:`Search` query
+it again.
 
 Supported identifier types:
 
@@ -339,8 +347,10 @@ class Search:
     """Unified chemical identifier resolver using offline databases.
 
     Accepts any single identifier type — CAS, name, SMILES, InChI, InChIKey,
-    DTXSID, or molecular formula — and queries ChEBI, CompTox, PubChemID,
-    ZeroPM, and ChEMBL to build a harmonised result.
+    DTXSID, or molecular formula — and queries ChEBI, CompTox, PubChemID and
+    ChEMBL to build a harmonised result.  ZeroPM is excluded by default because
+    its inventory-derived records are less reliable than the other four sources;
+    ``use_zeropm=True`` opts back in.
 
     Features:
 
@@ -388,6 +398,8 @@ class Search:
         min_source_support (int): Minimum number of databases that must carry a
             structure for it to be returned (0 disables the filter).
         use_opsin (bool): Enable PYOPSIN IUPAC→structure anchoring (needs Java).
+        use_zeropm (bool): Include the ZeroPM inventory among the queried
+            sources (off by default).
         top_k_per_source (int): Candidates pulled per source before pooling.
         cluster_by_skeleton (bool): Merge stereo/charge variants when clustering.
         fuzzy_score_cutoff (float): Fuzzy score cut-off in [0, 100].
@@ -425,7 +437,14 @@ class Search:
         ["cas", "name", "smiles", "inchi", "inchikey", "dtxsid", "formula"]
     )
 
-    _SOURCE_KEYS: List[str] = ["chebi", "comptox", "pubchem", "zeropm", "chembl"]
+    #: Every source the resolver knows how to query.
+    _ALL_SOURCE_KEYS: List[str] = ["chebi", "comptox", "pubchem", "zeropm", "chembl"]
+
+    #: Sources queried unless ``use_zeropm=True`` re-adds ZeroPM.  ZeroPM is a
+    #: regulatory-inventory harvest rather than a curated compound database, so
+    #: its rows are kept out of the default corroboration vote.
+    _DEFAULT_SOURCE_KEYS: List[str] = ["chebi", "comptox", "pubchem", "chembl"]
+
     _SOURCE_DISPLAY: Dict[str, str] = {
         "chebi": "ChEBI",
         "comptox": "CompTox",
@@ -455,6 +474,7 @@ class Search:
         min_source_support: int = 0,
         use_opsin: bool = False,
         opsin_jar_fpath: str = "default",
+        use_zeropm: bool = False,
         top_k_per_source: int = 5,
         cluster_by_skeleton: bool = True,
         fuzzy_score_cutoff: float = 80.0,
@@ -506,6 +526,16 @@ class Search:
                 matching (with a one-time warning) when unavailable.  Defaults
                 to ``False``.
             opsin_jar_fpath: ``jar_fpath`` passed to :class:`~provesid.PYOPSIN`.
+            use_zeropm: Include the ZeroPM inventory among the queried sources.
+                Defaults to ``False``: ZeroPM aggregates regulatory inventories
+                instead of curating compounds, so its name→structure rows are
+                noisier than ChEBI/CompTox/PubChem/ChEMBL yet carried the same
+                weight in the corroboration vote.  Set to ``True`` to restore
+                the old five-source behaviour — chiefly worthwhile for fuzzy
+                name queries, since ZeroPM is the only source that does true
+                fuzzy *retrieval* (see :meth:`_candidate_pool_from_name`).
+                While ``False``, a ``zeropm`` client passed to the constructor
+                is ignored.
             top_k_per_source: Number of candidate rows pulled from each source
                 before pooling / clustering.  Defaults to ``5``.
             cluster_by_skeleton: Merge stereo/charge/isotope variants when
@@ -535,7 +565,8 @@ class Search:
                 ``None`` the client is created lazily on first use.
             comptox: Pre-initialised :class:`~provesid.CompToxID` client.
             pubchem: Pre-initialised :class:`~provesid.PubChemID` client.
-            zeropm: Pre-initialised :class:`~provesid.ZeroPM` client.
+            zeropm: Pre-initialised :class:`~provesid.ZeroPM` client.  Only
+                used when ``use_zeropm=True``.
             chembl: Pre-initialised :class:`~provesid.CheMBL` client.
 
         Raises:
@@ -562,6 +593,7 @@ class Search:
         self.min_source_support = max(0, int(min_source_support))
         self.use_opsin = bool(use_opsin)
         self.opsin_jar_fpath = opsin_jar_fpath
+        self.use_zeropm = bool(use_zeropm)
         self.top_k_per_source = max(1, int(top_k_per_source))
         self.cluster_by_skeleton = bool(cluster_by_skeleton)
         self.fuzzy_score_cutoff = float(fuzzy_score_cutoff)
@@ -581,6 +613,21 @@ class Search:
         # OPSIN client — created lazily; disabled for the session on failure.
         self._opsin: Optional[PYOPSIN] = None
         self._opsin_available: bool = use_opsin
+
+        # ZeroPM is off the target list unless explicitly re-enabled, so an
+        # instance that was handed a client still must not query it — otherwise
+        # "disabled" would depend on how the caller happened to construct us.
+        if zeropm is not None and not self.use_zeropm:
+            log.warning(
+                "A ZeroPM client was passed but use_zeropm=False; ZeroPM will not "
+                "be queried. Pass use_zeropm=True to include it."
+            )
+            zeropm = None
+
+        self._SOURCE_KEYS: List[str] = (
+            list(self._ALL_SOURCE_KEYS) if self.use_zeropm
+            else list(self._DEFAULT_SOURCE_KEYS)
+        )
 
         # Client references — may be None until _ensure_clients() is called.
         self._chebi = chebi
@@ -608,16 +655,21 @@ class Search:
         instance.  Individual clients that fail to initialise are set to ``None``
         and a warning is logged; the search continues with the remaining sources
         and :attr:`sources_available` / :attr:`sources_unavailable` record which
-        ones, so a four-source run stays distinguishable from a five-source one.
+        ones, so a three-source run stays distinguishable from a four-source one.
+
+        Only the sources in :attr:`_SOURCE_KEYS` are constructed, so ZeroPM's
+        (large) database is never even opened unless ``use_zeropm=True``.
         """
         if not self._clients_initialized:
-            for attr, factory in [
-                ("_chebi", ChebiSDF),
-                ("_comptox", CompToxID),
-                ("_pubchem", PubChemID),
-                ("_zeropm", ZeroPM),
-                ("_chembl", CheMBL),
-            ]:
+            factories: Dict[str, Any] = {
+                "chebi": ChebiSDF,
+                "comptox": CompToxID,
+                "pubchem": PubChemID,
+                "zeropm": ZeroPM,
+                "chembl": CheMBL,
+            }
+            for key in self._SOURCE_KEYS:
+                attr, factory = f"_{key}", factories[key]
                 if getattr(self, attr) is None:
                     try:
                         setattr(
@@ -1256,8 +1308,8 @@ class Search:
     def _resolve_cas(self, cas: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """Resolve a CAS Registry Number into a unified identifier record.
 
-        Queries ChEBI → CompTox → PubChemID → ZeroPM with waterfall priority,
-        then enriches via ChEMBL.
+        Queries ChEBI → CompTox → PubChemID (→ ZeroPM when ``use_zeropm=True``)
+        with waterfall priority, then enriches via ChEMBL.
 
         Args:
             cas: CAS Registry Number string.
@@ -1368,8 +1420,8 @@ class Search:
 
         Pulls up to ``self.top_k_per_source`` candidates from each source.
         When ``self.fuzzy`` is enabled and the exact pass yields no strong
-        match, the search is widened with non-exact matching and ZeroPM's
-        fuzzy ``query_similar_name``.
+        match, the search is widened with non-exact matching and — only when
+        ``use_zeropm=True`` — ZeroPM's fuzzy ``get_id_table_from_similar_name``.
 
         Args:
             name: Chemical name to search.
@@ -1486,7 +1538,9 @@ class Search:
 
             # ZeroPM is the only source that does true fuzzy *retrieval* (the
             # others are substring-matched with exact=False), so it is the one
-            # that can reach a typo like "asprin" -> "aspirin".
+            # that can reach a typo like "asprin" -> "aspirin".  It is off
+            # unless use_zeropm=True, which is the cost of dropping it: a typo
+            # that shares no substring with the real name stays unresolved.
             if self._zeropm is not None:
                 try:
                     table = self._zeropm.get_id_table_from_similar_name(
@@ -2498,7 +2552,7 @@ class Search:
         consensus_source, source_match_scores, match_score = _compute_consensus(per_source)
         consensus_candidate = per_source.get(consensus_source) if consensus_source else None
 
-        for source_key in ["chebi", "comptox", "pubchem", "zeropm"]:
+        for source_key in (k for k in self._SOURCE_KEYS if k != "chembl"):
             candidate = per_source.get(source_key)
             if _candidate_compatible_with_consensus(
                 candidate, consensus_candidate, self.consensus_compat_threshold

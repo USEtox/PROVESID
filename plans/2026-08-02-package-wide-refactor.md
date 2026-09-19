@@ -1288,3 +1288,85 @@ real dataclass, a `ParsedValue` field table, and worked examples.
 - `PubChemID.properties()` covers computed properties offline; experimental
   ones have no offline source at all, so PUG-View is still always a network
   call.
+
+---
+
+## 20. Landed on 2026-09-19 — `Search` stopped targeting ZeroPM
+
+Not planned as such: it came out of §5 B.2. Collapsing the five source ladders
+first required knowing whether all five rungs deserve a vote. One does not.
+
+### 20.1 An inventory harvest voting as a curated source
+
+Since 0.6.0 `confidence` and `min_source_support` are driven by corroboration:
+each source that carries a structure is one independent vote. ZeroPM was one of
+the five, but it is not the same kind of thing as the other four — it aggregates
+regulatory inventories rather than curating compounds, so its name→structure
+rows are materially noisier while weighing exactly as much as ChEBI's. A wrong
+ZeroPM row could out-vote a right one and, at `min_source_support ≥ 2`, admit a
+structure no curated source backed.
+
+`Search` now targets four sources — ChEBI, CompTox, PubChemID, ChEMBL — and
+`use_zeropm=True` restores the previous five. The `ZeroPM` class is untouched
+and stays fully available for direct use; only the resolver stopped consulting
+it, and with it off, ZeroPM's database is never even opened.
+
+### 20.2 "Disabled" must not depend on how the caller built the instance
+
+A `zeropm=` client handed to the constructor is now ignored, with a warning,
+unless `use_zeropm=True` is set too. Otherwise `Search(zeropm=client)` would
+have quietly queried a source the default says is off.
+
+`_SOURCE_KEYS` became a per-instance attribute holding the sources that instance
+targets; the catalogue is `_ALL_SOURCE_KEYS` and the default set
+`_DEFAULT_SOURCE_KEYS`. `_ensure_clients` iterates `_SOURCE_KEYS` instead of a
+hard-coded list of five, and the consensus pass in `_finalize` does the same
+rather than naming four keys inline.
+
+### 20.3 What it costs: recall on typos, not precision
+
+ZeroPM is the only source doing true fuzzy *retrieval* — the others are
+substring-matched with `exact=False` — so it was the one that could reach a typo
+sharing no usable substring with the real name. `"caffiene"` now returns no
+match by default instead of caffeine.
+
+That is a recall loss, and the regression suite now says so explicitly rather
+than leaving it to be rediscovered. `test_search_precision_regression.py` runs
+the misspelling table twice:
+
+- `test_misspelled_name_resolves_to_the_right_compound` — with `use_zeropm=True`,
+  asserting the typo still resolves (unchanged behaviour, now opt-in).
+- `test_misspelling_never_resolves_to_a_wrong_compound` — on the default four,
+  asserting a typo resolves correctly *or not at all*. Empty is an accepted
+  outcome; a different compound never is.
+
+Precision is what the four-source default protects, and that is the test that
+protects it.
+
+### 20.4 Consequences for callers
+
+- `source_details` no longer carries a `"ZeroPM"` entry.
+- `sources_available` lists four keys; the degraded-run warning says "of 4
+  sources".
+- Confidence values shift slightly wherever ZeroPM used to vote.
+
+### 20.5 Tests and docs
+
+`tests/test_search.py` gained `TestZeroPMOptIn` (6 tests: not targeted by
+default, targeted when opted in, client ignored / kept, absent from reported
+availability, contributes only when opted in) and two `source_details` cases.
+The two source-availability fixtures in `test_search_precision_regression.py`
+and `test_search_scoring_truth.py` stopped hard-coding the five client
+attributes and now read `sources_unavailable`, so they follow the target list
+instead of restating it.
+
+208 tests pass across the three search files. `docs/api/search.md` gained a
+"Targeted sources" section, and the CAS example's comment was corrected.
+
+### 20.6 Still open
+
+- §5 B.2 itself — the source ladders are still ten copies of the same shape, now
+  four rungs deep instead of five, and `sources.py` does not exist.
+- Fuzzy retrieval has no home among the default sources. If typo recall matters
+  later, it wants a real fuzzy index over the curated names, not ZeroPM's rows
+  as a proxy for one.

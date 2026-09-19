@@ -1,6 +1,13 @@
 # chemid __init__.py
 __version__ = "0.7.0"
 
+from .http import (
+    HTTPClient,
+    ServiceError,
+    NotFoundError,
+    RateLimitError,
+    ServiceTimeoutError,
+)
 from .cascommonchem import CASCommonChem
 from .chebi import ChEBI, ChEBIError, ChebiSDF, get_chebi_entity, search_chebi
 from .chembl import CheMBL, ChEMBLError

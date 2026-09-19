@@ -1460,3 +1460,148 @@ HTTP 503 ServerBusy instead of 404, which the same tests hit on a clean tree.
   `Search` notebook. It was deleted instead, because workstream E deletes the
   folder and replaces it with `search/01_search_basics.ipynb` and its siblings.
   Until step 15 there is no notebook covering that ground.
+
+---
+
+## 22. Landed on 2026-09-19 — step 3, the shared HTTP layer (§4 Workstream A)
+
+`src/provesid/http.py` exists, and `resolver.py` and `pubchemview.py` run on it.
+
+### 22.1 §4's sketch was written before §17–19 and would have undone them
+
+§4 proposes an `HTTPClient` with a fixed policy: "map 404 → `NotFoundError`,
+exhausted retries → `error_cls`". That was a fair reading of the code in
+August. It is not a fair reading of the code §17.6 left behind, which decides
+what a PubChem response means by reading `Fault.Code` out of the **body**,
+because PubChem sheds load behind a 404 as readily as behind a 503. Migrating
+`pubchemview` onto the sketch as written would have thrown that away and
+re-cached outages as absence — the exact defect §17.6 was written to fix.
+
+So the policy is shared and the *reading* is pluggable. `HTTPClient` takes a
+`classify` callback mapping a response to an `Outcome` — `OK`, `ABSENT`,
+`RETRY` or `FATAL` — and that is the only part a service is expected to supply.
+`default_classify` reads the status alone, which is right for a service that
+uses status codes honestly.
+
+### 22.2 CACTUS lies about its status code too (new)
+
+Running the migrated resolver made two live tests take 10.1 s and 9.6 s, up
+from well under a second. The cause is worth recording: **the NCI resolver
+answers an identifier it cannot resolve with HTTP 500 and a body of
+`<h1>Page not found (404)</h1>`.** Verified live on 2026-09-19 —
+`this_is_definitely_not_a_chemical_12345` and `水` both answer 500/404-body,
+while `α-glucose` answers 200.
+
+Under the old code that was `NCIResolverError("Internal server error")`, raised
+on the first attempt, so nobody noticed. Give the same service a retry loop and
+it spends four requests and seven seconds of back-off learning a permanent
+answer.
+
+`nci_classify` reads the body: a 5xx carrying that page is `ABSENT`, every
+other 5xx keeps its retryable reading. The two tests are back to 0.57 s, and
+the exception is now `NCIResolverNotFoundError` — which is what it always
+meant, and a subclass of `NCIResolverError`, so no caller notices.
+
+That makes two of the three services migrated so far whose status codes cannot
+be believed. The classifier hook is not a hypothetical extension point; it is
+the common case.
+
+### 22.3 What the transport actually does
+
+- Paces requests at `min_interval`, **retries included**. A service already
+  shedding load must not be asked again faster than a healthy one, so the
+  pacing sits inside the retry loop rather than in front of it.
+- Retries `RETRY`, `requests.Timeout` and `requests.ConnectionError`, at most
+  `max_retries` times after the first attempt.
+- Backs off `backoff * 2 ** attempt`, capped at `max_backoff` — unless the
+  service sent a `Retry-After`, in seconds or as an HTTP date, which wins and
+  is capped the same way. **Nothing in the package honoured `Retry-After`
+  before this.**
+- Never retries `ABSENT` or `FATAL`. Both are permanent.
+- Raises the calling module's own exception classes, passed in at
+  construction, so no `except` clause anywhere changed. Those classes now also
+  descend from `ServiceError` / `NotFoundError` / `ServiceTimeoutError`, so a
+  caller can catch every service at once. No raw `requests` exception escapes.
+
+### 22.4 The constraints the existing tests imposed
+
+Three, none of them in §4, all of them load-bearing:
+
+1. `tests/test_pubchem_failure_reporting.py` stubs `requests.get` with
+   `def busy(url, timeout=None)` — positional url, `timeout` the only keyword.
+   So `HTTPClient._send` builds its kwargs and **omits every argument that was
+   not given**, and calls `requests.get` through the module attribute rather
+   than a `Session` or a `from requests import get`, or `monkeypatch.setattr`
+   would no longer intercept it. `tests/test_http.py` pins that call shape in a
+   test of its own, so it cannot drift back.
+2. `tests/test_pubchem_properties.py` replaces `_make_request` with a recorder
+   to assert *how many requests* a call took — which is the only way to test a
+   batching decision. `_rate_limit()` is called directly by two timing tests.
+   Both survive as thin delegations to the transport; they are the module's own
+   name for "one request to this service", not compatibility shims.
+3. `__cache_key__` is `(class path, base_url)`, plus
+   `PubChemView.CACHE_SCHEMA_VERSION`. §17.1 and §19.6 are explicit about what
+   changing either costs, so `base_url` stayed exactly where it was and no
+   return shape changed. No version bump was needed.
+
+One thing the migration would have quietly broken: `pause_time` and
+`min_request_interval` were plain attributes that the old `_rate_limit` read
+live, so setting one mid-batch worked. They are now properties over the
+transport's interval, so it still does.
+
+### 22.5 The dedupe
+
+`fault_code` and `TRANSIENT_FAULT_CODES` were duplicated verbatim between
+`pubchem.py` and `pubchemview.py` — `pubchemview`'s set the larger of the two,
+carrying both services' codes. They now live once, in `pubchem.py`, joined by
+`ABSENCE_FAULT_CODES` and `pubchem_classify`; `pubchemview` imports the
+classifier and nothing else. `provesid.pubchemview.fault_code` is gone.
+
+`_is_empty_lookup` was a third verbatim duplicate. It moved to `cache.py` as
+`is_empty_result`, beside `is_failure_result` — it is a `skip_if` predicate,
+and that is where `skip_if` lives. Fifteen decorator sites now use it.
+
+None of the three was referenced by any test, doc or example, so all three
+moved freely.
+
+### 22.6 Tests and docs
+
+`tests/test_http.py` — 42 tests, fully offline, every one stubbing `requests`
+and recording what the client did. Covered: the call shape; pacing, including
+that retries are paced; the full `default_classify` table; absence and
+permanent 4xx not retried; 5xx retried exactly `max_retries` times; a transient
+failure that clears being invisible to the caller; `Retry-After` in both forms
+and capped; exponential back-off and its cap; timeouts and connection errors;
+that no `requests` exception escapes; that a custom classifier overrides the
+status; a non-JSON 200 reported as a service error; and the exception
+hierarchy, for each client and through the shared bases.
+
+`tests/test_nci_resolver.py` gained `TestNCIClassification` — 6 tests pinning
+§22.2, including that an unresolvable identifier costs exactly one request.
+
+Full suite: **941 passed, 34 skipped, 0 failed**, from §21.4's 890 passed / 34
+skipped / 3 environmental failures. `mkdocs build --strict` clean.
+
+`docs/api/http.md` is new and in the nav. Two pre-existing doc errors surfaced
+while writing it and are fixed: `docs/api/pubchemview.md` documented
+`PubChemView(pause_time=...)`, a parameter that has never existed — both
+snippets raised `TypeError` — and `docs/api/nci_resolver.md` called the default
+pacing "3 requests per second" when it is 0.1 s between requests, so at most
+10. Every snippet in the changed pages was executed before commit.
+
+### 22.7 Still open
+
+- Step 4: `pubchem.py`, `chebi.py`, `cascommonchem.py` and `opsin.py` are not
+  migrated. `pubchem.py` keeps its own `_make_request` with the GET/POST and
+  `_parse_response` shape §18 gave it; `chebi.py` uses a `requests.Session`
+  with persistent headers, which `HTTPClient` does not currently model and
+  whose tests patch `requests.Session.get`, so that migration needs a decision
+  about sessions rather than just a swap.
+- The rate limiter is per client instance. PubChem's published limit is five
+  requests per second **per IP**, so two `PubChemView` instances in one process
+  can exceed it together. A per-host shared limiter would be more correct;
+  it was left out of this step because it is shared mutable state across
+  tests and wants its own consideration.
+- `max_backoff` defaults to 60 s and `backoff` to 1.0 for a client that does
+  not say otherwise. Whether those are the right numbers for each service is
+  untested against a real throttling event; only the mechanism is.

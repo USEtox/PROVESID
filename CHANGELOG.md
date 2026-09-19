@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **One shared HTTP transport, and `Retry-After` honoured for the first time.**
+  Every web-API client used to carry its own copy of "pause, request, decide
+  what the status code meant, maybe give up". The four copies had drifted
+  apart: only `pubchemview` retried at all, none honoured `Retry-After`, and
+  `chebi`, `cascommonchem` and `opsin` had no rate limiting whatsoever.
+
+  `provesid.http.HTTPClient` is now the single place that decides when to ask
+  again. It paces requests, retries HTTP 429, 5xx, timeouts and connection
+  errors with exponential back-off capped at `max_backoff`, and prefers a
+  `Retry-After` the service sent — in seconds or as an HTTP date — over its own
+  curve. The pacing applies to retries too: a service already shedding load is
+  not asked again faster than a healthy one. No raw `requests` exception
+  reaches a caller.
+
+  `resolver` and `pubchemview` are migrated. `pubchem`, `chebi`,
+  `cascommonchem` and `opsin` follow in the next step.
+
+  Nothing changes for a caller. Each client passes its own exception classes to
+  the transport, so `except NCIResolverError` and `except PubChemViewError`
+  work exactly as before; what is new is that those classes also descend from
+  `provesid.http.ServiceError` / `NotFoundError` / `ServiceTimeoutError`, so a
+  caller can now catch every service at once.
+
+- **`provesid.cache.is_empty_result`**, the `skip_if` predicate that keeps an
+  empty answer out of the cache. It was written twice, identically, in
+  `pubchem` and `pubchemview`; it now lives beside `is_failure_result`, which
+  is where `skip_if` belongs.
+
 - **One parser for PUG-View's free-text values, with typed output.** PubChem
   reports every experimental property as prose written by whoever deposited it —
   `"138-140 °C"`, `"8.5X10-5 mm Hg at 25 °C"`, `"greater than or equal to 100
@@ -115,6 +143,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- `docs/api/pubchemview.md` documented `PubChemView(pause_time=...)`, a
+  parameter that has never existed — both snippets raised `TypeError`.
+  `docs/api/nci_resolver.md` described the default pacing as "3 requests per
+  second"; it is 0.1 s between requests, so at most 10.
+
 - **The persistent cache never hit across processes.** `CacheManager._get_cache_key`
   built its key with `json.dumps(..., default=str)` over the call's arguments.
   For a bound method the first argument is `self`, and the default `str()` of a
@@ -187,6 +220,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PubChemAPI.get_cache_info`.
 
 ### Changed
+- **An unresolvable identifier now costs the NCI resolver one request instead
+  of four.** CACTUS answers an identifier it cannot resolve with **HTTP 500**
+  carrying the body `<h1>Page not found (404)</h1>` — verified live on
+  2026-09-19 against `this_is_definitely_not_a_chemical_12345`, while
+  `α-glucose` answers 200. Its status code is not a reliable guide, so
+  `provesid.resolver.nci_classify` reads the body: a 5xx carrying that page is
+  absence and is raised at once, every other 5xx keeps its usual retryable
+  reading. Two live tests that took 10.1 s and 9.6 s now take 0.57 s each.
+
+  The exception type changes with it: an unresolvable identifier now raises
+  `NCIResolverNotFoundError`, which is what it always meant, rather than
+  `NCIResolverError("Internal server error")`. `NCIResolverNotFoundError` is a
+  subclass, so `except NCIResolverError` is unaffected.
+
+  Conversely, a *genuine* transient failure from CACTUS — a 429, a real 5xx, a
+  timeout — is now retried, where before it was raised on the first attempt.
+
+- **PubChem's fault-code classification has one home.** `fault_code` and
+  `TRANSIENT_FAULT_CODES` were duplicated verbatim in `pubchem` and
+  `pubchemview`, with `pubchemview` carrying the larger set. Both now live in
+  `provesid.pubchem`, joined by `ABSENCE_FAULT_CODES` and by
+  `pubchem_classify`, the classifier both services share.
+  `provesid.pubchemview.fault_code` is gone; import it from `provesid.pubchem`.
+
+- `NCIChemicalIdentifierResolver.pause_time` and
+  `PubChemView.min_request_interval` are now properties over the transport's
+  interval. Reading them is unchanged; setting one still takes effect on the
+  next request, retries included.
+
+- `NCIChemicalIdentifierResolver` logs to a module logger instead of the root
+  logger, and `download_image` gains the retry and pacing the rest of the
+  client already had.
+
 - **`get_property_table`'s `ExperimentalValue` column is now a float**, not a
   string. An entry that reports a range leaves it NaN and fills `ValueMin` and
   `ValueMax` instead, rather than putting `"138-140"` in a column callers were

@@ -308,15 +308,25 @@ analysis = comprehensive_compound_analysis(2244)
 
 ### Rate Limiting
 
-The PubChemView client includes automatic rate limiting:
+The PubChemView client paces its own requests, retries included, at PubChem's
+published limit of five per second. Adjust it on the instance:
 
 ```python
-# Adjust request frequency for large batch jobs
-view = PubChemView(pause_time=1.0)  # 1 second between requests
+view = PubChemView()
+view.min_request_interval          # 0.2 seconds, i.e. 5 requests/second
 
-# For development/testing with faster requests
-view_fast = PubChemView(pause_time=0.1)  # 100ms between requests
+# Gentler, for a long batch
+view.min_request_interval = 1.0
+
+# Retries are paced too, and back off exponentially. A service that sends
+# Retry-After gets to set the wait itself.
+view = PubChemView(max_retries=5, backoff_factor=2.0)
 ```
+
+Only transient conditions are retried — a `ServerBusy` or `Timeout` fault code,
+an HTTP 429 or 5xx, a request timeout, a refused connection. A compound with no
+such data and an unknown heading are permanent answers and are raised at once.
+See [HTTP Transport](http.md).
 
 ### Caching
 

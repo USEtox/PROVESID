@@ -101,6 +101,41 @@ def is_failure_result(result: Any) -> bool:
     return isinstance(result, dict) and result.get('success') is False
 
 
+def is_empty_result(result: Any) -> bool:
+    """
+    Report whether a lookup returned nothing.
+
+    Absence is never cached. A service answers a genuinely empty lookup and a
+    momentary refusal the same way often enough that the two cannot be told
+    apart with confidence, and a wrongly cached "no data" is permanent whereas
+    re-fetching a genuinely empty result costs one cheap request. Pass this to
+    :func:`cached` as ``skip_if`` for any method that reports absence with an
+    empty list, dict or DataFrame rather than by raising.
+
+    Args:
+        result: The value returned by a cached function.
+
+    Returns:
+        True when ``result`` is None or carries no items. A value with no
+        length --- an int, a dataclass --- is a real result.
+
+    Example:
+        >>> is_empty_result([])
+        True
+        >>> is_empty_result(None)
+        True
+        >>> is_empty_result(['3.47'])
+        False
+    """
+    if result is None:
+        return True
+    try:
+        return len(result) == 0
+    except TypeError:
+        # Not a sized value; treat it as a real result.
+        return False
+
+
 class CacheManager:
     """
     Advanced cache manager with persistent storage, size monitoring, and import/export.

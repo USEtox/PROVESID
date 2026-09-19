@@ -11,7 +11,8 @@ import pandas as pd
 from functools import lru_cache
 from typing import Dict, List, Union, Optional, Any
 from urllib.parse import quote
-from .cache import cached
+from .cache import cached, is_empty_result
+from .http import Outcome, ServiceError, NotFoundError, ServiceTimeoutError
 from .utils import user_dataset_path
 
 pugrest_prolog = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
@@ -173,15 +174,15 @@ class CompoundProperties:
     CONFORMER_COUNT_3D = "ConformerCount3D"
     FINGERPRINT_2D = "Fingerprint2D"
 
-class PubChemError(Exception):
+class PubChemError(ServiceError):
     """Custom exception for PubChem API errors"""
     pass
 
-class PubChemTimeoutError(PubChemError):
+class PubChemTimeoutError(PubChemError, ServiceTimeoutError):
     """Exception raised when request times out"""
     pass
 
-class PubChemNotFoundError(PubChemError):
+class PubChemNotFoundError(PubChemError, NotFoundError):
     """Exception raised when resource is not found"""
     pass
 
@@ -190,14 +191,28 @@ class PubChemServerError(PubChemError):
     pass
 
 
-#: Fault codes PUG-REST returns when it is shedding load rather than reporting
+#: Fault codes PubChem returns when it is shedding load rather than reporting
 #: absence. PubChem does not always pair them with a 5xx status, so the code in
 #: the body — not the HTTP status alone — decides whether the answer is "no such
-#: data" or "ask again later".
+#: data" or "ask again later". Both services' codes live here because both
+#: :mod:`provesid.pubchem` and :mod:`provesid.pubchemview` read this one set;
+#: PUG-REST never emits a ``PUGVIEW.*`` code, so carrying them is inert there.
 TRANSIENT_FAULT_CODES = frozenset({
     "PUGREST.ServerBusy",
     "PUGREST.ServerError",
     "PUGREST.Timeout",
+    "PUGVIEW.ServerBusy",
+    "PUGVIEW.ServerError",
+    "PUGVIEW.Timeout",
+})
+
+
+#: Fault codes that report genuine absence: no such compound, no such heading.
+#: Permanent answers, so a request carrying one is never retried.
+ABSENCE_FAULT_CODES = frozenset({
+    "PUGREST.NotFound",
+    "PUGVIEW.NotFound",
+    "PUGVIEW.BadRequest",
 })
 
 
@@ -222,27 +237,49 @@ def fault_code(response: requests.Response) -> Optional[str]:
         return None
 
 
-def _is_empty_lookup(result: Any) -> bool:
+def pubchem_classify(response: requests.Response) -> Outcome:
     """
-    Report whether a lookup returned nothing.
+    Decide what a PubChem response means, reading the fault code first.
 
-    Absence is never cached. PubChem answers a genuinely empty lookup with a
-    ``NotFound`` fault, but it has also been observed doing so while under load,
-    and a wrongly cached "no data" is permanent whereas re-fetching an empty
-    result costs one cheap request.
+    PubChem's status codes are not a reliable guide on their own: under load it
+    answers with ``PUGVIEW.ServerBusy`` or ``PUGREST.ServerBusy`` behind a 404
+    as readily as behind a 503, and treating that as absence caches a momentary
+    outage as fact (see §17.6 of the refactor plan). The fault code in the body
+    is what both services always send, so it is what decides.
 
     Args:
-        result: Return value of a lookup method.
+        response: The response to classify.
 
     Returns:
-        True when the result carries no data.
+        :attr:`~provesid.http.Outcome.OK` for a 2xx, ``RETRY`` for any
+        transient fault code and for 429/5xx, ``ABSENT`` for an absence fault
+        code and for a bare 404, ``FATAL`` for any other client error.
+
+    Example:
+        >>> class R:
+        ...     status_code = 404
+        ...     def json(self): return {"Fault": {"Code": "PUGVIEW.ServerBusy"}}
+        >>> pubchem_classify(R()).name
+        'RETRY'
     """
-    if result is None:
-        return True
-    try:
-        return len(result) == 0
-    except TypeError:
-        return False
+    status = response.status_code
+    if 200 <= status < 300:
+        return Outcome.OK
+
+    code = fault_code(response)
+    if code in TRANSIENT_FAULT_CODES:
+        return Outcome.RETRY
+    if code in ABSENCE_FAULT_CODES:
+        return Outcome.ABSENT
+    if status == 429 or status >= 500:
+        return Outcome.RETRY
+    if status in (400, 404):
+        # PubChem answers an unknown compound with 404 and an unknown heading
+        # with 400. Both are permanent even when the body carries no fault.
+        return Outcome.ABSENT
+    if 400 <= status < 500:
+        return Outcome.FATAL
+    return Outcome.RETRY
 
 
 def _synonyms_incomplete(result: Any) -> bool:
@@ -762,7 +799,7 @@ class PubChemAPI:
             url_parts.append(output_format)
         return '/'.join(url_parts)
 
-    @cached(service='pubchem', skip_if=_is_empty_lookup)
+    @cached(service='pubchem', skip_if=is_empty_result)
     def _get_property_rows(self, cids_tuple: tuple, properties_tuple: tuple) -> List[Dict[str, Any]]:
         """
         Fetch one ``PropertyTable`` covering several CIDs in a single request.
@@ -948,7 +985,7 @@ class PubChemAPI:
 
         return results
 
-    @cached(service='pubchem', skip_if=_is_empty_lookup)
+    @cached(service='pubchem', skip_if=is_empty_result)
     def get_compound_synonyms(self, cid: Union[int, str], output_format: str = OutputFormat.JSON) -> List[str]:
         """
         Get compound synonyms by CID

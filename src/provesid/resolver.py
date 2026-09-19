@@ -1,21 +1,74 @@
-import requests
-import time
 import logging
+import re
 from urllib.parse import quote
-from typing import Dict, List, Union, Optional, Any
+from typing import Dict, List, Optional, Any
+import requests
 from .cache import cached
+from .http import (
+    HTTPClient,
+    Outcome,
+    ServiceError,
+    NotFoundError,
+    ServiceTimeoutError,
+    default_classify,
+)
 
-class NCIResolverError(Exception):
+logger = logging.getLogger(__name__)
+
+class NCIResolverError(ServiceError):
     """Custom exception for NCI Chemical Identifier Resolver errors"""
     pass
 
-class NCIResolverNotFoundError(NCIResolverError):
+class NCIResolverNotFoundError(NCIResolverError, NotFoundError):
     """Exception raised when chemical identifier is not found"""
     pass
 
-class NCIResolverTimeoutError(NCIResolverError):
+class NCIResolverTimeoutError(NCIResolverError, ServiceTimeoutError):
     """Exception raised when request times out"""
     pass
+
+#: CACTUS reports an identifier it cannot resolve with HTTP 500 and a body of
+#: ``<h1>Page not found (404)</h1>``. Its status code is not a reliable guide,
+#: so the body decides --- verified live on 2026-09-19 against
+#: ``this_is_definitely_not_a_chemical_12345``, which answers 500/404-body while
+#: ``\u03b1-glucose`` answers 200.
+_NOT_FOUND_BODY = re.compile(r"Page not found", re.IGNORECASE)
+
+
+def nci_classify(response: requests.Response) -> Outcome:
+    """
+    Decide what a CACTUS response means, reading the body behind a 500.
+
+    The resolver signals "I cannot resolve this" with a 500 whose body is a
+    Django 404 page. Treating that as a server fault costs four requests and
+    several seconds of back-off to learn a permanent answer, so the body is
+    checked before the status is believed. Everything else is classified by
+    status in the usual way.
+
+    Args:
+        response: The response to classify.
+
+    Returns:
+        :attr:`~provesid.http.Outcome.ABSENT` for a 404, and for a 5xx whose
+        body is CACTUS's not-found page; otherwise whatever
+        :func:`~provesid.http.default_classify` says.
+
+    Example:
+        >>> class R:
+        ...     status_code = 500
+        ...     text = '<h1>Page not found (404)</h1>'
+        >>> nci_classify(R()).name
+        'ABSENT'
+    """
+    if response.status_code >= 500:
+        try:
+            body = response.text
+        except Exception:
+            body = ""
+        if _NOT_FOUND_BODY.search(body or ""):
+            return Outcome.ABSENT
+    return default_classify(response)
+
 
 class NCIChemicalIdentifierResolver:
     """
@@ -59,9 +112,21 @@ class NCIChemicalIdentifierResolver:
         """
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
-        self.pause_time = pause_time
-        self.last_request_time = 0
         self.use_cache = use_cache
+        self.logger = logger
+
+        # One shared transport, configured with this service's exceptions so
+        # callers keep catching NCIResolverError and friends. CACTUS hides a
+        # not-found behind a 500, hence its own classifier.
+        self._http = HTTPClient(
+            min_interval=pause_time,
+            timeout=timeout,
+            classify=nci_classify,
+            error_cls=NCIResolverError,
+            not_found_cls=NCIResolverNotFoundError,
+            timeout_cls=NCIResolverTimeoutError,
+            logger=self.logger,
+        )
         
         # Available representation methods
         self.representations = {
@@ -117,47 +182,78 @@ class NCIChemicalIdentifierResolver:
         return get_nci_cache_info()
     
     def _rate_limit(self):
-        """Enforce rate limiting between requests"""
-        if self.pause_time > 0:
-            current_time = time.time()
-            time_since_last = current_time - self.last_request_time
-            if time_since_last < self.pause_time:
-                time.sleep(self.pause_time - time_since_last)
-            self.last_request_time = time.time()
-    
+        """
+        Sleep, if needed, so this client's requests stay ``pause_time`` apart.
+
+        Delegates to the shared transport, which paces every request it makes
+        including retries.
+
+        Example:
+            >>> NCIChemicalIdentifierResolver(pause_time=0)._rate_limit()
+        """
+        self._http.rate_limit()
+
+    @property
+    def pause_time(self) -> float:
+        """
+        Minimum seconds between two requests from this client.
+
+        Held by the transport, and settable: raising it slows a long batch
+        down, and the new value takes effect on the next request, retries
+        included.
+
+        Example:
+            >>> r = NCIChemicalIdentifierResolver()
+            >>> r.pause_time
+            0.1
+            >>> r.pause_time = 1.0   # gentler, for a long batch
+        """
+        return self._http.min_interval
+
+    @pause_time.setter
+    def pause_time(self, seconds: float) -> None:
+        self._http.min_interval = seconds
+
+    @property
+    def last_request_time(self) -> float:
+        """
+        When this client last made a request, as a Unix timestamp.
+
+        Kept on the transport; exposed here because it describes the client's
+        own pacing.
+
+        Returns:
+            Seconds since the epoch, or 0.0 before the first request.
+
+        Example:
+            >>> NCIChemicalIdentifierResolver().last_request_time
+            0.0
+        """
+        return self._http.last_request_time
+
     def _make_request(self, url: str) -> str:
         """
-        Make HTTP request with error handling and rate limiting
-        
+        Make one request to the resolver and return its body as text.
+
+        The transport handles the pacing, the retries and the mapping of
+        status codes onto this module's exceptions; this method exists so the
+        service's one request shape has a name.
+
         Args:
             url: Request URL
-            
+
         Returns:
-            Response text
-            
+            Response text, stripped.
+
         Raises:
-            NCIResolverTimeoutError: If request times out
-            NCIResolverNotFoundError: If identifier not found (404)
-            NCIResolverError: For other HTTP errors
+            NCIResolverTimeoutError: Every attempt timed out or failed to
+                connect.
+            NCIResolverNotFoundError: The identifier could not be resolved
+                (404).
+            NCIResolverError: Any other error, including a 429 or 5xx that
+                outlived the retry budget.
         """
-        self._rate_limit()
-        
-        try:
-            response = requests.get(url, timeout=self.timeout)
-            
-            if response.status_code == 200:
-                return response.text.strip()
-            elif response.status_code == 404:
-                raise NCIResolverNotFoundError("Chemical identifier not found")
-            elif response.status_code == 500:
-                raise NCIResolverError("Internal server error")
-            else:
-                raise NCIResolverError(f"HTTP error {response.status_code}: {response.text}")
-                
-        except requests.Timeout:
-            raise NCIResolverTimeoutError("Request timed out")
-        except requests.RequestException as e:
-            raise NCIResolverError(f"Request failed: {str(e)}")
+        return self._http.get_text(url)
     
     def _build_url(self, identifier: str, representation: str, xml_format: bool = False) -> str:
         """
@@ -238,7 +334,7 @@ class NCIChemicalIdentifierResolver:
                 results[representation] = self.resolve(identifier, representation)
             except NCIResolverError as e:
                 results[representation] = None
-                logging.warning(f"Failed to resolve {identifier} to {representation}: {e}")
+                self.logger.warning(f"Failed to resolve {identifier} to {representation}: {e}")
         
         return results
     
@@ -293,7 +389,7 @@ class NCIChemicalIdentifierResolver:
                 
             except NCIResolverError as e:
                 result['available_data'][rep] = None
-                logging.debug(f"Could not resolve {identifier} to {rep}: {e}")
+                self.logger.debug(f"Could not resolve {identifier} to {rep}: {e}")
         
         # Set overall success status
         if success_count == 0:
@@ -363,21 +459,23 @@ class NCIChemicalIdentifierResolver:
             
         Returns:
             True if download successful, False otherwise
+
+        Example:
+            >>> r = NCIChemicalIdentifierResolver()
+            >>> r.download_image('aspirin', 'aspirin.png', 'png')   # doctest: +SKIP
+            True
         """
         try:
             image_url = self.get_image_url(identifier, image_format, width, height)
-            self._rate_limit()
-            
-            response = requests.get(image_url, timeout=self.timeout)
-            response.raise_for_status()
-            
+            response = self._http.get(image_url)
+
             with open(filename, 'wb') as f:
                 f.write(response.content)
-            
+
             return True
-            
+
         except Exception as e:
-            logging.error(f"Failed to download image for {identifier}: {e}")
+            self.logger.error(f"Failed to download image for {identifier}: {e}")
             return False
     
     @cached(service='nci')
@@ -399,7 +497,7 @@ class NCIChemicalIdentifierResolver:
                 results[identifier] = self.resolve(identifier, representation)
             except NCIResolverError as e:
                 results[identifier] = None
-                logging.warning(f"Failed to resolve {identifier}: {e}")
+                self.logger.warning(f"Failed to resolve {identifier}: {e}")
         
         return results
     

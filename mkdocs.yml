@@ -58,6 +58,7 @@ nav:
     - OPSIN: api/opsin.md
     - ChEBI: api/chebi.md
     - Search: api/search.md
+    - HTTP Transport: api/http.md
 
 exclude_docs: |
   examples/*/README.md

@@ -26,6 +26,75 @@ class PubChemViewError(Exception):
     pass
 
 
+#: Fault codes PubChem returns when it is shedding load rather than reporting
+#: absence. PubChem does not always pair them with a 5xx status, so the code in
+#: the body — not the HTTP status alone — decides whether a retry makes sense.
+TRANSIENT_FAULT_CODES = frozenset({
+    "PUGVIEW.ServerBusy",
+    "PUGVIEW.ServerError",
+    "PUGVIEW.Timeout",
+    "PUGREST.ServerBusy",
+    "PUGREST.ServerError",
+    "PUGREST.Timeout",
+})
+
+
+def fault_code(response: "requests.Response") -> Optional[str]:
+    """
+    Read PubChem's ``Fault.Code`` out of an error response.
+
+    Both PUG-REST and PUG-View describe every error in the body, for example
+    ``{"Fault": {"Code": "PUGVIEW.NotFound", "Message": "No data found"}}``.
+    That code is the only reliable way to tell a compound that genuinely lacks
+    data from a service that is momentarily refusing work.
+
+    Args:
+        response: The HTTP response to inspect.
+
+    Returns:
+        The fault code, or None when the body is not a PubChem fault.
+
+    Example:
+        >>> fault_code(response)   # doctest: +SKIP
+        'PUGVIEW.NotFound'
+    """
+    try:
+        return response.json().get("Fault", {}).get("Code")
+    except Exception:
+        return None
+
+
+def _is_empty_lookup(result: Any) -> bool:
+    """
+    Report whether an extraction returned nothing.
+
+    Absence is never cached. PubChem answers a genuinely empty property with a
+    ``NotFound`` fault, but it has also been observed returning one while under
+    load, and a wrongly cached "no data" is permanent whereas re-fetching an
+    empty result costs one cheap request. Positive results stay cached.
+
+    Args:
+        result: Return value of an extraction method --- a list, a dict or a
+            DataFrame.
+
+    Returns:
+        True when the result carries no extracted data.
+
+    Example:
+        >>> _is_empty_lookup([])
+        True
+        >>> _is_empty_lookup(['3.47'])
+        False
+    """
+    if result is None:
+        return True
+    try:
+        return len(result) == 0
+    except TypeError:
+        # Not a sized value; treat it as a real result.
+        return False
+
+
 class PubChemViewNotFoundError(PubChemViewError):
     """Exception raised when compound or property is not found"""
     pass
@@ -111,6 +180,18 @@ class PubChemView:
             "Viscosity": "Viscosity"
         }
     
+    def __cache_key__(self) -> tuple:
+        """
+        Identify this client for cache-key purposes.
+
+        Only the endpoint distinguishes two clients' results; timeout, retry and
+        ``use_cache`` settings change how a call is made, not what it returns.
+
+        Returns:
+            Tuple of the class path and the configured base URL.
+        """
+        return ("provesid.pubchemview.PubChemView", self.base_url)
+
     def clear_cache(self):
         """Clear all cached results for PubChem View"""
         from .cache import clear_pubchemview_cache
@@ -138,10 +219,16 @@ class PubChemView:
             
         Returns:
             JSON response as dictionary
-            
+
         Raises:
-            PubChemViewError: For API errors
-            PubChemViewNotFoundError: When resource not found
+            PubChemViewNotFoundError: When the compound or heading does not
+                exist. PUG-View answers 404 for an unknown compound and 400
+                (``PUGVIEW.BadRequest``) for an unknown heading; both are
+                permanent, so both are reported as absence rather than retried.
+            PubChemViewError: For any other API error, including a transient
+                ``ServerBusy`` that survived every retry. Only 429 and 5xx
+                responses, timeouts and connection errors are retried — a 4xx
+                cannot be fixed by asking again.
         """
         self._rate_limit()
         
@@ -152,10 +239,31 @@ class PubChemView:
                 
                 if response.status_code == 200:
                     return response.json()
-                elif response.status_code == 404:
-                    raise PubChemViewNotFoundError(f"Resource not found: {url}")
-                else:
-                    response.raise_for_status()
+
+                code = fault_code(response)
+
+                if (code in TRANSIENT_FAULT_CODES
+                        or response.status_code == 429
+                        or response.status_code >= 500):
+                    # Transient. Routed through the retry handler below, which
+                    # is the single place that decides when to give up.
+                    raise requests.exceptions.HTTPError(
+                        f"HTTP {response.status_code} {code or 'error'} for {url}"
+                    )
+
+                if response.status_code in (400, 404):
+                    # PUGVIEW.NotFound (no data for this compound) or
+                    # PUGVIEW.BadRequest (no such heading). Both permanent.
+                    self.logger.debug(f"{code or response.status_code} for {url}")
+                    raise PubChemViewNotFoundError(
+                        f"No data for this request ({code or response.status_code}): {url}"
+                    )
+
+                # Any other client error is permanent; retrying cannot help.
+                raise PubChemViewError(
+                    f"HTTP {response.status_code} {code or ''} for {url}: "
+                    f"{response.text[:200]}"
+                )
                     
             except requests.exceptions.RequestException as e:
                 if attempt == self.max_retries:
@@ -280,24 +388,38 @@ class PubChemView:
         
         return unit, conditions
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=_is_empty_lookup)
     def extract_property_data(self, cid: Union[int, str], property_name: str) -> List[PropertyData]:
         """
-        Extract structured property data for a specific property
-        
+        Extract structured property data for a specific property.
+
         Args:
             cid: PubChem Compound ID
             property_name: Name of the property to extract
-            
+
         Returns:
-            List of PropertyData objects with extracted information
+            List of PropertyData objects with extracted information. An empty
+            list means PubChem holds no such property for this compound.
+
+        Raises:
+            PubChemViewError: If the request could not be completed, for example
+                a PUG-View ``ServerBusy`` response that survived every retry.
+                This is deliberately *not* reported as an empty list: a
+                transient failure must stay distinguishable from real absence,
+                or it gets cached as "no data" and never retried.
+
+        Example:
+            >>> view = PubChemView()
+            >>> data = view.extract_property_data(2244, "Dissociation Constants")
+            >>> data[0].value
+            '3.47'
         """
         try:
             response = self.get_property(cid, property_name)
-            return self._parse_property_response(response)
-        except (PubChemViewNotFoundError, PubChemViewError):
-            self.logger.warning(f"Property '{property_name}' not found for CID {cid}")
+        except PubChemViewNotFoundError:
+            self.logger.debug(f"Property '{property_name}' not present for CID {cid}")
             return []
+        return self._parse_property_response(response)
     
     def _parse_property_response(self, response: Dict[str, Any]) -> List[PropertyData]:
         """
@@ -335,7 +457,7 @@ class PubChemView:
             
         return property_data
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=_is_empty_lookup)
     def extract_all_experimental_properties(self, cid: Union[int, str]) -> Dict[str, List[PropertyData]]:
         """
         Extract all experimental properties for a compound in structured format
@@ -394,7 +516,7 @@ class PubChemView:
             
         return all_properties
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=_is_empty_lookup)
     def get_available_properties(self, cid: Union[int, str]) -> List[str]:
         """
         Get list of available experimental properties for a compound
@@ -411,7 +533,7 @@ class PubChemView:
         except PubChemViewNotFoundError:
             return []
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=lambda result: not result.get('values'))
     def get_property_summary(self, cid: Union[int, str], property_name: str) -> Dict[str, Any]:
         """
         Get a summary of a property including all values, units, and references
@@ -440,47 +562,47 @@ class PubChemView:
         return summary
     
     # Convenience methods for common properties
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=_is_empty_lookup)
     def get_melting_point(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get melting point data for a compound"""
         return self.extract_property_data(cid, "Melting Point")
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=_is_empty_lookup)
     def get_boiling_point(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get boiling point data for a compound"""
         return self.extract_property_data(cid, "Boiling Point")
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=_is_empty_lookup)
     def get_density(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get density data for a compound"""
         return self.extract_property_data(cid, "Density")
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=_is_empty_lookup)
     def get_solubility(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get solubility data for a compound"""
         return self.extract_property_data(cid, "Solubility")
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=_is_empty_lookup)
     def get_flash_point(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get flash point data for a compound"""
         return self.extract_property_data(cid, "Flash Point")
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=_is_empty_lookup)
     def get_vapor_pressure(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get vapor pressure data for a compound"""
         return self.extract_property_data(cid, "Vapor Pressure")
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=_is_empty_lookup)
     def get_viscosity(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get viscosity data for a compound"""
         return self.extract_property_data(cid, "Viscosity")
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=_is_empty_lookup)
     def get_logp(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get LogP data for a compound"""
         return self.extract_property_data(cid, "LogP")
     
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=_is_empty_lookup)
     def get_refractive_index(self, cid: Union[int, str]) -> List[PropertyData]:
         """Get refractive index data for a compound"""
         return self.extract_property_data(cid, "Refractive Index")
@@ -493,9 +615,16 @@ class PubChemView:
         Args:
             cid: PubChem Compound ID
             property_names: List of property names to extract
-            
+
         Returns:
-            Dictionary mapping property names to PropertyData lists
+            Dictionary mapping property names to PropertyData lists.
+
+        Note:
+            One property failing does not abort the batch: that entry is logged
+            at WARNING and comes back as an empty list, so here — unlike in
+            :meth:`extract_property_data` — an empty list does not prove the
+            property is absent. Call ``extract_property_data`` directly when the
+            difference matters.
         """
         results = {}
         for prop_name in property_names:
@@ -531,7 +660,7 @@ class PubChemView:
         ]
 
 
-    @cached(service='pubchemview')
+    @cached(service='pubchemview', skip_if=_is_empty_lookup)
     def get_property_table(self, cid: Union[int, str], property_name: str) -> pd.DataFrame:
         """
         Get a comprehensive table of property data with full reference information
@@ -541,7 +670,12 @@ class PubChemView:
             property_name: Name of the experimental property
             
         Returns:
-            pandas DataFrame with columns: CID, StringWithMarkup, ExperimentalValue, Unit, Temperature, Conditions, FullReference
+            pandas DataFrame with columns: CID, StringWithMarkup, ExperimentalValue, Unit, Temperature, Conditions, FullReference.
+            The frame is empty when PubChem holds no such property for this compound.
+
+        Raises:
+            PubChemViewError: If the request could not be completed. An empty
+                frame always means "no such data", never "the fetch failed".
         """
         try:
             # Get the raw response to extract full reference information
@@ -577,7 +711,14 @@ class PubChemView:
                 })
             
             return pd.DataFrame(table_data)
-            
+
+        except PubChemViewNotFoundError:
+            self.logger.debug(f"Property '{property_name}' not present for CID {cid}")
+            return pd.DataFrame(columns=["CID", "StringWithMarkup", "ExperimentalValue", "Unit", "Temperature", "Conditions", "FullReference"])
+        except PubChemViewError:
+            # Transport failure: let it surface rather than pass an empty table
+            # off as "this compound has no data".
+            raise
         except Exception as e:
             self.logger.error(f"Error creating property table for CID {cid}, property {property_name}: {e}")
             # Return empty DataFrame with expected columns
@@ -1024,7 +1165,7 @@ class PubChemView:
 
 
 # Convenience functions for easy access
-@cached(service='pubchemview')
+@cached(service='pubchemview', skip_if=_is_empty_lookup)
 def get_experimental_property(cid: Union[int, str], property_name: str) -> List[PropertyData]:
     """
     Convenience function to get experimental property data
@@ -1040,7 +1181,7 @@ def get_experimental_property(cid: Union[int, str], property_name: str) -> List[
     return pugview.extract_property_data(cid, property_name)
 
 
-@cached(service='pubchemview')
+@cached(service='pubchemview', skip_if=_is_empty_lookup)
 def get_all_experimental_properties(cid: Union[int, str]) -> Dict[str, List[PropertyData]]:
     """
     Convenience function to get all experimental properties
@@ -1055,7 +1196,7 @@ def get_all_experimental_properties(cid: Union[int, str]) -> Dict[str, List[Prop
     return pugview.extract_all_experimental_properties(cid)
 
 
-@cached(service='pubchemview')
+@cached(service='pubchemview', skip_if=_is_empty_lookup)
 def get_property_values_only(cid: Union[int, str], property_name: str) -> List[str]:
     """
     Convenience function to get just the property values as strings
@@ -1072,7 +1213,7 @@ def get_property_values_only(cid: Union[int, str], property_name: str) -> List[s
     return [data.value for data in property_data if data.value]
 
 
-@cached(service='pubchemview')
+@cached(service='pubchemview', skip_if=_is_empty_lookup)
 def get_property_table(cid: Union[int, str], property_name: str) -> pd.DataFrame:
     """
     Convenience function to get a comprehensive property table with full references

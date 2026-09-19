@@ -94,6 +94,18 @@ class NCIChemicalIdentifierResolver:
             'ringsys_count': 'Ring system count'
         }
     
+    def __cache_key__(self) -> tuple:
+        """
+        Identify this client for cache-key purposes.
+
+        Only the endpoint distinguishes two clients' results; timeout, pause
+        time and ``use_cache`` change how a call is made, not what it returns.
+
+        Returns:
+            Tuple of the class path and the configured base URL.
+        """
+        return ("provesid.resolver.NCIChemicalIdentifierResolver", self.base_url)
+
     def clear_cache(self):
         """Clear all cached results for NCI Chemical Identifier Resolver"""
         from .cache import clear_nci_cache

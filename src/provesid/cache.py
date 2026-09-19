@@ -17,6 +17,90 @@ from typing import Any, Dict, Optional, Union, Callable
 from datetime import datetime
 import tempfile
 
+
+class _Miss:
+    """Singleton marker for "no cache entry", distinct from a cached ``None``."""
+
+    def __repr__(self) -> str:
+        return "<cache miss>"
+
+
+_MISS = _Miss()
+
+
+def stable_key_part(obj: Any) -> Any:
+    """
+    Reduce a function argument to a JSON-serialisable, process-stable form.
+
+    A cache key must come out identical for the same logical call in every
+    process and for every client instance, otherwise a persistent entry written
+    by one run is unreachable from the next. Python's default ``str()`` of an
+    object embeds its memory address --- ``<PubChemView object at 0x7f...>`` ---
+    so objects are reduced here to either the value they declare through
+    ``__cache_key__()`` or their fully qualified class name.
+
+    Args:
+        obj: Any positional or keyword argument of a cached call. For a bound
+            method this includes ``self``.
+
+    Returns:
+        A structure built only from strings, numbers, booleans, ``None``, lists
+        and dicts, safe to pass to :func:`json.dumps` without ``default=str``.
+
+    Note:
+        Class-name reduction is right for a client instance, whose identity is
+        its configuration, but it would make two *value* objects of the same
+        class share a key. Any value-like object passed to a cached function
+        must therefore declare ``__cache_key__``. No current caller passes one;
+        cached functions take identifiers, strings and sequences.
+
+    Example:
+        >>> stable_key_part({'cid': 2244, 'props': ('MolecularWeight',)})
+        {'cid': 2244, 'props': ['MolecularWeight']}
+    """
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, (list, tuple)):
+        return [stable_key_part(item) for item in obj]
+    if isinstance(obj, (set, frozenset)):
+        return sorted((stable_key_part(item) for item in obj), key=repr)
+    if isinstance(obj, dict):
+        return {
+            str(key): stable_key_part(value)
+            for key, value in sorted(obj.items(), key=lambda kv: str(kv[0]))
+        }
+
+    declared = getattr(obj, '__cache_key__', None)
+    if callable(declared):
+        return stable_key_part(declared())
+    return f"{type(obj).__module__}.{type(obj).__qualname__}"
+
+
+def is_failure_result(result: Any) -> bool:
+    """
+    Report whether a return value is an in-band failure report.
+
+    Several PROVESID clients signal an error by returning a dict with
+    ``success: False`` and an ``error`` message rather than by raising. Storing
+    one of those would turn a transient network failure into a permanent
+    "no data" answer, so :func:`cached` never writes a value this function
+    accepts.
+
+    Args:
+        result: The value returned by a cached function.
+
+    Returns:
+        True when ``result`` is a dict whose ``success`` key is ``False``.
+
+    Example:
+        >>> is_failure_result({'success': False, 'error': 'Server busy'})
+        True
+        >>> is_failure_result({'success': True, 'CID': 2244})
+        False
+    """
+    return isinstance(result, dict) and result.get('success') is False
+
+
 class CacheManager:
     """
     Advanced cache manager with persistent storage, size monitoring, and import/export.
@@ -89,14 +173,26 @@ class CacheManager:
             warnings.warn(f"Could not save cache metadata: {e}")
     
     def _get_cache_key(self, func_name: str, args: tuple, kwargs: dict) -> str:
-        """Generate a unique cache key for function call."""
-        # Create deterministic hash from function name and arguments
+        """
+        Generate a unique, process-stable cache key for a function call.
+
+        Args:
+            func_name: Fully qualified name of the cached function.
+            args: Positional arguments of the call. For a bound method the first
+                entry is the client instance; :func:`stable_key_part` reduces it
+                to its ``__cache_key__`` or class name so the key does not
+                depend on the instance's memory address.
+            kwargs: Keyword arguments of the call.
+
+        Returns:
+            Hex SHA-256 digest of the normalised call signature.
+        """
         key_data = {
             'function': func_name,
-            'args': args,
-            'kwargs': sorted(kwargs.items()) if kwargs else {}
+            'args': stable_key_part(list(args)),
+            'kwargs': stable_key_part(dict(kwargs)),
         }
-        key_str = json.dumps(key_data, sort_keys=True, default=str)
+        key_str = json.dumps(key_data, sort_keys=True)
         return hashlib.sha256(key_str.encode()).hexdigest()
     
     def _get_cache_file_path(self, cache_key: str) -> Path:
@@ -104,7 +200,17 @@ class CacheManager:
         return self.cache_dir / f"{cache_key}.pkl"
     
     def _load_from_disk(self, cache_key: str) -> Any:
-        """Load a cache entry from disk."""
+        """
+        Load a cache entry from disk.
+
+        Args:
+            cache_key: Key produced by :meth:`_get_cache_key`.
+
+        Returns:
+            The stored value, or the ``_MISS`` sentinel when there is no
+            readable entry. A stored ``None`` comes back as ``None``, so a
+            function that legitimately returns ``None`` still caches.
+        """
         cache_file = self._get_cache_file_path(cache_key)
         if cache_file.exists():
             try:
@@ -112,7 +218,7 @@ class CacheManager:
                     return pickle.load(f)
             except Exception as e:
                 warnings.warn(f"Could not load cache entry {cache_key}: {e}")
-        return None
+        return _MISS
     
     def _save_to_disk(self, cache_key: str, value: Any):
         """Save a cache entry to disk."""
@@ -152,7 +258,7 @@ class CacheManager:
         
         # Check disk cache
         value = self._load_from_disk(cache_key)
-        if value is not None:
+        if value is not _MISS:
             # Load into memory cache
             self._memory_cache[cache_key] = value
             return True, value
@@ -348,17 +454,46 @@ _service_caches = {
     'chebifier': CacheManager(service_name='chebifier')
 }
 
-def cached(func: Callable = None, *, service: Optional[str] = None) -> Callable:
+def cached(func: Callable = None, *, service: Optional[str] = None,
+           skip_if: Optional[Callable[[Any], bool]] = None) -> Callable:
     """
     Decorator for unlimited caching with persistent storage.
-    
-    This replaces the standard @lru_cache decorator with unlimited caching,
-    persistent storage, and size monitoring.
-    
+
+    This replaces the standard ``@lru_cache`` decorator with unlimited caching,
+    persistent storage, and size monitoring. Keys are process-stable, so an
+    entry written by one run is found by the next (see
+    :func:`stable_key_part`).
+
+    Failed lookups are never written. An exception propagates uncached, and a
+    return value that :func:`is_failure_result` recognises as an in-band failure
+    report is returned to the caller but not stored --- a transient HTTP 429,
+    503 or timeout must not become a permanent "no data" answer.
+
     Args:
-        func: The function to cache
-        service: Optional service name for service-specific caching 
-                (e.g., 'pubchem', 'cas', 'nci', 'pubchemview', 'classyfire', 'opsin')
+        func: The function to cache, when used as a bare ``@cached``.
+        service: Optional service name for service-specific caching
+            (e.g. 'pubchem', 'cas', 'nci', 'pubchemview', 'classyfire',
+            'opsin', 'chebifier'). Omit it to use the global cache.
+        skip_if: Optional predicate applied to the return value; when it returns
+            True the value is handed back but not stored. Use it for functions
+            that report a failed lookup with something other than a
+            ``success: False`` dict.
+
+    Returns:
+        The decorated function, carrying ``cache_clear`` and ``cache_info``
+        attributes bound to the selected cache.
+
+    Note:
+        ``use_cache=False`` --- either as a constructor flag on the client or as
+        a keyword on the call --- means "do not *read* the cache"; a successful
+        result is still written so later calls benefit.
+
+    Example:
+        >>> @cached(service='pubchem')
+        ... def fetch(cid):
+        ...     return {'success': True, 'cid': cid}
+        >>> fetch(2244)['cid']
+        2244
     """
     def decorator(f: Callable) -> Callable:
         @wraps(f)
@@ -385,8 +520,14 @@ def cached(func: Callable = None, *, service: Optional[str] = None) -> Callable:
                 if found:
                     return value
             
-            # Call function and always cache result (even if use_cache is False)
+            # Call the function. A raised exception propagates and is not cached.
             result = f(*args, **kwargs)
+
+            # Never persist a failed lookup, even when use_cache is False:
+            # caching a transient network error would make it permanent.
+            if is_failure_result(result) or (skip_if is not None and skip_if(result)):
+                return result
+
             cache_manager.set(func_name, args, kwargs, result)
             
             return result

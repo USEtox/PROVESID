@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The persistent cache never hit across processes.** `CacheManager._get_cache_key`
+  built its key with `json.dumps(..., default=str)` over the call's arguments.
+  For a bound method the first argument is `self`, and the default `str()` of a
+  client object embeds its memory address
+  (`<PubChemView object at 0x7f...>`), so every instance — and every
+  interpreter — produced a different key. No entry written by one run was ever
+  reachable from the next: every "cached" method in `pubchem`, `pubchemview`,
+  `resolver`, `cascommonchem`, `classyfire` and `opsin` re-fetched from the
+  network on every call while the cache directory filled with unreachable
+  duplicates.
+
+  Arguments are now normalised by `cache.stable_key_part` into a form that is
+  stable across processes: objects reduce to the value they declare through
+  `__cache_key__()`, or to their fully qualified class name. `PubChemAPI`,
+  `PubChemView` and `NCIChemicalIdentifierResolver` declare
+  `__cache_key__` as `(class path, base_url)`, so two clients pointing at the
+  same endpoint share cache entries while two different endpoints stay apart.
+
+  **Existing cache entries are orphaned** by the new key scheme. They are inert,
+  not incorrect; run `provesid.cache.clear_cache()` (or
+  `clear_all_service_caches()`) to reclaim the disk space.
+
+- **A cached `None` was indistinguishable from a cache miss.** `_load_from_disk`
+  returned `None` both for "no entry" and for "the stored value is `None`", so
+  any function whose result is `None` re-ran on every call. It now returns a
+  `_MISS` sentinel.
+
+- **Failed lookups were cached as answers.** `@cached` stored whatever a
+  function returned, including the `{'success': False, 'error': ...}` dicts and
+  the empty lists that the clients hand back after an HTTP 429, a PUG-View
+  `ServerBusy` (503) or a timeout. A single transient error therefore became a
+  permanent "this compound has no data". `@cached` now skips storage for any
+  result that `cache.is_failure_result` recognises, and takes an optional
+  `skip_if` predicate for clients that signal failure some other way.
+
+- **`PubChemView` reported a failed fetch as an absent property.**
+  `extract_property_data` caught `PubChemViewError` — the base class, which
+  covers an exhausted retry budget — logged "not found", and returned `[]`.
+  Combined with the caching bug above, a 503 during
+  `get_melting_point(2244)` was stored as "aspirin has no melting point".
+  Transport failures now propagate; only a genuine 404 yields `[]`.
+  `get_property_table` makes the same distinction: an empty frame always means
+  "no such data", never "the fetch failed".
+
+- **`PubChemAPI.get_compound_synonyms` swallowed every error** into `[]`, with
+  the same consequence. A 404 still returns `[]`; anything else raises.
+  `get_compound_properties` keeps returning the properties it retrieved when the
+  follow-up synonym request fails, but now records the failure under
+  `synonyms_error` and, via `skip_if`, is not cached while incomplete.
+
+- **PubChem sheds load behind 4xx statuses, so absence is now decided by the
+  fault code, not the HTTP status.** Both services describe every error in the
+  body — `{"Fault": {"Code": "PUGVIEW.NotFound", ...}}` for a compound that
+  genuinely has no such data, `PUGVIEW.BadRequest` for an unknown heading,
+  `...ServerBusy` when the service is merely busy. `pubchem.fault_code` and
+  `pubchemview.fault_code` read it: a transient code is retried whatever status
+  carries it, `NotFound`/`BadRequest` is absence and is not retried, and any
+  other 4xx is a non-retryable error. Previously an unknown heading (HTTP 400)
+  cost four requests to learn a permanent answer.
+
+- **Absence is no longer persisted at all.** Even with the classification above,
+  a wrongly-reported empty result would be permanent once cached, while
+  re-fetching an empty one costs a single cheap request. Every cached extraction
+  method in `pubchemview` and `PubChemAPI.get_compound_synonyms` now carries a
+  `skip_if` predicate, so only positive results are stored. The raw response
+  fetchers (`get_property`, `get_experimental_properties`) are unaffected: they
+  raise on absence and so never had an empty to store.
+
+- Removed an unreachable `return cache_info` left behind in
+  `PubChemAPI.get_cache_info`.
+
 ## [0.7.0] - 2026-08-17
 
 ### Fixed

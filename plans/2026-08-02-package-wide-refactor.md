@@ -895,3 +895,131 @@ Replaced with a deterministic test of the guarantee that does hold.
   `test_create_indexes_*` mutates the shared database mid-run. Worth a sweep.
 - `ZeroPM.create_indexes()` reports `'exists'` for indexes it has just created; it
   reports `'created'` only when `force=True`. Cosmetic, but misleading.
+
+---
+
+## 17. Landed on 2026-09-19 — cache correctness (partly §5 B.7, partly new)
+
+Four defects in the caching layer, found while auditing the PubChem modules.
+Three of them were **not** in this plan and are the reason the rest of it matters
+less than it looked: the persistent cache was not merely untidy, it was inert.
+
+### 17.1 The cache key embedded a memory address (new)
+
+`CacheManager._get_cache_key` hashed `json.dumps(key_data, sort_keys=True,
+default=str)` over the call's arguments. For a bound method `args[0]` is `self`,
+and `str()` of a client object yields `<provesid.pubchemview.PubChemView object
+at 0x784d4cb8b080>`. Every instance, and every interpreter, therefore produced a
+different key. **No entry written by one run was ever reachable from the next**,
+for any `@cached` method in `pubchem`, `pubchemview`, `resolver`,
+`cascommonchem`, `classyfire` or `opsin` — while `/tmp/provesid_cache` filled
+with one unreachable pickle per call.
+
+Fixed with `cache.stable_key_part`, which normalises arguments into a
+JSON-serialisable, process-stable form: an object reduces to the value it
+declares through `__cache_key__()`, else to its fully qualified class name.
+`PubChemAPI`, `PubChemView` and `NCIChemicalIdentifierResolver` declare
+`__cache_key__` as `(class path, base_url)` — two clients on one endpoint share
+entries, two endpoints stay apart. `default=str` is gone, so an un-normalised
+argument can no longer slip through.
+
+Verified end to end: a live `extract_property_data(2244, "Dissociation
+Constants")` in one process, then the same call in a second process with
+`_make_request` replaced by a raising stub — served from disk.
+
+Existing entries are orphaned by the new scheme. Inert, not wrong;
+`clear_all_service_caches()` reclaims the space.
+
+### 17.2 Failed lookups were stored as answers (new)
+
+`@cached` wrote whatever the function returned, including the
+`{'success': False, 'error': ...}` dicts and empty lists the clients produce
+after a 429, a PUG-View `ServerBusy` or a timeout — and it wrote them **even
+when `use_cache=False`**. One transient error became a permanent "no data".
+
+`@cached` now skips storage for any result `cache.is_failure_result` accepts,
+and takes a `skip_if` predicate for other failure shapes. A raised exception was
+already uncached; that is now stated in the docstring.
+
+### 17.3 `PubChemView` reported a failed fetch as an absent property (new)
+
+`extract_property_data` caught `PubChemViewError` — the base class, so
+"failed after N attempts" included — logged `"Property not found"` and returned
+`[]`. With 17.2 this cached a 503 as fact. Observed live: `get_boiling_point(2244)`
+returned `[]` while `get_available_properties(2244)` listed Boiling Point as
+present; on retry it returned four values.
+
+Transport failures now propagate; only genuine absence yields `[]`.
+`get_property_table` makes the same distinction. Same fix in
+`PubChemAPI.get_compound_synonyms`, which swallowed every error into `[]`;
+`get_compound_properties` now records a failed synonym fetch under
+`synonyms_error` and is not cached while incomplete.
+
+This exposed a second bug: PUG-View answers an unknown heading with **400
+`PUGVIEW.BadRequest`**, which `_make_request` sent through `raise_for_status()`
+into the retry loop — four requests to learn a permanent answer. 4xx is now
+classified: 400 and 404 are absence, other non-429 4xx are non-retryable
+errors, and only 429/5xx/timeouts/connection errors retry. Tuning the retry
+budget and honouring `Retry-After` stay with §4 Workstream A.
+
+### 17.4 A cached `None` was a cache miss (§5 B.7, as planned)
+
+`_load_from_disk` returned `None` for both "no entry" and "the value is
+`None`", so any function returning `None` re-ran every time. Now a `_MISS`
+sentinel.
+
+### 17.5 Tests and docs
+
+New offline test files, 29 tests, no network: `tests/test_cache_correctness.py`
+(key stability across instances and across a subprocess, `__cache_key__`
+separation, the `None` sentinel, and that failures/exceptions/`skip_if` results
+are not stored) and `tests/test_pubchem_failure_reporting.py` (absence vs
+failure for both clients, and the 4xx/5xx classification). `docs/advanced_caching.md`
+gained a "What Is and Is Not Cached" section; `CHANGELOG.md` records all four.
+
+Also removed an unreachable `return cache_info` in `PubChemAPI.get_cache_info`.
+
+### 17.6 What the two failing tests taught (and the fix that followed)
+
+Running the full suite after 17.1–17.4 left two failures:
+`test_pubchem.py::test_synonyms` and
+`test_pubchemview.py::test_get_property_table`, both asserting a non-empty
+result and getting an empty one. Cache inspection showed the stored entries were
+**correct** (698 synonyms), so these were live empty responses, not stale reads.
+
+That falsified an assumption in 17.3: that PubChem's 404 and 400 reliably mean
+absence. Under load — the suite was competing with concurrent manual checks —
+they do not. What *is* reliable is the fault code in the body, which both
+services always send:
+
+| Response | Meaning |
+|---|---|
+| `PUGREST.NotFound` / `PUGVIEW.NotFound` | genuinely no such data |
+| `PUGVIEW.BadRequest` | no such heading |
+| `...ServerBusy` / `...ServerError` / `...Timeout` | ask again later |
+
+So classification now reads `Fault.Code` (`pubchem.fault_code`,
+`pubchemview.fault_code`): a transient code is retried whatever status carries
+it, absence codes are not retried, other 4xx are non-retryable errors.
+
+And because no classification is worth trusting absolutely, **absence is no
+longer cached at all**. A wrongly cached "no data" is permanent; re-fetching a
+genuinely empty result costs one cheap request. Every cached extraction method
+in `pubchemview` (17 of them) plus `get_compound_synonyms` carries a `skip_if`
+predicate. The two raw fetchers keep caching unconditionally — they raise on
+absence, so they never had an empty to store.
+
+This is the reason 17.1 mattered more than it first appeared: with unstable keys
+the poisoning was invisible, because no poisoned entry was ever read back. Fixing
+the key made the pre-existing defect reproducible, which is how it got found.
+
+### 17.7 Still open in this area
+
+- The default cache directory is `tempfile.gettempdir()/provesid_cache`.
+  `docs/advanced_caching.md` promises "cache survives restarts", which `/tmp`
+  does not honour on most Linux systems. Moving it under
+  `XDG_CACHE_HOME`/`%LOCALAPPDATA%` is a behaviour change, left for §5 B.7.
+- `batch_extract_properties` still degrades a per-property failure to `[]`, by
+  design, so one bad property does not abort a batch. Documented as such; a
+  proper `errors` mapping fits better once Workstream A lands.
+- The 14 `clear_<svc>_cache` / `get_<svc>_cache_info` pairs are untouched (§5 B.7).

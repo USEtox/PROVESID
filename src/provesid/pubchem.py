@@ -178,6 +178,80 @@ class PubChemServerError(PubChemError):
     """Exception raised when server error occurs"""
     pass
 
+
+#: Fault codes PUG-REST returns when it is shedding load rather than reporting
+#: absence. PubChem does not always pair them with a 5xx status, so the code in
+#: the body — not the HTTP status alone — decides whether the answer is "no such
+#: data" or "ask again later".
+TRANSIENT_FAULT_CODES = frozenset({
+    "PUGREST.ServerBusy",
+    "PUGREST.ServerError",
+    "PUGREST.Timeout",
+})
+
+
+def fault_code(response: requests.Response) -> Optional[str]:
+    """
+    Read PubChem's ``Fault.Code`` out of an error response.
+
+    PUG-REST describes every error in the body, for example
+    ``{"Fault": {"Code": "PUGREST.NotFound", "Message": "No synonyms found ..."}}``.
+    That code is the only reliable way to tell a compound that genuinely has no
+    such data from a service that is momentarily refusing work.
+
+    Args:
+        response: The HTTP response to inspect.
+
+    Returns:
+        The fault code, or None when the body is not a PubChem fault.
+    """
+    try:
+        return response.json().get("Fault", {}).get("Code")
+    except Exception:
+        return None
+
+
+def _is_empty_lookup(result: Any) -> bool:
+    """
+    Report whether a lookup returned nothing.
+
+    Absence is never cached. PubChem answers a genuinely empty lookup with a
+    ``NotFound`` fault, but it has also been observed doing so while under load,
+    and a wrongly cached "no data" is permanent whereas re-fetching an empty
+    result costs one cheap request.
+
+    Args:
+        result: Return value of a lookup method.
+
+    Returns:
+        True when the result carries no data.
+    """
+    if result is None:
+        return True
+    try:
+        return len(result) == 0
+    except TypeError:
+        return False
+
+
+def _synonyms_incomplete(result: Any) -> bool:
+    """
+    Report whether a property result carries a failed synonym fetch.
+
+    ``get_compound_properties`` returns the properties it did retrieve even when
+    the follow-up synonym request failed, so the dict looks successful while its
+    ``synonyms`` entry is missing. Caching that would make the gap permanent, so
+    it is passed to :func:`cached` as a ``skip_if`` predicate.
+
+    Args:
+        result: Return value of ``get_compound_properties``.
+
+    Returns:
+        True when the result records a synonym fetch error.
+    """
+    return isinstance(result, dict) and result.get('synonyms_error') is not None
+
+
 class PubChemAPI:
     """
     A Python interface to the PubChem REST API (PUG-REST)
@@ -220,6 +294,20 @@ class PubChemAPI:
         self.last_request_time = 0
         self.use_cache = use_cache
         
+    def __cache_key__(self) -> tuple:
+        """
+        Identify this client for cache-key purposes.
+
+        Only the endpoint distinguishes two clients' results; the pause time and
+        the ``use_cache`` flag change how a call is made, not what it returns.
+        Returning a stable value instead of the default object ``repr`` is what
+        lets a cache entry written in one process be found in the next.
+
+        Returns:
+            Tuple of the class path and the configured base URL.
+        """
+        return ("provesid.pubchem.PubChemAPI", self.base_url)
+
     def clear_cache(self):
         """Clear all cached results for PubChem API"""
         from .cache import clear_pubchem_cache
@@ -229,8 +317,6 @@ class PubChemAPI:
         """Get cache statistics for PubChem API cached methods"""
         from .cache import get_pubchem_cache_info
         return get_pubchem_cache_info()
-                    
-        return cache_info
         
     def _rate_limit(self):
         """Enforce rate limiting between requests"""
@@ -281,7 +367,12 @@ class PubChemAPI:
             elif response.status_code == 400:
                 raise PubChemError(f"Bad request: {response.text}")
             elif response.status_code == 404:
-                raise PubChemNotFoundError("Resource not found")
+                code = fault_code(response)
+                if code in TRANSIENT_FAULT_CODES:
+                    # PubChem occasionally sheds load behind a 404; that is not
+                    # an absent record.
+                    raise PubChemServerError(f"Server busy ({code})")
+                raise PubChemNotFoundError(f"Resource not found ({code or '404'})")
             elif response.status_code == 405:
                 raise PubChemError("Method not allowed")
             elif response.status_code == 500:
@@ -556,12 +647,16 @@ class PubChemAPI:
             
             # Get synonyms if requested
             synonyms_data = None
+            synonyms_error = None
             if include_synonyms:
                 try:
                     synonyms_data = self.get_compound_synonyms(cid, output_format)
                 except Exception as e:
-                    # Don't fail the whole request if synonyms fail
+                    # Don't fail the whole request if synonyms fail, but record
+                    # the failure so the partial result is not cached.
+                    logging.warning(f"Synonym lookup failed for CID {cid}: {e}")
                     synonyms_data = []
+                    synonyms_error = str(e)
             
             # Extract properties from nested structure
             if prop_data and 'PropertyTable' in prop_data and 'Properties' in prop_data['PropertyTable']:
@@ -573,6 +668,8 @@ class PubChemAPI:
                 properties_dict['error'] = None
                 if include_synonyms:
                     properties_dict['synonyms'] = synonyms_data
+                    if synonyms_error is not None:
+                        properties_dict['synonyms_error'] = synonyms_error
                 
                 return properties_dict
             else:
@@ -585,6 +682,8 @@ class PubChemAPI:
                 }
                 if include_synonyms:
                     result['synonyms'] = synonyms_data
+                    if synonyms_error is not None:
+                        result['synonyms_error'] = synonyms_error
                 return result
                 
         except Exception as e:
@@ -597,7 +696,7 @@ class PubChemAPI:
                 result['synonyms'] = None
             return result
 
-    @cached(service='pubchem')
+    @cached(service='pubchem', skip_if=_synonyms_incomplete)
     def get_compound_properties(self, cid: Union[int, str], 
                                properties: List[str], 
                                include_synonyms: bool = True,
@@ -646,7 +745,7 @@ class PubChemAPI:
                 })
         return results
     
-    @cached(service='pubchem')
+    @cached(service='pubchem', skip_if=_is_empty_lookup)
     def get_compound_synonyms(self, cid: Union[int, str], output_format: str = OutputFormat.JSON) -> List[str]:
         """
         Get compound synonyms by CID
@@ -656,26 +755,31 @@ class PubChemAPI:
             output_format: Desired output format
             
         Returns:
-            List of synonyms (flattened from nested structure)
+            List of synonyms (flattened from nested structure). An empty list
+            means PubChem lists no synonyms for this CID.
+
+        Raises:
+            PubChemError: If the request could not be completed. A failed fetch
+                is never reported as an empty list, so that a transient error
+                does not get cached as "this compound has no synonyms".
         """
         try:
             url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.CID, cid,
                                  Operation.SYNONYMS, output_format)
             response = self._make_request(url)
             raw_data = self._parse_response(response, output_format)
-            
-            # Extract synonyms from nested structure
-            if raw_data and 'InformationList' in raw_data:
-                info_list = raw_data['InformationList'].get('Information', [])
-                if info_list and len(info_list) > 0:
-                    return info_list[0].get('Synonym', [])
-            
-            # Return empty list if no synonyms found
+        except PubChemNotFoundError:
+            logging.debug(f"No synonym record for CID {cid}")
             return []
-            
-        except Exception:
-            # Return empty list on error to maintain consistent return type
-            return []
+        
+        # Extract synonyms from nested structure
+        if raw_data and 'InformationList' in raw_data:
+            info_list = raw_data['InformationList'].get('Information', [])
+            if info_list and len(info_list) > 0:
+                return info_list[0].get('Synonym', [])
+        
+        # Return empty list if no synonyms found
+        return []
     
     @cached(service='pubchem')
     def get_cids_by_name(self, name: str, output_format: str = OutputFormat.JSON,

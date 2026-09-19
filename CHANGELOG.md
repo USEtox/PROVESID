@@ -8,6 +8,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **One parser for PUG-View's free-text values, with typed output.** PubChem
+  reports every experimental property as prose written by whoever deposited it —
+  `"138-140 °C"`, `"8.5X10-5 mm Hg at 25 °C"`, `"greater than or equal to 100
+  mg/mL"`, `"Vapor pressure, kPa at 20°C: 24"` — and PROVESID had two parsers
+  for it that disagreed with each other: a 25-line one behind `PropertyData` and
+  a 390-line property-specific regex cascade behind `get_property_table`, both
+  returning strings.
+
+  The new `provesid.pubchemview_parse` module holds the only one.
+  `parse_value(text, heading)` returns a `ParsedValue` carrying:
+
+  - `value`, or `value_min`/`value_max` for a range (a single value fills both
+    bounds too, so a numeric filter needs no special case);
+  - `unit`, spelling normalised — `torr` and `mm Hg` both report as `mmHg`;
+  - `value_si`/`value_min_si`/`value_max_si`/`unit_si`, the same quantity in
+    `K`, `Pa`, `kg/m³`, `mol/m³`, `Pa·s`, `m²/s` or `N/m`;
+  - `temperature_c`, the temperature the measurement was made *at*, which is a
+    condition rather than the value and was the largest source of wrong answers;
+  - `operator` (`>`, `<`, `>=`, `<=`, `~`) when the entry bounds the value;
+  - `qualitative` (`insoluble`, `miscible`, `negligible`) when a word replaced
+    the number;
+  - `text`, always — nothing the parser cannot read is lost.
+
+  The `heading` argument settles what a string alone cannot: a bare `138` under
+  "Melting Point" is 138 °C, while a bare `1.19` under "LogP" is dimensionless
+  and complete.
+
+  Measured on 366 real value strings across ten compounds and ten properties:
+  90% yield a number, 8% a qualitative term, and the remaining 2% are entries
+  where PubChem states no value at all. Aspirin's melting point entries, which
+  are deposited variously as `135 °C` and `275 °F`, now all read 408.15 K.
+
+  Nothing is invented: an unrecognised unit is reported as written with no SI
+  conversion, and `%`, `ppm` and `ppb` are never converted, since a composition
+  needs a density to become a concentration. `M` for molar is not recognised
+  either — it is indistinguishable from metres and from a stray capital.
+
+- **`get_property_table` now returns numbers.** New columns `ValueMin`,
+  `ValueMax`, `ValueSI`, `ValueMinSI`, `ValueMaxSI`, `UnitSI`, `Operator`,
+  `Qualitative` and `Heading` join the existing ones, and the full list is
+  published as `PubChemView.PROPERTY_TABLE_COLUMNS`.
+
+- **Every PUG-View heading works, not only the experimental ones.** Both
+  response parsers hard-coded the path *Chemical and Physical Properties →
+  Experimental Properties → \*​*, but PUG-View nests a requested heading
+  wherever it sits in the compound's table of contents: "GHS Classification"
+  under *Safety and Hazards*, "Drug Indication" under *Drug and Medication
+  Information*. Those returned a full response and an empty result — data
+  reported as absent while it was right there. `_iter_information` walks the
+  record instead, and `get_property_table(2244, "GHS Classification")` now
+  returns its 18 rows.
+
+- `get_property_summary` gained `numeric_values`, `numeric_values_si` and
+  `units_si`; `export_properties_to_dict` gained the parsed numbers as flat,
+  JSON-serialisable keys. `PropertyData` gained `heading` and `parsed`.
+
+- `PubChemView.CACHE_SCHEMA_VERSION` is part of the client's cache key, so an
+  entry written before the shape of a result changed becomes unreachable rather
+  than being deserialised into the wrong structure. This mattered immediately: a
+  `PropertyData` pickled by the previous version restores without a `parsed`
+  attribute, and everything reading it would raise. Bump the constant whenever a
+  cached return shape changes.
+
 - **Bulk property retrieval.** `PubChemAPI.get_properties_for_cids(cids,
   properties)` asks PubChem about a whole list of compounds in one request
   rather than one request per compound: 450 compounds now cost 3 requests and
@@ -124,6 +187,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PubChemAPI.get_cache_info`.
 
 ### Changed
+- **`get_property_table`'s `ExperimentalValue` column is now a float**, not a
+  string. An entry that reports a range leaves it NaN and fills `ValueMin` and
+  `ValueMax` instead, rather than putting `"138-140"` in a column callers were
+  expected to plot. `Unit` is normalised, and `Temperature` is a float in °C
+  instead of a string like `"25°C"`.
+
+- **`PubChemView._extract_experimental_value_and_unit` and `_parse_value_string`
+  are gone**, replaced by `parse_value`. Between them they were 415 lines of
+  property-specific regex cascade, and the two disagreed: the same string parsed
+  one way through `get_melting_point` and another through `get_property_table`.
+
+- Entries that state no value — PubChem's pointers to its own external tables,
+  such as `{"Value": {"ExternalTableName": "iupacpka"}}` — are left out of
+  property results instead of appearing as blank rows.
+
+- The four module-level convenience functions in `pubchemview`
+  (`get_experimental_property`, `get_all_experimental_properties`,
+  `get_property_values_only`, `get_property_table`) are no longer cached
+  themselves. Each delegates to a cached `PubChemView` method, so the second
+  cache only kept a duplicate copy of the same payload on disk — under a key
+  that did not carry `CACHE_SCHEMA_VERSION`, which is exactly how an upgrade
+  would have served a stale shape.
+
 - **`get_compound_properties_batch` now issues one request per 200 CIDs**
   instead of one per CID, having been rebuilt on `get_properties_for_cids`. The
   return shape is unchanged — one dict per CID with the properties plus

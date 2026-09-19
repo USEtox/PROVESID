@@ -71,8 +71,7 @@ def test_property_table_returns_empty_frame_on_real_absence(view, monkeypatch):
     table = view.get_property_table(2244, "Melting Point")
     assert isinstance(table, pd.DataFrame)
     assert table.empty
-    assert list(table.columns) == ["CID", "StringWithMarkup", "ExperimentalValue",
-                                   "Unit", "Temperature", "Conditions", "FullReference"]
+    assert list(table.columns) == PubChemView.PROPERTY_TABLE_COLUMNS
 
 
 @pytest.mark.unit

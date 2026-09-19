@@ -57,8 +57,26 @@ def test_key_does_not_contain_a_memory_address(manager):
     """The normalised argument for a client must not be its default repr."""
     part = stable_key_part(PubChemView())
     assert "0x" not in repr(part)
-    assert part == ["provesid.pubchemview.PubChemView",
-                    "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view"]
+    assert part[:2] == ["provesid.pubchemview.PubChemView",
+                        "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view"]
+
+
+@pytest.mark.unit
+def test_client_key_carries_its_cache_schema_version():
+    """
+    A change to the *shape* of a cached result has to change the key.
+
+    Pickle stores an instance's ``__dict__``, so an entry written before a
+    dataclass gained a field restores without that attribute and every caller
+    reading it raises. The version in the key is what makes such an entry
+    unreachable instead.
+    """
+    view = PubChemView()
+    assert view.CACHE_SCHEMA_VERSION in view.__cache_key__()
+
+    bumped = PubChemView()
+    bumped.CACHE_SCHEMA_VERSION = view.CACHE_SCHEMA_VERSION + 1
+    assert stable_key_part(view) != stable_key_part(bumped)
 
 
 @pytest.mark.unit

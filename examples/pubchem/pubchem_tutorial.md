@@ -295,28 +295,49 @@ for prop in properties_to_check:
     print()
 ```
 
-## Advanced Pattern Recognition
+## From prose to numbers
 
-PubChemView includes sophisticated pattern recognition for extracting experimental values from various text formats. The recent improvements include support for formats like "log Kow = 1.19" for LogP data:
+PubChem reports experimental values as free text written by whoever deposited
+them. Every value carries a `parsed` attribute holding the numbers recovered
+from that text, including the same quantity in SI units so that entries
+deposited in different units can be compared:
 
 ```{code-cell} ipython3
-# Demonstrate the improved LogP pattern recognition
+# LogP is dimensionless, and the heading is what tells the parser so
 logp_data = pcv.extract_property_data(cids_aspirin[0], "LogP")
-print("LogP pattern recognition examples:")
+print("LogP:")
 for i, data in enumerate(logp_data):
-    if data.value:  # Only show non-empty values
-        # Test the extraction function directly
-        exp_value, unit, temp, cond = pcv._extract_experimental_value_and_unit(data.value, "LogP")
-        print(f"  {i+1}: '{data.value}' -> {exp_value} {unit if unit else '(unitless)'}")
+    if data.value:
+        p = data.parsed
+        print(f"  {i+1}: {data.value!r} -> {p.value} {p.unit or '(unitless)'}")
 
-# Test with a compound that has vapor pressure data
+# Vapor pressure, where the unit and the measurement temperature both matter
 caffeine_cid = pc.get_cids_by_name("caffeine")[0]
 vp_data = pcv.extract_property_data(caffeine_cid, "Vapor Pressure")
-print(f"\nVapor Pressure pattern recognition examples (CID {caffeine_cid}):")
-for i, data in enumerate(vp_data[:3]):  # Show first 3
+print(f"\nVapor Pressure (CID {caffeine_cid}):")
+for i, data in enumerate(vp_data[:3]):
     if data.value:
-        exp_value, unit, temp, cond = pcv._extract_experimental_value_and_unit(data.value, "Vapor Pressure")
-        print(f"  {i+1}: '{data.value}' -> {exp_value} {unit if unit else 'no unit'}")
+        p = data.parsed
+        at = f" at {p.temperature_c:g} °C" if p.temperature_c is not None else ""
+        si = f" = {p.value_si:.6g} {p.unit_si}" if p.value_si is not None else ""
+        print(f"  {i+1}: {data.value!r} -> {p.value} {p.unit or 'no unit'}{si}{at}")
+```
+
+The parser is also usable on its own, which is the easiest way to see what it
+does with the shapes PubChem uses:
+
+```{code-cell} ipython3
+from provesid import parse_value
+
+for text, heading in [("138-140", "Melting Point"),
+                      ("275 °F", "Melting Point"),
+                      ("8.5X10-5 mm Hg at 25 °C", "Vapor Pressure"),
+                      ("greater than or equal to 100 mg/mL", "Solubility"),
+                      ("Insoluble in water", "Solubility")]:
+    v = parse_value(text, heading)
+    print(f"{text!r:38} value={v.value} range=({v.value_min}, {v.value_max}) "
+          f"unit={v.unit!r} si={v.value_si} {v.unit_si or ''} "
+          f"op={v.operator!r} qualitative={v.qualitative!r}")
 ```
 
 ## Batch Property Extraction

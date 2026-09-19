@@ -1120,3 +1120,171 @@ prints which source answered.
   `synonyms` table; `get_compound_properties(include_synonyms=True)` is still
   online-only.
 
+## 19. Landed on 2026-09-19 — one parser, typed values
+
+Item 4 of the PubChem assessment, and the last part of "the api for retrieving
+chemical properties is incomplete": the values came back as prose.
+
+### 19.1 Two parsers that disagreed (new)
+
+`pubchemview` had two:
+
+- `_parse_value_string` (25 lines), behind `_extract_value_info` and therefore
+  behind `PropertyData.unit` and every convenience getter. It knew six unit
+  families and returned `(unit, conditions)` — no value at all.
+- `_extract_experimental_value_and_unit` (390 lines), behind
+  `get_property_table` only. A property-specific cascade — a branch each for
+  vapor pressure, logP, dissociation constants, melting/boiling point, density,
+  viscosity and solubility, each with four to ten regexes — returning four
+  strings.
+
+The same string parsed differently depending on which method a caller used, and
+neither returned a number. `get_melting_point(2244)` handed back the string
+`"138-140"`; comparing two compounds meant writing a third parser.
+
+`src/provesid/pubchemview_parse.py` replaces both with `parse_value(text,
+heading)` → `ParsedValue`. Four ordered patterns (range, number-then-unit,
+labelled value, any number) do the work the cascade did, because the notations
+that drove most of its branches are normalised first: `8.5X10-5` → `8.5e-5`,
+`4,600` → `4600`, NBSP → space, U+2212 → hyphen. 415 lines of cascade became a
+115-line parser plus two lookup tables.
+
+### 19.2 What the typed output carries
+
+`value` / `value_min` / `value_max`, `unit`, `value_si` / `value_min_si` /
+`value_max_si` / `unit_si`, `temperature_c`, `operator`, `qualitative`,
+`conditions`, and always `text`. Decisions worth recording:
+
+- **A single value fills both bounds.** A caller filtering numerically should
+  not have to ask which shape it got. A range leaves `value` None, so "is this
+  one number" stays answerable.
+- **Range ends convert separately.** A temperature conversion is affine, so
+  138-140 °C is 411.15-413.15 K; scaling the range by the °C factor alone would
+  be nonsense. That is why there are three `*_si` fields rather than one.
+- **`temperature_c` is a condition, not the value.** `"2.47 cP at 20 °C"`
+  reports a viscosity. Reading the condition's number as the value is the
+  easiest way to get this wrong, so the clause is blanked out of the string
+  before a value is looked for. Two spellings count as a condition: `at 20 °C`
+  and the parenthesised label `(77 °F):`. A bare `(135 °C)` does not — the
+  trailing colon is what distinguishes a label from a parenthesised value.
+- **Nothing is invented.** An unrecognised unit is reported as written with
+  `unit_si=None`. `%`, `ppm` and `ppb` are never converted: a composition needs
+  a density to become a concentration, and a guess would be indistinguishable
+  from a measurement. `M` for molar is not recognised at all — indistinguishable
+  from metres, from the M of a molecular weight, and from a stray capital.
+
+Two bugs the work surfaced, both from combining a permissive unit pattern with
+short aliases, both now covered by a test:
+
+- a `'c': '°C'` alias turned the leading letter of `cP` into a temperature, so
+  viscosity in centipoise came back as 275.62 K. Single letters are now matched
+  only as a whole token;
+- case-insensitive matching of the alias `pa` read the `pa` of `parts` as
+  pascals, so `"5 parts water"` became 5 Pa. A known spelling must now end
+  where the token ends.
+
+### 19.3 The heading argument (new)
+
+Two things a string alone cannot settle, both from real data: a bare `138` under
+"Melting Point" is °C (depositors routinely omit the unit), and a bare `1.19`
+under "LogP" is dimensionless and complete rather than missing its unit.
+`CELSIUS_HEADINGS` and `DIMENSIONLESS_HEADINGS` encode those; passing no heading
+declines both hints, so the parser is usable on a string of unknown provenance.
+
+### 19.4 Non-experimental subtrees were reported as absent (new)
+
+Both response parsers walked a hard-coded path: `Record → Section[TOCHeading ==
+"Chemical and Physical Properties"] → Section[TOCHeading == "Experimental
+Properties"] → Section[*] → Information`. PUG-View nests a requested heading
+wherever it sits in that compound's table of contents, which is not the same
+place for every heading. Verified against the live service:
+
+| heading | path |
+| --- | --- |
+| `Melting Point` | Chemical and Physical Properties → Experimental Properties |
+| `GHS Classification` | Safety and Hazards → Hazards Identification |
+| `Drug Indication` | Drug and Medication Information |
+| `Absorption, Distribution and Excretion` | Pharmacology and Biochemistry |
+| `Computed Properties` | Chemical and Physical Properties → Computed Properties → *one section per property* |
+
+So `get_property_table(2244, "GHS Classification")` fetched a full response,
+found nothing at the hard-coded path, and returned an empty frame — the same
+answer it gives for a compound that genuinely has no such data. `_iter_information`
+now walks the record and yields `(heading, item)` pairs, which also means the
+heading reaching the parser is the innermost one that owns the value rather than
+a value the caller passed in.
+
+While walking, items that state no value are skipped: PubChem records some
+sections as a pointer, `{"Value": {"ExternalTableName": "iupacpka"}}`, which
+previously produced a blank row in the table. All seven "unparseable" strings in
+the coverage measurement below were these.
+
+### 19.5 Coverage measured on real data
+
+Ten compounds × ten properties = 365 real value strings: **90% yield a number,
+8% a qualitative term**, and the remainder stated no value at all and are now
+filtered out. So every non-empty string PubChem returned for that sample parsed
+into either a number or a term.
+
+Of the numbers, 76% also carry an SI conversion. The other 24% are the
+dimensionless quantities (logP, pKa, refractive index — where the number is the
+whole answer) and the compositions (`%`, `ppm`), which is why the docs tell
+callers to filter on `UnitSI` rather than assume `ValueSI` is populated.
+
+The cross-check that the conversions are right: aspirin's melting point is
+deposited variously as `135 °C`, `135 °C (rapid heating)`, `275 °F` and
+`275 °F (NTP, 1992)`, and all of them now read 408.15 K. Ethanol comes out at
+−114.0 °C, caffeine at 236.7 °C, ibuprofen at 76.0 °C — all correct.
+
+### 19.6 Changing a cached return shape needs a cache version (new)
+
+Noticed while re-measuring coverage: the first run still reported blank rows
+that fresh fetches did not produce. They were cache entries written minutes
+earlier, before the value-less pointers were filtered out.
+
+That is the benign version of a real hazard. `PropertyData` gained two fields,
+and pickle stores an instance's `__dict__`, so an entry written by the previous
+version restores as an object with **no `parsed` attribute** — and every caller
+that reads `data.parsed` would raise, on a machine where the only thing that
+changed was the package version. Fixing the cache key in §17.1 is what made
+these entries reachable in the first place, so this is a hazard that §17
+created and §19 had to answer.
+
+`PubChemView.CACHE_SCHEMA_VERSION` (now 2) is part of `__cache_key__`, so every
+entry of the previous shape is unreachable. It is a constant to bump whenever a
+cached return shape changes; a schema change is not a code change the cache can
+detect by itself.
+
+The four module-level convenience functions were a loophole in this: they were
+`@cached` *and* delegated to cached methods, so they kept a duplicate payload
+under a key with no `self` in it and therefore no version. Dropping their
+decorators fixes the staleness and halves the disk they used.
+
+### 19.7 Tests, docs, example
+
+`tests/test_pubchemview_parse.py` — 69 tests, fully offline, each case a string
+shape PubChem actually returns, so the file doubles as a record of what the data
+looks like. Two tests in `test_pubchemview.py` that exercised the deleted
+cascade were rewritten against the parser, and one column assertion now reads
+`PROPERTY_TABLE_COLUMNS` rather than repeating the list.
+
+`docs/api/pubchemview.md` — the "Data Structures" and "Advanced Usage" sections
+documented a `PropertyData` with fields that never existed (`cid`,
+`string_with_markup`, `reference_doi`, …) and a method
+`experimental_properties_to_dataframe` that does not exist. Replaced with the
+real dataclass, a `ParsedValue` field table, and worked examples.
+
+`examples/pubchemview_parsed_values_demo.py` runs all of it live.
+
+### 19.8 Still open
+
+- `batch_extract_properties` still degrades a per-property failure to `[]` (see
+  §17.7).
+- The convenience getters still return `List[PropertyData]`; a caller wanting a
+  number reaches through `.parsed`. A `melting_point_si(cid)`-style accessor
+  would be the obvious next convenience layer, but it needs a policy for which
+  of several entries to believe, which is a data-quality question rather than a
+  parsing one.
+- `PubChemID.properties()` covers computed properties offline; experimental
+  ones have no offline source at all, so PUG-View is still always a network
+  call.

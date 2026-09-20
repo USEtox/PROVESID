@@ -345,13 +345,13 @@ class CASCommonChem:
     
     def clear_cache(self):
         """Clear all cached results for CAS Common Chemistry"""
-        from .cache import clear_cas_cache
-        clear_cas_cache()
+        from .cache import clear_cache
+        clear_cache(service='cas')
     
     def get_cache_info(self):
         """Get cache information for CAS Common Chemistry cached methods"""
-        from .cache import get_cas_cache_info
-        return get_cas_cache_info()
+        from .cache import get_cache_info
+        return get_cache_info(service='cas')
     
     @staticmethod
     def _empty_res():

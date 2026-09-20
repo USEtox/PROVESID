@@ -20,7 +20,7 @@ Run::
 
 import pandas as pd
 
-from provesid.cache import get_chebifier_cache_info
+from provesid.cache import get_cache_info
 from provesid.taxonomy import ChebifierClassifier, chebifier_available
 
 
@@ -75,7 +75,7 @@ def main() -> None:
     print(merged.groupby("chem_class")["name"].count().to_string())
 
     # Cache visibility — the second classify() is served from disk.
-    info = get_chebifier_cache_info()
+    info = get_cache_info(service="chebifier")
     print(f"\nchebifier cache: {info.get('disk_entries')} entries, "
           f"{info.get('total_size_mb', 0):.2f} MB")
 

@@ -9,6 +9,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The cache is in a cache directory now, one per service, with a version in
+  every key.** Three changes to `provesid.cache`:
+
+  ```python
+  import provesid
+
+  provesid.get_cache_info(service="pubchem")["cache_directory"]
+  # '/home/you/.cache/provesid/pubchem'   (was /tmp/provesid_cache/pubchem)
+
+  provesid.clear_cache(service="pubchem")     # one service
+  provesid.clear_cache(all_services=True)     # all of them
+  provesid.get_all_cache_info()               # {'global': ..., 'pubchem': ...}
+  ```
+
+  *It persists.* The default was `tempfile.gettempdir()/provesid_cache` while
+  `docs/advanced_caching.md` promised the cache survived a restart. Most Linux
+  systems clear `/tmp` on boot, so it did not. It now uses
+  `platformdirs.user_cache_dir` through the new `provesid.utils.user_cache_path`
+  — `~/.cache/provesid/` on Linux, `~/Library/Caches/provesid/` on macOS,
+  `%LOCALAPPDATA%\USEtox\provesid\Cache\` on Windows — overridable with
+  `PROVESID_CACHE_DIR`, and separate from `PROVESID_DATA_DIR` because cached
+  responses are disposable and 2.4 GiB datasets are not. Entries written under
+  the old default are not migrated; they were never reliably there to migrate.
+
+  *The service list is data.* Fourteen near-identical module-level functions
+  (`clear_pubchem_cache`, `clear_cas_cache`, … and seven `get_<svc>_cache_info`
+  twins) plus `export_service_cache` and `import_service_cache` are **removed**.
+  Every cache function — `clear_cache`, `get_cache_info`, `get_cache_size`,
+  `export_cache`, `import_cache`, `set_cache_warning_threshold`,
+  `enable_cache_warnings` — now takes `service=`, with the names in
+  `provesid.CACHE_SERVICES`; `get_all_cache_info()` and
+  `clear_cache(all_services=True)` cover the lot. An unknown service raises
+  `ValueError` instead of silently writing to the global cache, where the
+  matching `clear_cache` would never look. `get_service_cache()` returns the
+  underlying `CacheManager`, and builds it on first use, so importing
+  `provesid` no longer creates eight cache directories.
+
+  *Keys carry a version.* Pickle stores an instance's `__dict__`, so an entry
+  written before a cached dataclass gained a field comes back as an object
+  missing that attribute, and every caller that reads it raises on a machine
+  where only the package version changed. There are now three versions folded
+  into the key, and you bump the narrowest one that covers the change:
+  `@cached(version=N)` for one function, a client's `CACHE_SCHEMA_VERSION` for
+  one client, `provesid.cache.CACHE_KEY_VERSION` for everything. Retired
+  entries are unreachable, not deleted; `clear_cache` reclaims the space.
+
+  Also fixed: `export_cache` dropped any entry whose cached value was `None`
+  (`is not None` where it meant `is not _MISS`), so a legitimately cached
+  `None` did not survive an export/import round trip.
+
 - **The four SQLite clients can be closed, used in a `with` block, and queried
   from several threads.** `PubChemID`, `CompToxID`, `ZeroPM` and `CheMBL` each
   opened a connection in `__init__` and closed it in `__del__`, and nowhere

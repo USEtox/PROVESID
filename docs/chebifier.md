@@ -289,9 +289,9 @@ Predictions are cached on disk under the `chebifier` cache service, keyed by
 structures is served from cache without loading the model. Manage it with:
 
 ```python
-from provesid.cache import clear_chebifier_cache, get_chebifier_cache_info
-get_chebifier_cache_info()
-clear_chebifier_cache()
+from provesid.cache import clear_cache, get_cache_info
+get_cache_info(service="chebifier")
+clear_cache(service="chebifier")
 ```
 
 **Turn it off for large one-pass runs** (`use_cache=False`). The cache writes one

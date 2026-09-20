@@ -174,13 +174,13 @@ class PubChemView:
 
     def clear_cache(self):
         """Clear all cached results for PubChem View"""
-        from .cache import clear_pubchemview_cache
-        clear_pubchemview_cache()
+        from .cache import clear_cache
+        clear_cache(service='pubchemview')
     
     def get_cache_info(self):
         """Get cache statistics for PubChem View cached methods"""
-        from .cache import get_pubchemview_cache_info
-        return get_pubchemview_cache_info()
+        from .cache import get_cache_info
+        return get_cache_info(service='pubchemview')
     
     @property
     def min_request_interval(self) -> float:

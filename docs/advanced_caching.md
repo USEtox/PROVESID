@@ -41,44 +41,57 @@ result1 = pubchem_api.get_compound_by_cid(2244)  # Cached
 result2 = nci_resolver.resolve('aspirin', 'smiles')  # Cached  
 result3 = cas_api.cas_to_detail('50-00-0')  # Cached
 
-# Cache management works across all APIs
-info = provesid.get_cache_info()
-print(f"Cache size: {info['total_size_mb']:.2f} MB")
+# Each service has its own cache; address one with service=
+for name, info in provesid.get_all_cache_info().items():
+    print(f"{name:12s} {info['total_size_mb']:8.2f} MB")
 
-# Export your valuable cache (includes all API data)
-provesid.export_cache('my_research_cache.pkl')
+# Export your valuable PubChem results
+provesid.export_cache('my_research_cache.pkl', service='pubchem')
 
-# Import shared cache (works for all APIs)
-provesid.import_cache('shared_cache.pkl')
+# Import a colleague's
+provesid.import_cache('shared_cache.pkl', service='pubchem')
 
-# Clear when needed (clears all API caches)
-provesid.clear_cache()
+# Clear when needed
+provesid.clear_cache(service='pubchem')   # one service
+provesid.clear_cache(all_services=True)   # all of them
 ```
 
-## Migration from Previous Versions
+## One Cache per Service
 
-**Before (limited cache):**
+Each online service gets its own directory, so a PubChem cache can be cleared,
+sized, exported or shared without touching the others:
+
 ```python
-api = PubChemAPI(cache_size=512)  # Limited to 512 entries
+import provesid
+
+provesid.CACHE_SERVICES
+# ('pubchem', 'cas', 'nci', 'pubchemview', 'classyfire', 'opsin', 'chebifier')
 ```
 
-**Now (unlimited cache):**
+Every cache function takes the same optional `service=` argument. Omit it and
+you address the *global* cache, which holds entries from `@cached` functions
+that name no service:
+
 ```python
-api = PubChemAPI()  # Unlimited cache automatically
-# No cache_size parameter needed!
+provesid.get_cache_info(service='pubchem')   # one service
+provesid.get_cache_info()                    # the global cache
+provesid.get_all_cache_info()                # all of them, keyed by name
+provesid.clear_cache(all_services=True)      # everything, global included
 ```
 
-Your existing code will work unchanged, but now with unlimited caching!
+A service name that is not in `CACHE_SERVICES` raises `ValueError` rather than
+falling back to the global cache — a typo would otherwise write entries to a
+place the matching `clear_cache` call never looks.
 
 ## Cache Functions Reference
 
-### `provesid.get_cache_info() -> dict`
+### `provesid.get_cache_info(service=None) -> dict`
 Get comprehensive cache statistics:
 ```python
-info = provesid.get_cache_info()
+info = provesid.get_cache_info(service='pubchem')
 print(info)
 # {
-#     'cache_directory': '/path/to/cache',
+#     'cache_directory': '/home/you/.cache/provesid/pubchem',
 #     'memory_entries': 42,
 #     'disk_entries': 42, 
 #     'total_size_bytes': 1048576,
@@ -90,55 +103,68 @@ print(info)
 # }
 ```
 
-### `provesid.get_cache_size() -> dict`
+### `provesid.get_all_cache_info() -> dict`
+The same, for the global cache and every service at once:
+```python
+for name, info in provesid.get_all_cache_info().items():
+    print(f"{name:12s} {info['total_size_mb']:8.2f} MB")
+```
+
+### `provesid.get_cache_size(service=None) -> dict`
 Get detailed size information:
 ```python
-size = provesid.get_cache_size()
+size = provesid.get_cache_size(service='pubchem')
 print(f"Cache: {size['mb']:.2f} MB ({size['files']} files)")
 ```
 
-### `provesid.export_cache(path, format='pickle') -> bool`
+### `provesid.export_cache(path, format='pickle', service=None) -> bool`
 Export cache to file:
 ```python
 # Export as pickle (recommended)
-success = provesid.export_cache('cache_backup.pkl')
+success = provesid.export_cache('cache_backup.pkl', service='pubchem')
 
 # Export as JSON (human-readable, but limited data types)
 success = provesid.export_cache('cache_backup.json', format='json')
 ```
 
-### `provesid.import_cache(path, merge=True) -> bool`
+### `provesid.import_cache(path, merge=True, service=None) -> bool`
 Import cache from file:
 ```python
 # Merge with existing cache
-success = provesid.import_cache('cache_backup.pkl')
+success = provesid.import_cache('cache_backup.pkl', service='pubchem')
 
 # Replace existing cache
 success = provesid.import_cache('cache_backup.pkl', merge=False)
 ```
 
-### `provesid.clear_cache()`
-Clear all cached data:
+### `provesid.clear_cache(service=None, all_services=False)`
+Clear cached data:
 ```python
-provesid.clear_cache()
+provesid.clear_cache(service='pubchem')   # one service
+provesid.clear_cache()                    # the global cache only
+provesid.clear_cache(all_services=True)   # every cache
 ```
 
-### `provesid.set_cache_warning_threshold(size_gb)`
+### `provesid.set_cache_warning_threshold(size_gb, service=None)`
 Set size warning threshold:
 ```python
-# Warn when cache exceeds 10 GB
-provesid.set_cache_warning_threshold(10.0)
+# Warn when the PubChem cache exceeds 10 GB
+provesid.set_cache_warning_threshold(10.0, service='pubchem')
 ```
 
-### `provesid.enable_cache_warnings(enabled=True)`
+### `provesid.enable_cache_warnings(enabled=True, service=None)`
 Enable/disable size warnings:
 ```python
 # Disable warnings
-provesid.enable_cache_warnings(False)
+provesid.enable_cache_warnings(False, service='pubchem')
 
 # Re-enable warnings  
-provesid.enable_cache_warnings(True)
+provesid.enable_cache_warnings(True, service='pubchem')
 ```
+
+### `provesid.get_service_cache(service=None) -> CacheManager`
+The underlying manager, for code that needs `get`/`set` directly (as
+`ChebifierClassifier` does with its InChIKey-keyed entries).
 
 ## Use Cases
 
@@ -153,16 +179,19 @@ for compound in my_compound_list:
     properties = api.get_compound_properties(compound, ['MolecularWeight', 'LogP'])
 
 # Export cache at end of day
-provesid.export_cache('research_day1.pkl')
+provesid.export_cache('research_day1.pkl', service='pubchem')
 
 # Next day: import and continue
-provesid.import_cache('research_day1.pkl')
+provesid.import_cache('research_day1.pkl', service='pubchem')
 # All previous calls are cached!
 ```
 
+Nothing is lost if you skip the export — the cache is already persistent. The
+export is for moving entries to another machine or archiving them.
+
 ### 2. Team Collaboration
 ```python
-# Team member 1: Gather data from multiple APIs
+# Team member 1: gather data from two services
 pubchem_api = provesid.PubChemAPI()
 nci_resolver = provesid.NCIChemicalIdentifierResolver()
 
@@ -172,11 +201,13 @@ for cid in expensive_compound_list:
 for cas in cas_number_list:
     nci_resolver.get_molecular_data(cas)
 
-# Share the cache (includes data from all APIs)
-provesid.export_cache('team_shared_cache.pkl')
+# One file per service: an export covers one cache, not all of them
+provesid.export_cache('team_pubchem.pkl', service='pubchem')
+provesid.export_cache('team_nci.pkl', service='nci')
 
-# Team member 2: Use shared data
-provesid.import_cache('team_shared_cache.pkl')
+# Team member 2: use shared data
+provesid.import_cache('team_pubchem.pkl', service='pubchem')
+provesid.import_cache('team_nci.pkl', service='nci')
 # Instant access to all the data without API calls!
 ```
 
@@ -185,10 +216,10 @@ provesid.import_cache('team_shared_cache.pkl')
 # When online: gather data
 api = provesid.PubChemAPI()
 test_data = [api.get_compound_by_cid(cid) for cid in test_compounds]
-provesid.export_cache('offline_cache.pkl')
+provesid.export_cache('offline_cache.pkl', service='pubchem')
 
-# When offline: use cached data
-provesid.import_cache('offline_cache.pkl')
+# On another machine: import and work offline
+provesid.import_cache('offline_cache.pkl', service='pubchem')
 api = provesid.PubChemAPI()
 # All test compounds available from cache
 result = api.get_compound_by_cid(2244)  # Works offline!
@@ -207,12 +238,12 @@ def process_compounds(compound_list):
         
         # Check cache size every 100 compounds
         if i % 100 == 0:
-            size = provesid.get_cache_size()
+            size = provesid.get_cache_size(service='pubchem')
             print(f"Processed {i} compounds, cache: {size['mb']:.1f} MB")
             
             # Export backup every 1000 compounds
             if i % 1000 == 0 and i > 0:
-                provesid.export_cache(f'backup_{i}.pkl')
+                provesid.export_cache(f'backup_{i}.pkl', service='pubchem')
 ```
 
 ## Performance Benefits
@@ -228,15 +259,33 @@ After restart: Slow (cache lost)
 ```
 All calls: Fast after first time
 After restart: Fast (persistent storage)
-Across sessions: Fast (cache preserved)
+After reboot: Fast (a real cache directory, not /tmp)
 Team sharing: Instant (import cache)
 ```
 
 ## Cache Storage Location
 
-Cache files are stored in:
-- **Windows**: `%TEMP%\provesid_cache\`
-- **macOS/Linux**: `/tmp/provesid_cache/`
+Cache files live in the per-user cache directory that `platformdirs` picks for
+the platform, with one subdirectory per service:
+
+- **Linux**: `~/.cache/provesid/<service>/`
+- **macOS**: `~/Library/Caches/provesid/<service>/`
+- **Windows**: `%LOCALAPPDATA%\USEtox\provesid\Cache\<service>\`
+
+Set `PROVESID_CACHE_DIR` to put them somewhere else — a scratch disk, or a
+throwaway directory for a test run:
+
+```bash
+export PROVESID_CACHE_DIR=/scratch/provesid-cache
+```
+
+This is *not* the system temp directory, and that is the point: `/tmp` is
+cleared on boot on most Linux systems, so the earlier default quietly discarded
+the entire cache between sessions while this page promised it persisted.
+
+Cached responses are disposable — everything here can be re-fetched — which is
+why they sit under a different root from the bulk datasets
+(`PROVESID_DATA_DIR`, see `provesid.datasets`) and can be deleted independently.
 
 Each cached API call is stored as a separate file with metadata tracking.
 
@@ -246,20 +295,20 @@ Each cached API call is stored as a separate file with metadata tracking.
 ```python
 # Export cache regularly during long-running processes
 if batch_count % 10 == 0:
-    provesid.export_cache(f'backup_batch_{batch_count}.pkl')
+    provesid.export_cache(f'backup_batch_{batch_count}.pkl', service='pubchem')
 ```
 
 ### 2. Share Team Caches
 ```python
 # At end of data collection phase
-provesid.export_cache('project_phase1_cache.pkl')
+provesid.export_cache('project_phase1_cache.pkl', service='pubchem')
 # Share this file with team members
 ```
 
 ### 3. Monitor Size
 ```python
 # Check cache size for large projects
-size = provesid.get_cache_size()
+size = provesid.get_cache_size(service='pubchem')
 if size['gb'] > 2.0:
     print(f"Large cache: {size['gb']:.2f} GB - consider archiving")
 ```
@@ -267,7 +316,7 @@ if size['gb'] > 2.0:
 ### 4. Clean Up When Done
 ```python
 # Clear cache when switching projects
-provesid.clear_cache()
+provesid.clear_cache(all_services=True)
 ```
 
 ## Troubleshooting
@@ -276,24 +325,24 @@ provesid.clear_cache()
 If you see cache size warnings:
 ```python
 # Option 1: Increase threshold
-provesid.set_cache_warning_threshold(10.0)  # 10 GB
+provesid.set_cache_warning_threshold(10.0, service='pubchem')  # 10 GB
 
 # Option 2: Export and clear
-provesid.export_cache('archive.pkl')
-provesid.clear_cache()
+provesid.export_cache('archive.pkl', service='pubchem')
+provesid.clear_cache(service='pubchem')
 
 # Option 3: Disable warnings
-provesid.enable_cache_warnings(False)
+provesid.enable_cache_warnings(False, service='pubchem')
 ```
 
 ### Import/Export Failures
 ```python
 # Always check return values
-success = provesid.export_cache('backup.pkl')
+success = provesid.export_cache('backup.pkl', service='pubchem')
 if not success:
     print("Export failed - check disk space and permissions")
 
-success = provesid.import_cache('backup.pkl') 
+success = provesid.import_cache('backup.pkl', service='pubchem') 
 if not success:
     print("Import failed - check file exists and is valid")
 ```
@@ -301,7 +350,7 @@ if not success:
 ### Cache Location Issues
 ```python
 # Check cache location
-info = provesid.get_cache_info()
+info = provesid.get_cache_info(service='pubchem')
 print(f"Cache directory: {info['cache_directory']}")
 
 # Verify directory is writable
@@ -371,6 +420,37 @@ Two clients pointing at the same endpoint share cache entries; two different
 endpoints keep separate ones. Any class whose cached methods should behave this
 way can declare `__cache_key__`; without it, the class's fully qualified name is
 used.
+
+### Keys carry a version, so an upgrade cannot serve the wrong shape
+
+Pickle stores an instance's `__dict__`. When a cached return value gains a
+field, an entry written by the previous release unpickles into an object that
+is *missing that attribute*, and every caller reading it raises — on a machine
+where the only thing that changed was the package version. The cache cannot
+detect this by itself: the key is the same, the file is readable, the value is
+simply the wrong shape.
+
+So three version numbers are folded into the key, and the right one to bump is
+the narrowest that covers the change:
+
+| Bump | Retires | Where |
+|---|---|---|
+| `@cached(version=N)` | one function's entries | the decorator |
+| `Client.CACHE_SCHEMA_VERSION` | one client's entries | returned from `__cache_key__` |
+| `provesid.cache.CACHE_KEY_VERSION` | every entry, everywhere | module constant |
+
+```python
+from provesid.cache import cached
+
+@cached(service='pubchem', version=2)   # v1 entries are now unreachable
+def fetch_summary(cid):
+    ...
+```
+
+Retired entries are not deleted, just never read again; `clear_cache` reclaims
+the space. There is no migration path and none is wanted — the value of a
+cache entry is one avoided HTTP request, which is not worth the risk of
+deserialising a stale shape.
 
 ## Technical Details
 

@@ -2,7 +2,7 @@ import logging
 import time
 from typing import Any
 import requests
-from .cache import cached, clear_opsin_cache, get_opsin_cache_info
+from .cache import cached, clear_cache, get_cache_info
 from .http import (
     HTTPClient,
     NotFoundError,
@@ -229,11 +229,11 @@ class OPSIN:
 
     def clear_cache(self):
         """Clear the cache for all OPSIN methods"""
-        clear_opsin_cache()
+        clear_cache(service='opsin')
     
     def get_cache_info(self):
         """Get information about the current cache state"""
-        return get_opsin_cache_info()
+        return get_cache_info(service='opsin')
 
     @cached(service='opsin', skip_if=_not_resolved)
     def get_id(self, iupac_name: str, timeout=30):

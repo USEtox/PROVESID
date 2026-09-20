@@ -34,12 +34,12 @@ partly done; all but the three from 2026-08-02 landed in the last two days.
 | 2 | delete legacy resolvers from `tools.py` | **done** (§21) |
 | 3 | `http.py`; migrate `resolver.py`, `pubchemview.py` | **done** (§22) |
 | 4 | migrate `pubchem.py`, `chebi.py`, `cascommonchem.py`, `opsin.py` | **done** (§23) |
-| 5 | `classyfire.py` raises; rewrite its tests | not started |
+| 5 | `classyfire.py` raises; rewrite its tests | postponed (§17.0) |
 | 6 | extract `pubchemview_parse.py` | **done** (§19, ahead of sequence) |
 | 7 | split `pubchem.py` → `+ pubchem_id.py`; `chebi.py` → `+ chebi_sdf.py` | not started |
 | 8 | `sources.py`; collapse the `Search` source ladders | not started |
 | 9 | fix the fuzzy-name mislabelling | **done** (§16.1) |
-| 10 | `cache.py` parameterisation and `_MISS` sentinel | partly (§17.4) |
+| 10 | `cache.py` parameterisation and `_MISS` sentinel | **done** (§17 below) |
 | 11 | `zeropm.py` logging, `reach.py` xlsx, `config.py` printing | not started |
 | 12 | `enrich`, `resolve_cascade`, `mw_within` | **done** (§16.2) |
 | 13 | docstrings with examples, module by module | not started |
@@ -445,8 +445,8 @@ Steps are independently committable and leave the suite green.
 | 4 | ~~`datasets.status/plan/fetch/remove`; `Search(datasets="present")` as the default~~ **done, §14** | 4.1 | M |
 | 5 | ~~build the ChEMBL extract during download; `source=` on `CheMBL`~~ **done, §15** | 9.7 | M |
 | 6 | ~~`close()`, context managers and thread safety on the four SQLite clients~~ **done, §16** | 4.3 | S |
-| 7 | `classyfire.py` raises; rewrite its tests; drop it from the docs' service lists | 4.8 | S |
-| 8 | `cache.py`: persistent dir, parameterised service functions, key version | 4.7 | S |
+| 7 | `classyfire.py` raises; rewrite its tests; drop it from the docs' service lists — **postponed, §17.0** | 4.8 | S |
+| 8 | ~~`cache.py`: persistent dir, parameterised service functions, key version~~ **done, §17** | 4.7 | S |
 | 9 | **`pubchem_ftp.py`: the FTP identifier builder** | **8** | **L** |
 | 10 | `PubChemID.descriptors()` — RDKit descriptors on demand | 8.6 | M |
 | 11 | `CheMBL(source="mysql")` — the streaming route, verified against step 5 | 9.7 | M |
@@ -2009,3 +2009,194 @@ and `closed` therefore goes through `getattr(self, ..., default)`, and
 - The five client defaults (§14.7, §15.8) are still unchanged: `CheMBL()` on a
   clean machine downloads without being asked. That is `Search`'s default
   today, not the clients'.
+
+---
+
+## 17. Landed on 2026-09-20 — step 8, `cache.py` (§4.7)
+
+### 17.0 Step 7 is postponed, not dropped
+
+`classyfire.py` stays as it is for now. The decision is the user's and the
+reason is throughput: every method of that client blocks on a service whose
+API is as slow as it gets, so the module is the least rewarding thing in the
+queue to touch and the last that anything else depends on. §4.8's finding is
+unchanged and the work is unchanged — every method raises
+`ServiceUnavailableError` citing February 2023, the URL construction stays
+commented, the seventeen status-code tests assert the raise, and `docs/` and
+`README.md` stop listing it beside the working services. Nothing in steps 8–20
+blocks on it; §4.8 sequenced it early only because it is small. It keeps its
+entry in `CACHE_SERVICES` in the meantime, because the cache does not care
+whether a service answers.
+
+### 17.1 What landed
+
+§4.7 asked for three things in order of user impact, and all three landed in
+one commit because they are all one file.
+
+- `provesid.utils.user_cache_path`, the cache twin of `user_dataset_path`:
+  `platformdirs.user_cache_dir`, `PROVESID_CACHE_DIR` as the override.
+- `cache.py` 691 → 884 lines, and **29 module-level functions → 14**. The
+  eighteen removed are the seven `clear_<svc>_cache`, the seven
+  `get_<svc>_cache_info`, `export_service_cache`, `import_service_cache`,
+  `get_all_service_cache_info` and `clear_all_service_caches`. The three added
+  are `get_service_cache`, `get_all_cache_info` and `_require_known_service`.
+- `CACHE_KEY_VERSION`, `CACHE_SERVICES`, `get_service_cache` and
+  `get_all_cache_info` exported from `provesid`.
+- 18 tests in `tests/test_cache_layout_and_versioning.py`;
+  `examples/cache/` (the new demo, the old `cache_demo.py` moved in, a README);
+  `docs/advanced_caching.md` rewritten in four places; a `CHANGELOG.md` entry.
+
+### 17.2 The directory was the whole of defect 1, and it was one line
+
+`tempfile.gettempdir()/provesid_cache` → `user_cache_path()`. What makes it
+worth a section is what it changes about everything *else* in the file: with
+the cache under `/tmp`, a stale entry, a wrong key and a test that called
+`provesid.clear_cache()` all cost nothing, because the next reboot fixed them.
+None of that is true now.
+
+Three consequences had to be handled in the same commit:
+
+- **`tests/conftest.py` sets `PROVESID_CACHE_DIR`.** Several tests call
+  `provesid.clear_cache()` outright. Before, they deleted a directory that was
+  about to be deleted anyway; now they would delete responses the developer
+  paid network time for.
+- **`examples/cache/cache_demo.py` sandboxes itself** for the same reason — it
+  clears the cache and drops the size-warning threshold to 1 MB.
+- **The versioning of defect 3 stops being optional.** A wrong-shaped entry is
+  now permanent until someone clears the cache by hand.
+
+There is no migration of entries from the old location. They were never
+reliably there to migrate, which is the defect.
+
+### 17.3 Laziness fell out of the parameterisation
+
+`_service_caches` was a module-level dict literal of seven `CacheManager()`
+constructions, evaluated at import, and `CacheManager.__init__` calls
+`mkdir(parents=True, exist_ok=True)`. So `import provesid` created eight
+directories — seven services and the global cache — on a machine that never
+made a single call. Under `/tmp` nobody noticed. Under `~/.cache` it is litter.
+
+`get_service_cache(service)` builds each manager on first use and memoises it.
+Two callers of the same service still share one manager and therefore share
+the in-memory tier, which is the property `@cached` relies on.
+
+### 17.4 An unknown service has to raise
+
+`_service_caches.get(service, _global_cache)` was the old lookup: a typo — or a
+service name that used to exist — silently wrote to the global cache, where
+`clear_cache(service=...)` for that name would never look, and
+`get_cache_info` would report zero entries for a cache that was filling up
+somewhere else. `get_service_cache` raises `ValueError` naming the known
+services instead, and `@cached(service=...)` raises at *decoration* time rather
+than on the first call, so a bad name is an import error rather than a runtime
+surprise.
+
+One exception, and it is deliberate: a name already present in
+`_service_caches` counts as known even if it is not in `CACHE_SERVICES`. Four
+existing tests and two new ones inject a throwaway `CacheManager` under a
+synthetic name (`"probe"`, `"probe2"`, …) to test the decorator without
+touching a real service directory. Rejecting those would have meant
+monkeypatching `CACHE_SERVICES` in every one of them, which tests the patch
+rather than the code.
+
+### 17.5 Three versions, and why not one
+
+§4.7 asked for "a version component in every key, bumped when a return shape
+changes". One number would have done that, but every bump would discard every
+entry of every service — for a change to one function's return dict. So the
+key carries three, and the rule is to bump the narrowest that covers the
+change:
+
+| Bump | Retires | Lives in |
+|---|---|---|
+| `@cached(version=N)` | one function's entries | the decorator |
+| `Client.CACHE_SCHEMA_VERSION` | one client's entries | `__cache_key__` |
+| `CACHE_KEY_VERSION` | every entry, everywhere | `cache.py` |
+
+The middle one already existed — §19.6 of the August plan added it to
+`PubChemView`, `OPSIN` and `CASCommonChem` after `PropertyData` gained a field
+— but it only reaches methods of a client that declares it. A module-level
+`@cached` function has no `self`, so nothing versioned its key at all; that is
+the loophole `version=` closes. `CACHE_KEY_VERSION` is the one to bump if the
+key derivation itself changes, since that is not a shape change any narrower
+number describes.
+
+Retired entries are not deleted. Finding them would mean reading every pickle
+in the directory, which is the cost the version exists to avoid; `clear_cache`
+reclaims the space when the user wants it back.
+
+### 17.6 One bug found while reading the file
+
+`export_cache` skipped any entry whose value was `None`:
+
+```python
+value = self._load_from_disk(cache_key)
+if value is not None:          # meant: is not _MISS
+    export_data['cache_data'][cache_key] = value
+```
+
+`_load_from_disk` returns the `_MISS` sentinel for a missing entry precisely so
+that a cached `None` is distinguishable from no entry (§17.4 of the August
+plan). This line predates the sentinel and was never updated, so a function
+that legitimately returns `None` had its entries dropped from every export.
+Fixed, with a test that round-trips a cached `None`.
+
+### 17.7 Verification
+
+- `tests/test_cache_layout_and_versioning.py`, 18 tests in three groups. What
+  is pinned: that the default directory is not under the system temp directory
+  and is not the dataset directory; that `PROVESID_CACHE_DIR` moves both the
+  root and the service subdirectories; that an entry written by one
+  interpreter is read by the next **without the function running again**
+  (a real subprocess pair, which is the only honest test of persistence);
+  that the seven services get seven distinct directories, none of them the
+  global one; that `clear_cache(service=...)` leaves the other services
+  untouched and `all_services=True` does not; that a bad service name raises
+  from `get_cache_info`, from `clear_cache` and from `@cached`; that the
+  eighteen removed functions are gone; that the client `clear_cache` /
+  `get_cache_info` methods still point at the right service; that each of the
+  three versions changes the key and that bumping a function's version stops
+  the previous shape being served; and the cached-`None` round trip of §17.6.
+- Doctests: six examples in `cache.py` are marked `# doctest: +SKIP` because
+  they clear caches, write files or mutate thresholds. Under `/tmp` that was
+  harmless; it is not now.
+- `examples/cache/cache_layout_and_versioning_demo.py` run end to end. It
+  prints the sandbox directory beside the real platform default, fills two
+  service caches and clears one, shows the `ValueError` for `'pubchemm'`, and
+  runs the same function at `version=1` and `version=2` to show the second
+  call re-running rather than reading the first's entry.
+
+### 17.8 Validation
+
+- `pytest tests/` — **1201 passed, 35 skipped, 19 failed** of 1 255 collected
+  (10m02s). PubChem was down for the duration: all nineteen failures are live
+  calls to `pubchem.ncbi.nlm.nih.gov` returning HTTP 503, four in
+  `test_pubchem.py` and fifteen in `test_pubchemview.py`, and a bare `curl` of
+  both the PUG and PUG-View endpoints returned 503 at the same moment. No
+  offline test failed, and no test in either file failed for any other reason.
+  This is a wider outage than the three flaky 503s of §14.9, §15.7 and §16.8,
+  not a different one. Re-running with those two files excluded: **1189
+  passed, 33 skipped, 0 failed** (11m05s).
+- `mkdocs build --strict` — clean.
+- `examples/cache/cache_demo.py` and the new demo both run; neither leaves
+  anything in `~/.cache/provesid`.
+
+### 17.9 Still open
+
+- **`get_cache_size` is O(n) in the number of entries and is called every 100
+  writes.** `docs/chebifier.md` already warns about this: one pickle per entry
+  in one flat directory, re-globbed and re-`stat`ed on every hundredth write,
+  which is O(n²) over a long run and serialises processes that share the
+  directory. Parameterising the functions did not touch it. The fix is a size
+  counter maintained in the metadata rather than a directory walk, or a
+  two-level directory fan-out by key prefix.
+- **Metadata is written every 100 operations, so `disk_entries` on disk is
+  usually stale.** It is accurate within a process, because the dict is in
+  memory; a process that exits between saves loses the tail of its metadata,
+  though not the entries themselves.
+- **No entry ever expires.** Chemical data rarely changes, which is the
+  justification, but there is no TTL and no way to ask for one.
+- **The `_memory_cache` is unbounded and never evicts.** A long run over
+  100k structures holds every result in RAM as well as on disk.
+- Nothing in this step touched `is_empty_result` / `skip_if`, which remain the
+  per-function way to say "absence is not an answer".

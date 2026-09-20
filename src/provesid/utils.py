@@ -1,7 +1,7 @@
 
 import os
 
-from platformdirs import user_data_dir
+from platformdirs import user_cache_dir, user_data_dir
 
 
 def _has_casrn_format(s: str):
@@ -61,6 +61,47 @@ def user_dataset_path(*parts: str, ensure_exists: bool = True) -> str:
         root = os.path.abspath(os.path.expanduser(os.path.expandvars(override)))
     else:
         root = user_data_dir(appname="provesid", appauthor="USEtox")
+
+    target = os.path.join(root, *parts) if parts else root
+    if ensure_exists:
+        os.makedirs(target, exist_ok=True)
+    return target
+
+
+def user_cache_path(*parts: str, ensure_exists: bool = True) -> str:
+    """Return the OS-specific persistent cache directory for PROVESID.
+
+    This is where :mod:`provesid.cache` keeps API responses. It is deliberately
+    *not* the system temp directory: most Linux distributions clear ``/tmp`` on
+    boot, which silently threw away every cached response between sessions even
+    though the caching layer advertises itself as persistent. The root comes
+    from :mod:`platformdirs` and resolves to a per-user cache directory shared
+    across virtual environments on the same machine.
+
+    Cached responses are disposable --- unlike the datasets under
+    :func:`user_dataset_path`, everything here can be re-fetched --- which is
+    why the two live under different roots and can be cleaned independently.
+
+    Power users can override the root directory by setting
+    ``PROVESID_CACHE_DIR``.
+
+    Args:
+        *parts: Optional subdirectories appended to the root directory, e.g.
+            the service name.
+        ensure_exists: When True (default), create the directory.
+
+    Returns:
+        Absolute path to the requested cache directory.
+
+    Example:
+        >>> user_cache_path("pubchem", ensure_exists=False).endswith("pubchem")
+        True
+    """
+    override = os.environ.get("PROVESID_CACHE_DIR")
+    if override:
+        root = os.path.abspath(os.path.expanduser(os.path.expandvars(override)))
+    else:
+        root = user_cache_dir(appname="provesid", appauthor="USEtox")
 
     target = os.path.join(root, *parts) if parts else root
     if ensure_exists:

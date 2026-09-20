@@ -1,5 +1,5 @@
 import requests
-from .cache import cached, clear_classyfire_cache, get_classyfire_cache_info
+from .cache import cached, clear_cache, get_cache_info
 
 class ClassyFireAPI:
     """
@@ -45,12 +45,12 @@ class ClassyFireAPI:
     @staticmethod
     def clear_cache():
         """Clear the cache for all ClassyFireAPI methods"""
-        clear_classyfire_cache()
+        clear_cache(service='classyfire')
     
     @staticmethod
     def get_cache_info():
         """Get information about the current cache state"""
-        return get_classyfire_cache_info()
+        return get_cache_info(service='classyfire')
 
     @staticmethod
     @cached(service='classyfire')

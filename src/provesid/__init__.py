@@ -62,11 +62,15 @@ from .pubchemview import (
 from .pubchemview_parse import ParsedValue, parse_value
 from .config import set_cas_api_key, get_cas_api_key, remove_cas_api_key, show_config
 from .cache import (
+    CACHE_KEY_VERSION,
+    CACHE_SERVICES,
     clear_cache,
     get_cache_info,
+    get_all_cache_info,
     export_cache,
     import_cache,
     get_cache_size,
+    get_service_cache,
     set_cache_warning_threshold,
     enable_cache_warnings,
 )

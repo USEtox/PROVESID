@@ -3,19 +3,56 @@ Advanced cache management for PROVESID package.
 
 This module provides persistent, unlimited caching with size monitoring,
 import/export capabilities, and automatic cache management.
+
+Entries live under :func:`provesid.utils.user_cache_path` --- a real per-user
+cache directory, not the system temp directory --- so a cache written today is
+still there tomorrow. Set ``PROVESID_CACHE_DIR`` to put it somewhere else.
+
+Three version numbers guard against serving an entry whose *shape* no longer
+matches what the caller expects; see :data:`CACHE_KEY_VERSION`.
 """
 
-import os
 import json
 import pickle
 import warnings
 import hashlib
-import sys
 from pathlib import Path
 from functools import wraps
 from typing import Any, Dict, Optional, Union, Callable
 from datetime import datetime
-import tempfile
+
+from .utils import user_cache_path
+
+
+#: Key component bumped when something changes globally about what is stored or
+#: how keys are derived, making *every* existing entry unreachable at once.
+#: Two finer-grained versions sit beneath it, and the right one to bump is the
+#: narrowest that covers the change:
+#:
+#: * a client's ``CACHE_SCHEMA_VERSION``, returned from its ``__cache_key__``,
+#:   retires the entries of that one client (see
+#:   :attr:`provesid.PubChemView.CACHE_SCHEMA_VERSION`);
+#: * ``@cached(version=N)`` retires the entries of one function.
+#:
+#: A schema change is not something the cache can detect by itself: pickle
+#: stores an instance's ``__dict__``, so an entry written before a dataclass
+#: gained a field restores as an object missing that attribute, and every
+#: caller reading it raises on a machine where only the package version
+#: changed. Bumping a version is what makes those entries unreachable instead.
+CACHE_KEY_VERSION = 1
+
+#: The services with their own cache directory. This list is data: the
+#: module-level cache functions all take ``service=`` rather than each service
+#: owning a hand-written pair of functions.
+CACHE_SERVICES = (
+    'pubchem',
+    'cas',
+    'nci',
+    'pubchemview',
+    'classyfire',
+    'opsin',
+    'chebifier',
+)
 
 
 class _Miss:
@@ -139,26 +176,41 @@ def is_empty_result(result: Any) -> bool:
 class CacheManager:
     """
     Advanced cache manager with persistent storage, size monitoring, and import/export.
-    
+
     Features:
     - Unlimited cache by default
-    - Persistent storage across sessions
+    - Persistent storage across sessions, in a real cache directory rather than
+      the system temp directory
     - Size monitoring with warnings at 5GB
     - Import/export functionality
     - Cache statistics and management
+
+    Example:
+        >>> import tempfile
+        >>> with tempfile.TemporaryDirectory() as tmp:
+        ...     manager = CacheManager(cache_dir=tmp)
+        ...     manager.set('demo', (2244,), {}, {'cid': 2244})
+        ...     manager.get('demo', (2244,), {})
+        (True, {'cid': 2244})
     """
-    
-    def __init__(self, 
+
+    def __init__(self,
                  cache_dir: Optional[str] = None,
                  service_name: Optional[str] = None,
                  max_size_gb: float = 5.0,
                  enable_warnings: bool = True):
         """
         Initialize the cache manager.
-        
+
         Args:
-            cache_dir: Directory to store cache files. If None, uses system temp directory.
-            service_name: Name of the service for service-specific caching (e.g., 'pubchem', 'cas')
+            cache_dir: Directory to store cache files. When None, a per-user
+                cache directory from :func:`provesid.utils.user_cache_path` is
+                used, with ``service_name`` as a subdirectory if given. The
+                system temp directory is deliberately not the default: ``/tmp``
+                is cleared on boot on most Linux systems, which made the
+                "persistent" cache last only until the next reboot.
+            service_name: Name of the service for service-specific caching
+                (one of :data:`CACHE_SERVICES`).
             max_size_gb: Size threshold in GB for warnings (default: 5.0)
             enable_warnings: Whether to enable size warnings (default: True)
         """
@@ -168,15 +220,13 @@ class CacheManager:
         self._last_size_check = None
         self._size_check_interval = 100  # Check size every 100 cache operations
         self._operation_count = 0
-        
+
         # Set up cache directory
         if cache_dir is None:
-            base_cache_dir = os.path.join(tempfile.gettempdir(), 'provesid_cache')
-            if service_name:
-                cache_dir = os.path.join(base_cache_dir, service_name)
-            else:
-                cache_dir = base_cache_dir
-        
+            cache_dir = (user_cache_path(service_name, ensure_exists=False)
+                         if service_name else
+                         user_cache_path(ensure_exists=False))
+
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
@@ -207,7 +257,8 @@ class CacheManager:
         except Exception as e:
             warnings.warn(f"Could not save cache metadata: {e}")
     
-    def _get_cache_key(self, func_name: str, args: tuple, kwargs: dict) -> str:
+    def _get_cache_key(self, func_name: str, args: tuple, kwargs: dict,
+                       version: int = 1) -> str:
         """
         Generate a unique, process-stable cache key for a function call.
 
@@ -218,12 +269,18 @@ class CacheManager:
                 to its ``__cache_key__`` or class name so the key does not
                 depend on the instance's memory address.
             kwargs: Keyword arguments of the call.
+            version: Shape version of what this one function returns, from
+                ``@cached(version=...)``. Bumping it retires that function's
+                entries and nothing else. :data:`CACHE_KEY_VERSION` is folded
+                in as well, so a global bump retires everything.
 
         Returns:
             Hex SHA-256 digest of the normalised call signature.
         """
         key_data = {
+            'cache_version': CACHE_KEY_VERSION,
             'function': func_name,
+            'function_version': version,
             'args': stable_key_part(list(args)),
             'kwargs': stable_key_part(dict(kwargs)),
         }
@@ -278,14 +335,22 @@ class CacheManager:
         except Exception as e:
             warnings.warn(f"Could not save cache entry {cache_key}: {e}")
     
-    def get(self, func_name: str, args: tuple, kwargs: dict) -> tuple:
+    def get(self, func_name: str, args: tuple, kwargs: dict,
+            version: int = 1) -> tuple:
         """
         Get a cached result.
-        
+
+        Args:
+            func_name: Fully qualified name of the cached function.
+            args: Positional arguments of the call.
+            kwargs: Keyword arguments of the call.
+            version: Shape version of the function's return value; must match
+                the one used when the entry was written, or it is a miss.
+
         Returns:
             (found: bool, value: Any) - Tuple indicating if value was found and the value
         """
-        cache_key = self._get_cache_key(func_name, args, kwargs)
+        cache_key = self._get_cache_key(func_name, args, kwargs, version)
         
         # Check memory cache first
         if cache_key in self._memory_cache:
@@ -300,9 +365,19 @@ class CacheManager:
         
         return False, None
     
-    def set(self, func_name: str, args: tuple, kwargs: dict, value: Any):
-        """Set a cached result."""
-        cache_key = self._get_cache_key(func_name, args, kwargs)
+    def set(self, func_name: str, args: tuple, kwargs: dict, value: Any,
+            version: int = 1):
+        """
+        Store a result under the key for this call.
+
+        Args:
+            func_name: Fully qualified name of the cached function.
+            args: Positional arguments of the call.
+            kwargs: Keyword arguments of the call.
+            value: The value to store.
+            version: Shape version of the function's return value.
+        """
+        cache_key = self._get_cache_key(func_name, args, kwargs, version)
         
         # Store in memory cache
         self._memory_cache[cache_key] = value
@@ -405,7 +480,9 @@ class CacheManager:
             # Load all cache data
             for cache_key in self._cache_metadata:
                 value = self._load_from_disk(cache_key)
-                if value is not None:
+                # `is not _MISS`, not `is not None`: a function may legitimately
+                # return None, and that entry has to survive the round trip.
+                if value is not _MISS:
                     export_data['cache_data'][cache_key] = value
             
             if format == 'pickle':
@@ -474,23 +551,63 @@ class CacheManager:
             warnings.warn(f"Cache import failed: {e}")
             return False
 
+# Cache managers are built on first use, not on import: constructing one
+# creates its directory, and importing provesid should not leave eight empty
+# directories behind on a machine that never calls a single service.
+_global_cache: Optional[CacheManager] = None
+_service_caches: Dict[str, CacheManager] = {}
 
-# Global cache manager instance
-_global_cache = CacheManager()
 
-# Service-specific cache managers
-_service_caches = {
-    'pubchem': CacheManager(service_name='pubchem'),
-    'cas': CacheManager(service_name='cas'), 
-    'nci': CacheManager(service_name='nci'),
-    'pubchemview': CacheManager(service_name='pubchemview'),
-    'classyfire': CacheManager(service_name='classyfire'),
-    'opsin': CacheManager(service_name='opsin'),
-    'chebifier': CacheManager(service_name='chebifier')
-}
+def get_service_cache(service: Optional[str] = None) -> CacheManager:
+    """
+    Return the cache manager for one service, building it on first use.
+
+    Args:
+        service: One of :data:`CACHE_SERVICES`, or None for the global cache
+            that holds everything not attributed to a service.
+
+    Returns:
+        The shared :class:`CacheManager` for that service. The same object is
+        returned on every call, so two clients of the same service share
+        entries and share the in-memory tier.
+
+    Raises:
+        ValueError: If ``service`` is neither in :data:`CACHE_SERVICES` nor
+            already registered. Silently falling back to the global cache
+            would scatter a typo's entries somewhere the matching
+            ``clear_cache`` call never looks. A name registered directly in
+            ``_service_caches`` --- which is how tests inject a throwaway cache
+            --- counts as known.
+
+    Example:
+        >>> get_service_cache('pubchem') is get_service_cache('pubchem')
+        True
+    """
+    global _global_cache
+
+    if service is None:
+        if _global_cache is None:
+            _global_cache = CacheManager()
+        return _global_cache
+
+    if service not in _service_caches:
+        _require_known_service(service)
+        _service_caches[service] = CacheManager(service_name=service)
+    return _service_caches[service]
+
+
+def _require_known_service(service: str) -> None:
+    """Raise unless ``service`` is one this module is prepared to cache for."""
+    if service not in CACHE_SERVICES and service not in _service_caches:
+        raise ValueError(
+            f"Unknown cache service: {service!r}. "
+            f"Known services: {', '.join(CACHE_SERVICES)}"
+        )
+
 
 def cached(func: Callable = None, *, service: Optional[str] = None,
-           skip_if: Optional[Callable[[Any], bool]] = None) -> Callable:
+           skip_if: Optional[Callable[[Any], bool]] = None,
+           version: int = 1) -> Callable:
     """
     Decorator for unlimited caching with persistent storage.
 
@@ -506,17 +623,28 @@ def cached(func: Callable = None, *, service: Optional[str] = None,
 
     Args:
         func: The function to cache, when used as a bare ``@cached``.
-        service: Optional service name for service-specific caching
-            (e.g. 'pubchem', 'cas', 'nci', 'pubchemview', 'classyfire',
-            'opsin', 'chebifier'). Omit it to use the global cache.
+        service: Optional service name for service-specific caching; one of
+            :data:`CACHE_SERVICES`. Omit it to use the global cache.
         skip_if: Optional predicate applied to the return value; when it returns
             True the value is handed back but not stored. Use it for functions
             that report a failed lookup with something other than a
             ``success: False`` dict.
+        version: Shape version of this function's return value, part of every
+            key it writes. Bump it when the function starts returning a
+            different *shape* --- a new dataclass field, a dict key renamed,
+            a list of strings becoming a list of objects --- so that entries of
+            the old shape become unreachable instead of being unpickled into
+            something the caller cannot read. Bump the client's
+            ``CACHE_SCHEMA_VERSION`` instead when the change affects every
+            method of one client, and :data:`CACHE_KEY_VERSION` when it affects
+            everything.
 
     Returns:
         The decorated function, carrying ``cache_clear`` and ``cache_info``
         attributes bound to the selected cache.
+
+    Raises:
+        ValueError: At decoration time, if ``service`` is not a known service.
 
     Note:
         ``use_cache=False`` --- either as a constructor flag on the client or as
@@ -524,37 +652,35 @@ def cached(func: Callable = None, *, service: Optional[str] = None,
         result is still written so later calls benefit.
 
     Example:
-        >>> @cached(service='pubchem')
+        >>> @cached(service='pubchem', version=2)       # doctest: +SKIP
         ... def fetch(cid):
         ...     return {'success': True, 'cid': cid}
-        >>> fetch(2244)['cid']
+        >>> fetch(2244)['cid']                          # doctest: +SKIP
         2244
     """
     def decorator(f: Callable) -> Callable:
         @wraps(f)
         def wrapper(*args, **kwargs):
             func_name = f"{f.__module__}.{f.__qualname__}"
-            
-            # Choose cache manager based on service parameter
-            cache_manager = _service_caches.get(service, _global_cache) if service else _global_cache
-            
+            cache_manager = get_service_cache(service)
+
             # Check if we should use cache
             use_cache = True
-            
+
             # For instance methods, check self.use_cache
             if args and hasattr(args[0], 'use_cache'):
                 use_cache = getattr(args[0], 'use_cache', True)
-            
+
             # For static/class methods with use_cache parameter in kwargs
             if 'use_cache' in kwargs:
                 use_cache = kwargs.pop('use_cache')  # Remove from kwargs to avoid passing to function
-            
+
             # Try to get from cache only if use_cache is True
             if use_cache:
-                found, value = cache_manager.get(func_name, args, kwargs)
+                found, value = cache_manager.get(func_name, args, kwargs, version)
                 if found:
                     return value
-            
+
             # Call the function. A raised exception propagates and is not cached.
             result = f(*args, **kwargs)
 
@@ -563,130 +689,196 @@ def cached(func: Callable = None, *, service: Optional[str] = None,
             if is_failure_result(result) or (skip_if is not None and skip_if(result)):
                 return result
 
-            cache_manager.set(func_name, args, kwargs, result)
-            
+            cache_manager.set(func_name, args, kwargs, result, version)
+
             return result
-        
-        # Add cache management methods to the decorated function
-        cache_manager = _service_caches.get(service, _global_cache) if service else _global_cache
-        wrapper.cache_clear = lambda: cache_manager.clear()
-        wrapper.cache_info = lambda: cache_manager.get_cache_info()
-        
+
+        # Reject an unknown service now rather than on the first call, and
+        # bind the management helpers lazily so decoration creates nothing.
+        if service is not None:
+            _require_known_service(service)
+        wrapper.cache_clear = lambda: get_service_cache(service).clear()
+        wrapper.cache_info = lambda: get_service_cache(service).get_cache_info()
+
         return wrapper
-    
+
     # Support both @cached and @cached(service='name') syntax
     if func is None:
         return decorator
     else:
         return decorator(func)
 
-# Convenience functions for global cache management
-def clear_cache():
-    """Clear all cached data from the global cache."""
-    _global_cache.clear()
 
-def get_cache_info() -> Dict[str, Any]:
-    """Get information about the global cache."""
-    return _global_cache.get_cache_info()
+# ---------------------------------------------------------------------------
+# Cache management. Every function takes ``service=`` rather than each service
+# owning a hand-written twin: the service list is data (:data:`CACHE_SERVICES`),
+# and fourteen near-identical one-line functions were fourteen places to forget
+# when an eighth service arrives.
+# ---------------------------------------------------------------------------
 
-def export_cache(export_path: str, format: str = 'pickle') -> bool:
-    """Export global cache to a file."""
-    return _global_cache.export_cache(export_path, format)
+def clear_cache(service: Optional[str] = None, all_services: bool = False):
+    """
+    Delete every cached entry for one service, or for the global cache.
 
-def import_cache(import_path: str, merge: bool = True) -> bool:
-    """Import cache data from a file."""
-    return _global_cache.import_cache(import_path, merge)
+    Args:
+        service: One of :data:`CACHE_SERVICES`, or None for the global cache.
+        all_services: When True, clear every service cache as well as the
+            global one, and ignore ``service``.
 
-def get_cache_size() -> Dict[str, Union[int, float]]:
-    """Get cache size information."""
-    return _global_cache.get_cache_size()
+    Raises:
+        ValueError: If ``service`` names no known service.
 
-def set_cache_warning_threshold(size_gb: float):
-    """Set the cache size warning threshold in GB."""
-    _global_cache.max_size_gb = size_gb
+    Example:
+        >>> clear_cache(service='pubchem')              # doctest: +SKIP
+    """
+    if all_services:
+        get_service_cache(None).clear()
+        for name in CACHE_SERVICES:
+            get_service_cache(name).clear()
+        return
+    get_service_cache(service).clear()
 
-def enable_cache_warnings(enabled: bool = True):
-    """Enable or disable cache size warnings."""
-    _global_cache.enable_warnings = enabled
 
-# Service-specific cache management functions
-def clear_pubchem_cache():
-    """Clear only PubChem API cached data."""
-    _service_caches['pubchem'].clear()
+def get_cache_info(service: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Report directory, entry counts and size for one cache.
 
-def clear_cas_cache():
-    """Clear only CAS Common Chemistry cached data."""
-    _service_caches['cas'].clear()
+    Args:
+        service: One of :data:`CACHE_SERVICES`, or None for the global cache.
 
-def clear_nci_cache():
-    """Clear only NCI Chemical Identifier Resolver cached data."""
-    _service_caches['nci'].clear()
+    Returns:
+        Dict with ``cache_directory``, ``memory_entries``, ``disk_entries``,
+        ``total_size_bytes``/``_mb``/``_gb``, ``file_count``,
+        ``warning_threshold_gb`` and ``warnings_enabled``.
 
-def clear_pubchemview_cache():
-    """Clear only PubChem View cached data."""
-    _service_caches['pubchemview'].clear()
+    Raises:
+        ValueError: If ``service`` names no known service.
 
-def clear_classyfire_cache():
-    """Clear only ClassyFire API cached data."""
-    _service_caches['classyfire'].clear()
+    Example:
+        >>> sorted(get_cache_info(service='opsin'))[:2]
+        ['cache_directory', 'disk_entries']
+    """
+    return get_service_cache(service).get_cache_info()
 
-def clear_opsin_cache():
-    """Clear only OPSIN cached data."""
-    _service_caches['opsin'].clear()
 
-def clear_chebifier_cache():
-    """Clear only chebifier taxonomy cached data."""
-    _service_caches['chebifier'].clear()
+def get_all_cache_info() -> Dict[str, Dict[str, Any]]:
+    """
+    Report :func:`get_cache_info` for the global cache and every service.
 
-def get_pubchem_cache_info() -> Dict[str, Any]:
-    """Get information about PubChem cache."""
-    return _service_caches['pubchem'].get_cache_info()
+    Returns:
+        Dict keyed by ``'global'`` and by each name in :data:`CACHE_SERVICES`.
 
-def get_cas_cache_info() -> Dict[str, Any]:
-    """Get information about CAS cache."""
-    return _service_caches['cas'].get_cache_info()
-
-def get_nci_cache_info() -> Dict[str, Any]:
-    """Get information about NCI cache."""
-    return _service_caches['nci'].get_cache_info()
-
-def get_pubchemview_cache_info() -> Dict[str, Any]:
-    """Get information about PubChem View cache."""
-    return _service_caches['pubchemview'].get_cache_info()
-
-def get_classyfire_cache_info() -> Dict[str, Any]:
-    """Get information about ClassyFire cache."""
-    return _service_caches['classyfire'].get_cache_info()
-
-def get_opsin_cache_info() -> Dict[str, Any]:
-    """Get information about OPSIN cache."""
-    return _service_caches['opsin'].get_cache_info()
-
-def get_chebifier_cache_info() -> Dict[str, Any]:
-    """Get information about the chebifier taxonomy cache."""
-    return _service_caches['chebifier'].get_cache_info()
-
-def export_service_cache(service: str, export_path: str, format: str = 'pickle') -> bool:
-    """Export service-specific cache to a file."""
-    if service not in _service_caches:
-        raise ValueError(f"Unknown service: {service}. Available services: {list(_service_caches.keys())}")
-    return _service_caches[service].export_cache(export_path, format)
-
-def import_service_cache(service: str, import_path: str, merge: bool = True) -> bool:
-    """Import cache data for a specific service from a file."""
-    if service not in _service_caches:
-        raise ValueError(f"Unknown service: {service}. Available services: {list(_service_caches.keys())}")
-    return _service_caches[service].import_cache(import_path, merge)
-
-def get_all_service_cache_info() -> Dict[str, Dict[str, Any]]:
-    """Get cache information for all services."""
-    info = {}
-    for service_name, cache_manager in _service_caches.items():
-        info[service_name] = cache_manager.get_cache_info()
+    Example:
+        >>> 'pubchem' in get_all_cache_info()
+        True
+    """
+    info = {'global': get_service_cache(None).get_cache_info()}
+    for name in CACHE_SERVICES:
+        info[name] = get_service_cache(name).get_cache_info()
     return info
 
-def clear_all_service_caches():
-    """Clear cached data from all services."""
-    for cache_manager in _service_caches.values():
-        cache_manager.clear()
-    _global_cache.clear()  # Also clear global cache
+
+def export_cache(export_path: str, format: str = 'pickle',
+                 service: Optional[str] = None) -> bool:
+    """
+    Write one cache's entries to a file so they can be shared or archived.
+
+    Args:
+        export_path: Destination file.
+        format: ``'pickle'`` (default, preserves Python objects) or ``'json'``.
+        service: One of :data:`CACHE_SERVICES`, or None for the global cache.
+
+    Returns:
+        True on success, False if the export failed (a warning says why).
+
+    Raises:
+        ValueError: If ``service`` names no known service.
+
+    Example:
+        >>> export_cache('cache.pkl', service='pubchem')    # doctest: +SKIP
+        True
+    """
+    return get_service_cache(service).export_cache(export_path, format)
+
+
+def import_cache(import_path: str, merge: bool = True,
+                 service: Optional[str] = None) -> bool:
+    """
+    Load entries exported by :func:`export_cache` into one cache.
+
+    Args:
+        import_path: File written by :func:`export_cache`.
+        merge: When True (default), keep existing entries; when False, clear
+            the cache first.
+        service: One of :data:`CACHE_SERVICES`, or None for the global cache.
+
+    Returns:
+        True on success, False if the import failed (a warning says why).
+
+    Raises:
+        ValueError: If ``service`` names no known service.
+
+    Note:
+        Entries carry the key they were written under, so an export made before
+        a version bump imports cleanly and is simply never read.
+
+    Example:
+        >>> import_cache('cache.pkl', service='pubchem')    # doctest: +SKIP
+        True
+    """
+    return get_service_cache(service).import_cache(import_path, merge)
+
+
+def get_cache_size(service: Optional[str] = None) -> Dict[str, Union[int, float]]:
+    """
+    Measure one cache on disk.
+
+    Args:
+        service: One of :data:`CACHE_SERVICES`, or None for the global cache.
+
+    Returns:
+        Dict with ``bytes``, ``mb``, ``gb`` and ``files``.
+
+    Raises:
+        ValueError: If ``service`` names no known service.
+
+    Example:
+        >>> sorted(get_cache_size())
+        ['bytes', 'files', 'gb', 'mb']
+    """
+    return get_service_cache(service).get_cache_size()
+
+
+def set_cache_warning_threshold(size_gb: float, service: Optional[str] = None):
+    """
+    Set the size at which a cache starts warning, in GB.
+
+    Args:
+        size_gb: New threshold.
+        service: One of :data:`CACHE_SERVICES`, or None for the global cache.
+            The setting is per cache and is not remembered across processes.
+
+    Raises:
+        ValueError: If ``service`` names no known service.
+
+    Example:
+        >>> set_cache_warning_threshold(10.0, service='pubchem')  # doctest: +SKIP
+    """
+    get_service_cache(service).max_size_gb = size_gb
+
+
+def enable_cache_warnings(enabled: bool = True, service: Optional[str] = None):
+    """
+    Turn size warnings on or off for a cache.
+
+    Args:
+        enabled: True to warn past the threshold, False to stay quiet.
+        service: One of :data:`CACHE_SERVICES`, or None for the global cache.
+
+    Raises:
+        ValueError: If ``service`` names no known service.
+
+    Example:
+        >>> enable_cache_warnings(False, service='pubchem')  # doctest: +SKIP
+    """
+    get_service_cache(service).enable_warnings = enabled

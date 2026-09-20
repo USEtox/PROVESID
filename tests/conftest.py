@@ -8,6 +8,7 @@ import time
 from unittest.mock import Mock, patch
 import os
 import sys
+import tempfile
 
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -18,6 +19,14 @@ os.environ.setdefault(
     os.path.abspath(
         os.path.join(os.path.dirname(__file__), '..', 'src', 'provesid', 'data')
     ),
+)
+
+# Keep the suite out of the developer's real cache. Several tests call
+# provesid.clear_cache(), which since the move off /tmp would otherwise delete
+# responses the developer paid network time for.
+os.environ.setdefault(
+    "PROVESID_CACHE_DIR",
+    os.path.join(tempfile.gettempdir(), "provesid_test_cache"),
 )
 
 

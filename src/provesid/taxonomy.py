@@ -52,7 +52,7 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 
 import pandas as pd
 
-from .cache import _service_caches
+from .cache import get_service_cache
 from .search import normalize_structure
 from .utils import user_dataset_path
 
@@ -505,7 +505,7 @@ class ChebifierClassifier:
         self.exclude_models = list(exclude_models or ())
         self._ensemble = None
         self._chebi = None
-        self._cache = _service_caches["chebifier"]
+        self._cache = get_service_cache("chebifier")
 
     # -- lazy resources ----------------------------------------------------
     @property

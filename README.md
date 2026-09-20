@@ -185,6 +185,10 @@ environment. This avoids repeated downloads when you use multiple environments.
 Power-user controls:
 
 - Set `PROVESID_DATA_DIR` to override the default dataset directory.
+- Set `PROVESID_CACHE_DIR` to override the default cache directory. Cached API
+  responses live under `~/.cache/provesid/<service>/` (and the platform
+  equivalents), separately from the datasets, because they are disposable —
+  see [Advanced caching](./docs/advanced_caching.md).
 - Pass `data_dir=...` to `ChebiSDF`, `CheMBL`, `CompToxID`, `PubChemID`,
   `ZeroPM`, or `Search`.
 - Use `redownload=True` in constructors, or `download_database(..., force=True)` /

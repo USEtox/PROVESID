@@ -176,13 +176,13 @@ class NCIChemicalIdentifierResolver:
 
     def clear_cache(self):
         """Clear all cached results for NCI Chemical Identifier Resolver"""
-        from .cache import clear_nci_cache
-        clear_nci_cache()
+        from .cache import clear_cache
+        clear_cache(service='nci')
     
     def get_cache_info(self):
         """Get cache statistics for NCI Chemical Identifier Resolver cached methods"""
-        from .cache import get_nci_cache_info
-        return get_nci_cache_info()
+        from .cache import get_cache_info
+        return get_cache_info(service='nci')
     
     def _rate_limit(self):
         """

@@ -496,13 +496,13 @@ class PubChemAPI:
 
     def clear_cache(self):
         """Clear all cached results for PubChem API"""
-        from .cache import clear_pubchem_cache
-        clear_pubchem_cache()
+        from .cache import clear_cache
+        clear_cache(service='pubchem')
             
     def get_cache_info(self):
         """Get cache statistics for PubChem API cached methods"""
-        from .cache import get_pubchem_cache_info
-        return get_pubchem_cache_info()
+        from .cache import get_cache_info
+        return get_cache_info(service='pubchem')
         
     def _rate_limit(self):
         """

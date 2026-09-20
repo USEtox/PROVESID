@@ -9,13 +9,22 @@ This script shows:
 4. Cache management utilities
 
 Run this script to see the cache system in action.
+
+The demo clears caches and lowers the size-warning threshold, so it redirects
+PROVESID_CACHE_DIR into a throwaway directory first --- the real cache is
+persistent now (``~/.cache/provesid`` and friends, no longer the system temp
+directory), and a demo has no business deleting responses you paid network
+time for. See ``cache_layout_and_versioning_demo.py`` for the layout itself.
 """
 
-import provesid
-import time
-import tempfile
 import os
-from pathlib import Path
+import tempfile
+
+_SANDBOX = tempfile.TemporaryDirectory(prefix="provesid-cache-demo-")
+os.environ["PROVESID_CACHE_DIR"] = _SANDBOX.name
+
+import provesid  # noqa: E402
+import time  # noqa: E402
 
 def main():
     print("🚀 PROVESID Advanced Cache System Demo")
@@ -60,6 +69,9 @@ def main():
     
     # 3. Show cache statistics
     print("\n3. Cache statistics...")
+    print("   (these are the *global* cache: @cached with no service= writes here)")
+    for name, info in provesid.get_all_cache_info().items():
+        print(f"   {name:12s} {info['disk_entries']:3d} entries")
     cache_info = provesid.get_cache_info()
     print(f"   Cache entries: {cache_info['memory_entries']} in memory, {cache_info['disk_entries']} on disk")
     print(f"   Cache size: {cache_info['total_size_bytes']} bytes ({cache_info['total_size_mb']:.6f} MB)")
@@ -147,10 +159,13 @@ def main():
     print("\n📖 Usage in your code:")
     print("   import provesid")
     print("   api = provesid.PubChemAPI()  # Unlimited cache automatically enabled")
-    print("   provesid.export_cache('my_cache.pkl')  # Backup your cache")
-    print("   provesid.import_cache('shared_cache.pkl')  # Load shared cache")
-    print("   provesid.clear_cache()  # Clear when needed")
+    print("   provesid.export_cache('my_cache.pkl', service='pubchem')")
+    print("   provesid.import_cache('shared_cache.pkl', service='pubchem')")
+    print("   provesid.clear_cache(service='pubchem')  # or all_services=True")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        _SANDBOX.cleanup()

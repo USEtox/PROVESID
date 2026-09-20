@@ -1,5 +1,13 @@
 """
-One resumable, checksummed downloader for the bulk datasets PROVESID reads.
+The bulk datasets PROVESID reads: what they are, and how they get here.
+
+Two halves. :func:`download_file` is the transport --- one resumable,
+checksummed downloader shared by every dataset in the package. The registry
+below is the manager: :func:`status` says what is on disk, :func:`plan` what a
+download would cost, :func:`fetch` installs a dataset by name and
+:func:`remove` reclaims its space. The second half exists because the first
+one worked too well: a clean machine running one CAS lookup through
+:class:`~provesid.Search` used to spend ~32 GB without asking anyone.
 
 :mod:`provesid.http` is the transport for web *APIs* --- small requests, paced
 at five a second, retried a few times.  The bulk datasets are a different
@@ -45,19 +53,31 @@ Example:
     ...     checksum_url="https://ftp.ncbi.nlm.nih.gov/pubchem/Compound/Extras/CID-SMILES.gz.md5",
     ... )
     '/data/CID-SMILES.gz'
+
+    >>> from provesid import datasets
+    >>> datasets.status()                                 # doctest: +SKIP
+    >>> datasets.plan(["pubchem", "chebi"])               # doctest: +SKIP
+    >>> datasets.fetch("pubchem")                         # doctest: +SKIP
+    >>> datasets.remove("chembl")                         # doctest: +SKIP
 """
 
+import glob
 import hashlib
+import importlib
 import logging
 import os
+import re
 import time
-from typing import Callable, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 from urllib.parse import urlsplit
 
+import pandas as pd
 import requests
 from tqdm import tqdm
 
 from .http import RETRYABLE_STATUS, ServiceError, retry_after_seconds
+from .utils import user_dataset_path
 
 logger = logging.getLogger(__name__)
 
@@ -469,3 +489,781 @@ def _resume_hint(part: str) -> str:
 def _host_of(url: str) -> str:
     """Host of a URL, for a log line that names who misbehaved."""
     return urlsplit(url).netloc or url
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# The dataset registry
+#
+# Everything above moves bytes; everything below answers "which bytes, and do I
+# already have them?".  On a clean machine one CAS lookup through
+# :class:`~provesid.Search` used to fetch ~32 GB without asking, because every
+# source client defaults to ``auto_download=True`` and Search constructs all of
+# them.  The package is for researchers on laptops, where 32 GB is often the
+# whole free disk, so the download has to become something the user asks for.
+#
+# That needs a place where the five datasets are described *without* opening
+# them: their filenames, their sizes, and what each one is for.  The client
+# classes cannot serve as that place --- constructing one is exactly the act
+# we are trying to avoid --- so the facts live here, in a table, and the
+# clients are imported lazily inside :func:`fetch`.
+# ──────────────────────────────────────────────────────────────────────────────
+
+_MB = 1024 ** 2
+
+
+@dataclass(frozen=True)
+class Dataset:
+    """
+    One bulk dataset PROVESID can read offline, described without opening it.
+
+    Attributes:
+        name: Key used everywhere in this module, and the same string
+            :class:`~provesid.Search` uses for the source it feeds.
+        title: Human-readable name for logs and tables.
+        role: One line on what the dataset contributes to a search.
+        patterns: Filenames, relative to the data directory, whose presence
+            means the dataset is installed. Globs rather than plain names,
+            because ChEMBL names its file after the release and ZeroPM after
+            the version.
+        extras: Globs for files that belong to the dataset but do not prove it
+            is installed --- a derived index, a leftover ``.part``. They count
+            towards the space it occupies and are removed with it.
+        download_bytes: Size of the transfer, measured.
+        resident_bytes: Size on disk once installed, measured, including
+            anything built on first use.
+        peak_bytes: Most disk needed at any one moment during installation.
+            Larger than ``resident_bytes`` only for ChEMBL, whose archive sits
+            beside the database it extracts into.
+        source: Where the file comes from, for messages that have to tell a
+            user what is about to be fetched.
+        note: Anything a user deciding whether to fetch this should know.
+    """
+
+    name: str
+    title: str
+    role: str
+    patterns: Tuple[str, ...]
+    download_bytes: int
+    resident_bytes: int
+    source: str
+    extras: Tuple[str, ...] = ()
+    peak_bytes: int = 0
+    note: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.peak_bytes:
+            object.__setattr__(self, "peak_bytes",
+                               max(self.download_bytes, self.resident_bytes))
+
+
+#: The five datasets, in the order :class:`~provesid.Search` benefits from them:
+#: the three primary sources first, then ChEMBL, which only enriches a structure
+#: the others already found, then ZeroPM, which is off by default.
+#:
+#: Sizes were measured on 2026-09-20 from the copies on a machine that had all
+#: five: ChEBI SDF 879.7 MiB plus a 74.5 MiB index, CompTox 816.6 MiB, PubChem
+#: 2.16 GiB, ChEMBL 36 27.7 GiB from a 5.8 GB archive, ZeroPM 438.7 MiB. They
+#: are advisory --- a later release is a little larger --- and are used to tell
+#: the user what a download will cost before it starts, not to check anything.
+DATASETS: Dict[str, Dataset] = {
+    "pubchem": Dataset(
+        name="pubchem",
+        title="PubChem identifiers",
+        role="CAS, name, InChIKey and formula lookups; the broadest source",
+        patterns=("pubchem_id.db",),
+        extras=("pubchem_id.db.part", "pubchem_id.db.part.source"),
+        download_bytes=2322595840,
+        resident_bytes=2322595840,
+        source="Zenodo record 18173204",
+    ),
+    "comptox": Dataset(
+        name="comptox",
+        title="EPA CompTox chemicals",
+        role="DTXSID lookups, and curated CAS-name pairs",
+        patterns=("comptox_chemicals.db",),
+        extras=("comptox_chemicals.db.part", "comptox_chemicals.db.part.source"),
+        download_bytes=856293376,
+        resident_bytes=856293376,
+        source="Zenodo record 18833587",
+    ),
+    "chebi": Dataset(
+        name="chebi",
+        title="ChEBI SDF",
+        role="curated structures, synonyms and ChEBI IDs",
+        patterns=("chebi.sdf",),
+        # The index is built on first use and is a fifth of the total; a status
+        # table that ignored it would understate ChEBI by 74 MiB.
+        extras=("chebi.sdf.index.pkl", "chebi.sdf.gz",
+                "chebi.sdf.gz.part", "chebi.sdf.gz.part.source", "chebi.sdf.tmp"),
+        download_bytes=250 * _MB,
+        resident_bytes=922455587 + 78104601,
+        source="EBI FTP (chebi.sdf.gz)",
+        note="downloaded gzipped (~250 MB) and expanded; the search index is "
+             "built on first use and takes a few minutes",
+    ),
+    "chembl": Dataset(
+        name="chembl",
+        title="ChEMBL",
+        role="enrichment only --- adds ChEMBL IDs to structures already found",
+        patterns=("chembl_*.db",),
+        extras=("chembl_*_sqlite.tar.gz", "chembl_*_sqlite.tar.gz.part",
+                "chembl_*_sqlite.tar.gz.part.source", "chembl_*.db.incoming"),
+        download_bytes=5800 * _MB,
+        resident_bytes=29739835392,
+        peak_bytes=29739835392 + 5800 * _MB,
+        source="EBI FTP (chembl_NN_sqlite.tar.gz)",
+        note="87% of a full install, and it only enriches. CheMBL.compact() "
+             "shrinks it to 2.4 GiB afterwards with identical results",
+    ),
+    "zeropm": Dataset(
+        name="zeropm",
+        title="ZeroPM inventory",
+        role="regulatory inventories; off unless Search(use_zeropm=True)",
+        patterns=("zeropm-*.sqlite",),
+        extras=("zeropm-*.sqlite.part", "zeropm-*.sqlite.part.source"),
+        download_bytes=459968512,
+        resident_bytes=459968512,
+        source="ZeroPM-H2020 GitHub repository",
+    ),
+}
+
+#: Datasets :class:`~provesid.Search` queries unless ``use_zeropm=True``.
+DEFAULT_DATASETS: Tuple[str, ...] = ("pubchem", "comptox", "chebi", "chembl")
+
+
+class MissingDatasetError(ServiceError):
+    """
+    A dataset was needed and is not on disk.
+
+    Raised by :func:`require` --- and so by ``Search(datasets="required")`` ---
+    instead of downloading tens of gigabytes on the user's behalf. The message
+    names every missing dataset, what it costs, and the exact :func:`fetch`
+    call that would install it.
+
+    A :class:`~provesid.http.ServiceError` so that the whole family stays
+    catchable through one base, as :class:`DownloadError` is.
+    """
+
+
+def human_bytes(count: float) -> str:
+    """
+    Format a byte count the way a user reading a size wants it.
+
+    Args:
+        count: Number of bytes.
+
+    Returns:
+        The size in the largest unit that leaves a number above 1, binary
+        units, one decimal place.
+
+    Example:
+        >>> human_bytes(2322595840)
+        '2.2 GiB'
+        >>> human_bytes(0)
+        '0 B'
+    """
+    if count < 1024:
+        return f"{int(count)} B"
+    for unit in ("KiB", "MiB", "GiB", "TiB"):
+        count /= 1024
+        if count < 1024 or unit == "TiB":
+            return f"{count:.1f} {unit}"
+    return f"{count:.1f} TiB"  # pragma: no cover - unreachable, kept explicit
+
+
+def dataset_names() -> List[str]:
+    """
+    Names of every dataset in the registry, in registry order.
+
+    Returns:
+        The keys of :data:`DATASETS`.
+
+    Example:
+        >>> dataset_names()
+        ['pubchem', 'comptox', 'chebi', 'chembl', 'zeropm']
+    """
+    return list(DATASETS)
+
+
+def _resolve_names(names: Optional[Union[str, Iterable[str]]]) -> List[str]:
+    """
+    Normalise a name, an iterable of names, or None into a list of valid names.
+
+    Args:
+        names: One dataset name, several, or None for every dataset in the
+            registry.
+
+    Returns:
+        Dataset names in registry order, without duplicates.
+
+    Raises:
+        KeyError: If a name is not in the registry. The message lists the
+            names that are, since a typo here is otherwise reported much later
+            as an empty table.
+    """
+    if names is None:
+        return dataset_names()
+    if isinstance(names, str):
+        names = [names]
+    requested = list(dict.fromkeys(names))
+    unknown = [name for name in requested if name not in DATASETS]
+    if unknown:
+        raise KeyError(
+            f"Unknown dataset(s): {', '.join(sorted(unknown))}. "
+            f"Known datasets: {', '.join(dataset_names())}."
+        )
+    return [name for name in dataset_names() if name in requested]
+
+
+def data_directory(data_dir: Optional[str] = None) -> str:
+    """
+    The directory the datasets live in.
+
+    Args:
+        data_dir: An explicit directory, which is returned as given (expanded
+            and made absolute). None for the per-user default, which honours
+            ``PROVESID_DATA_DIR``.
+
+    Returns:
+        Absolute path to the dataset directory.
+    """
+    if data_dir is not None:
+        return os.path.abspath(os.path.expanduser(str(data_dir)))
+    return user_dataset_path()
+
+
+def dataset_files(name: str, data_dir: Optional[str] = None,
+                  *, include_extras: bool = True) -> List[str]:
+    """
+    Files belonging to one dataset that are actually on disk.
+
+    Args:
+        name: Dataset name.
+        data_dir: Directory to look in; None for the default.
+        include_extras: Include derived and leftover files --- ChEBI's index, a
+            ``.part`` from an interrupted download. They occupy real space, so
+            :func:`status` and :func:`remove` want them; :func:`is_present`
+            does not.
+
+    Returns:
+        Absolute paths, sorted, of the files that exist.
+
+    Raises:
+        KeyError: If ``name`` is not a known dataset.
+    """
+    dataset = DATASETS[name]
+    directory = data_directory(data_dir)
+    globs = dataset.patterns + (dataset.extras if include_extras else ())
+    found: List[str] = []
+    for pattern in globs:
+        found.extend(glob.glob(os.path.join(directory, pattern)))
+    return sorted(dict.fromkeys(os.path.abspath(path) for path in found))
+
+
+def is_present(name: str, data_dir: Optional[str] = None) -> bool:
+    """
+    Whether a dataset is installed and usable.
+
+    A leftover ``.part`` does not count, and neither does ChEBI's index on its
+    own: both are files the dataset leaves behind rather than the dataset.
+
+    Args:
+        name: Dataset name.
+        data_dir: Directory to look in; None for the default.
+
+    Returns:
+        True when at least one file matching the dataset's own patterns exists.
+
+    Raises:
+        KeyError: If ``name`` is not a known dataset.
+    """
+    return bool(dataset_files(name, data_dir, include_extras=False))
+
+
+def missing(names: Optional[Union[str, Iterable[str]]] = None,
+            data_dir: Optional[str] = None) -> List[str]:
+    """
+    Which of the named datasets are not installed.
+
+    Args:
+        names: Dataset name, names, or None for all of them.
+        data_dir: Directory to look in; None for the default.
+
+    Returns:
+        Names of the datasets that are absent, in registry order.
+
+    Raises:
+        KeyError: If a name is not in the registry.
+
+    Example:
+        >>> missing(["pubchem", "chembl"])            # doctest: +SKIP
+        ['chembl']
+    """
+    return [name for name in _resolve_names(names)
+            if not is_present(name, data_dir)]
+
+
+def fetch_command(names: Union[str, Iterable[str]]) -> str:
+    """
+    The exact call that installs the given datasets, as a string.
+
+    Error messages that tell a user what went wrong should also tell them what
+    to type; this builds that line so every message spells it the same way.
+
+    Args:
+        names: Dataset name or names.
+
+    Returns:
+        A copy-pasteable Python call.
+
+    Example:
+        >>> fetch_command("chembl")
+        "provesid.datasets.fetch('chembl')"
+        >>> fetch_command(["pubchem", "chebi"])
+        "provesid.datasets.fetch(['pubchem', 'chebi'])"
+    """
+    resolved = _resolve_names(names)
+    if len(resolved) == 1:
+        return f"provesid.datasets.fetch({resolved[0]!r})"
+    return f"provesid.datasets.fetch({resolved!r})"
+
+
+def _release_of(name: str, path: str) -> str:
+    """
+    The release a file on disk belongs to, read from its name.
+
+    Only two of the five datasets carry a version in the filename, and both
+    matter to a user reading a status table: ChEMBL because the release number
+    changes what is in it, ZeroPM because the inventory is versioned. The
+    others are single-file snapshots whose version lives in the Zenodo record
+    they came from, and inventing a version for them would be worse than
+    leaving the column empty.
+
+    Args:
+        name: Dataset name.
+        path: Path to one of its files.
+
+    Returns:
+        A short release string, or ``""`` when the filename does not say.
+    """
+    if not path:
+        return ""
+    basename = os.path.basename(path)
+    if name == "chembl":
+        match = re.search(r"chembl_(\d+)", basename)
+        if not match:
+            return ""
+        return (f"{match.group(1)} (extract)" if "_provesid" in basename
+                else match.group(1))
+    if name == "zeropm":
+        match = re.search(r"v(\d+)-(\d+)-(\d+)", basename)
+        return ".".join(match.groups()) if match else ""
+    return ""
+
+
+def _preferred_file(name: str, paths: List[str]) -> str:
+    """
+    The one file a client would open, out of several a dataset may have.
+
+    Only ChEMBL and ZeroPM can have more than one: ChEMBL names its file after
+    the release and leaves older ones in place, and :meth:`CheMBL.compact`
+    writes an extract beside the full release it was built from. The rule here
+    is :meth:`CheMBL._find_local_database`'s --- newest release wins, and at
+    equal releases the extract, since the two answer identically and one costs
+    a tenth of the page cache.
+
+    It reads the rule off the filename rather than opening each candidate, so
+    a status table stays a directory listing. An extract renamed to hide its
+    ``_provesid`` suffix would be misreported here and opened anyway by
+    :class:`~provesid.CheMBL`, which checks the file itself.
+
+    Args:
+        name: Dataset name.
+        paths: Candidate paths, as :func:`dataset_files` returns them.
+
+    Returns:
+        The preferred path, or ``""`` when there are no candidates.
+    """
+    if not paths:
+        return ""
+    if name == "chembl":
+        def key(path: str) -> Tuple[int, int]:
+            match = re.search(r"chembl_(\d+)", os.path.basename(path))
+            return (int(match.group(1)) if match else -1,
+                    1 if "_provesid" in os.path.basename(path) else 0)
+        return max(paths, key=key)
+    if name == "zeropm":
+        return max(paths, key=lambda path: _release_of(name, path))
+    return paths[0]
+
+
+def status(names: Optional[Union[str, Iterable[str]]] = None,
+           data_dir: Optional[str] = None) -> pd.DataFrame:
+    """
+    What is on disk, dataset by dataset.
+
+    The first thing to run on a machine whose disk is filling up, and the
+    answer to "will this search use all four sources?". Nothing is downloaded,
+    nothing is opened --- the table is built from filenames and ``stat`` calls,
+    so it is instant even with 30 GB of ChEMBL in the directory.
+
+    Args:
+        names: Dataset name, names, or None for every dataset.
+        data_dir: Directory to look in; None for the per-user default.
+
+    Returns:
+        A DataFrame with one row per dataset and the columns:
+
+        ``dataset``
+            Registry name, the same string ``Search`` uses for the source.
+        ``title``
+            Human-readable name.
+        ``present``
+            Whether the dataset itself is installed. A leftover ``.part`` or a
+            stale index does not make this True, though both are counted in
+            ``bytes``.
+        ``files``
+            Number of files found, including derived and partial ones.
+        ``bytes`` / ``size``
+            Space occupied, as an integer and as a readable string.
+        ``release``
+            Release read from the filename, where the filename says.
+        ``path``
+            The dataset's main file, or ``""`` when it is absent.
+
+        ``df.attrs`` carries ``data_dir`` and ``total_bytes``.
+
+    Raises:
+        KeyError: If a name is not in the registry.
+
+    Example:
+        >>> from provesid import datasets
+        >>> datasets.status()[["dataset", "present", "size"]]   # doctest: +SKIP
+          dataset  present      size
+        0 pubchem     True   2.2 GiB
+        1 comptox     True   816.6 MiB
+        2   chebi     True   954.2 MiB
+        3  chembl    False         0 B
+        4  zeropm     True   438.7 MiB
+    """
+    directory = data_directory(data_dir)
+    rows: List[Dict[str, Any]] = []
+    for name in _resolve_names(names):
+        dataset = DATASETS[name]
+        files = dataset_files(name, directory)
+        primary = dataset_files(name, directory, include_extras=False)
+        total = sum(os.path.getsize(path) for path in files
+                    if os.path.exists(path))
+        rows.append({
+            "dataset": name,
+            "title": dataset.title,
+            "present": bool(primary),
+            "files": len(files),
+            "bytes": total,
+            "size": human_bytes(total),
+            "release": _release_of(name, _preferred_file(name, primary)),
+            "path": _preferred_file(name, primary),
+        })
+
+    frame = pd.DataFrame(rows, columns=["dataset", "title", "present", "files",
+                                        "bytes", "size", "release", "path"])
+    frame.attrs["data_dir"] = directory
+    frame.attrs["total_bytes"] = int(frame["bytes"].sum()) if rows else 0
+    return frame
+
+
+def plan(names: Optional[Union[str, Iterable[str]]] = None,
+         data_dir: Optional[str] = None, *, force: bool = False) -> pd.DataFrame:
+    """
+    What :func:`fetch` would download, and how much disk it would take.
+
+    The question §4.1 of the refactor plan says nobody was asked: a clean
+    machine used to spend 32 GB on one CAS lookup without a word. Run this
+    first and the number is on screen before anything is transferred.
+
+    The sizes are the measured ones in :data:`DATASETS`, so they are advisory:
+    a newer ChEMBL release is a little larger than the one they were taken
+    from. They are the right order of magnitude, which is what the decision
+    turns on.
+
+    Args:
+        names: Dataset name, names, or None for every dataset.
+        data_dir: Directory the datasets would go in; None for the default.
+        force: Plan a re-download of datasets that are already installed, as
+            ``fetch(force=True)`` would.
+
+    Returns:
+        A DataFrame with one row per dataset and the columns ``dataset``,
+        ``action`` (``"download"`` or ``"present"``), ``download`` /
+        ``installed`` (readable sizes), ``download_bytes`` /
+        ``resident_bytes`` / ``peak_bytes``, ``role`` and ``note``.
+
+        ``df.attrs`` carries ``data_dir``, ``total_download_bytes``,
+        ``total_resident_bytes`` and ``peak_bytes`` --- the last being the most
+        disk needed at any one moment, which for ChEMBL exceeds the installed
+        size by the 5.8 GB archive it extracts from.
+
+    Raises:
+        KeyError: If a name is not in the registry.
+
+    Example:
+        >>> from provesid import datasets
+        >>> todo = datasets.plan(["pubchem", "chebi"])        # doctest: +SKIP
+        >>> datasets.human_bytes(                             # doctest: +SKIP
+        ...     todo.attrs["total_download_bytes"])
+        '2.4 GiB'
+    """
+    directory = data_directory(data_dir)
+    rows: List[Dict[str, Any]] = []
+    for name in _resolve_names(names):
+        dataset = DATASETS[name]
+        would_download = force or not is_present(name, directory)
+        rows.append({
+            "dataset": name,
+            "action": "download" if would_download else "present",
+            "download": human_bytes(dataset.download_bytes) if would_download else "-",
+            "installed": human_bytes(dataset.resident_bytes) if would_download else "-",
+            "download_bytes": dataset.download_bytes if would_download else 0,
+            "resident_bytes": dataset.resident_bytes if would_download else 0,
+            "peak_bytes": dataset.peak_bytes if would_download else 0,
+            "role": dataset.role,
+            "note": dataset.note,
+        })
+
+    frame = pd.DataFrame(rows, columns=["dataset", "action", "download", "installed",
+                                        "download_bytes", "resident_bytes",
+                                        "peak_bytes", "role", "note"])
+    frame.attrs["data_dir"] = directory
+    frame.attrs["total_download_bytes"] = int(frame["download_bytes"].sum()) if rows else 0
+    frame.attrs["total_resident_bytes"] = int(frame["resident_bytes"].sum()) if rows else 0
+    # Peak disk is not the sum of the peaks: the datasets are installed one
+    # after another, so the worst moment is everything else already on disk
+    # plus the largest transient overhead of a single install -- ChEMBL's 5.8 GB
+    # archive, which is deleted once the database has been extracted from it.
+    overhead = (frame["peak_bytes"] - frame["resident_bytes"]).max() if rows else 0
+    frame.attrs["peak_bytes"] = int(frame["resident_bytes"].sum() + overhead) if rows else 0
+    return frame
+
+
+#: Import paths of the client classes, resolved only when :func:`fetch` runs.
+#: The client modules import *this* one for :func:`download_file`, so the
+#: registry cannot import them back at module level.
+_CLIENTS: Dict[str, Tuple[str, str]] = {
+    "pubchem": (".pubchem", "PubChemID"),
+    "comptox": (".comptox", "CompToxID"),
+    "chebi": (".chebi", "ChebiSDF"),
+    "chembl": (".chembl", "CheMBL"),
+    "zeropm": (".zeropm", "ZeroPM"),
+}
+
+
+def _client_class(name: str) -> type:
+    """
+    Import and return the client class that installs a dataset.
+
+    Args:
+        name: Dataset name.
+
+    Returns:
+        The class, e.g. :class:`~provesid.PubChemID` for ``"pubchem"``.
+    """
+    module_name, class_name = _CLIENTS[name]
+    module = importlib.import_module(module_name, package=__package__)
+    return getattr(module, class_name)
+
+
+def fetch(names: Union[str, Iterable[str]], data_dir: Optional[str] = None,
+          *, force: bool = False, progress: bool = True) -> Dict[str, str]:
+    """
+    Download and install datasets, by name.
+
+    Each dataset is installed by constructing its client with
+    ``auto_download=True``, which is the one code path that knows how to
+    finish the job: ChEBI's SDF has to be expanded from gzip and indexed,
+    ChEMBL's archive extracted and checked, and all five are verified before
+    anything is moved into place. The client is closed again --- the point here
+    is the files, not the connection.
+
+    Datasets already present are skipped unless ``force=True``, so calling this
+    on a list is cheap and repeatable.
+
+    Args:
+        names: Dataset name or names. There is no "all" default: fetching
+            everything is a 32 GB decision and has to be spelled out.
+        data_dir: Directory to install into; None for the per-user default.
+        force: Re-download datasets that are already installed. For ChEMBL this
+            fetches the current release, which may be a newer one.
+        progress: Show the per-file progress bar.
+
+    Returns:
+        Mapping of dataset name to the path of its main file.
+
+    Raises:
+        KeyError: If a name is not in the registry.
+        DownloadError: If a transfer could not be completed.
+
+    Example:
+        >>> from provesid import datasets
+        >>> datasets.fetch(["pubchem", "chebi"])            # doctest: +SKIP
+        {'pubchem': '/home/me/.local/share/provesid/pubchem_id.db',
+         'chebi': '/home/me/.local/share/provesid/chebi.sdf'}
+    """
+    directory = data_directory(data_dir)
+    os.makedirs(directory, exist_ok=True)
+    requested = _resolve_names(names)
+    todo = [name for name in requested
+            if force or not is_present(name, directory)]
+
+    if todo:
+        # The total, before the first byte moves. This is the announcement
+        # whose absence made a first run cost 32 GB unasked.
+        upcoming = plan(todo, directory, force=force)
+        logger.info(
+            "Fetching %d dataset(s) into %s: %s. Download %s, %s on disk when "
+            "done, %s needed at peak.",
+            len(todo), directory, ", ".join(todo),
+            human_bytes(upcoming.attrs["total_download_bytes"]),
+            human_bytes(upcoming.attrs["total_resident_bytes"]),
+            human_bytes(upcoming.attrs["peak_bytes"]),
+        )
+
+    installed: Dict[str, str] = {}
+    for name in requested:
+        if name not in todo:
+            found = _preferred_file(name, dataset_files(name, directory,
+                                                        include_extras=False))
+            logger.info("%s already present at %s", DATASETS[name].title, found)
+            installed[name] = found
+            continue
+
+        logger.info("Fetching %s (%s, %s)", DATASETS[name].title,
+                    human_bytes(DATASETS[name].download_bytes),
+                    DATASETS[name].source)
+        client = _client_class(name)(
+            auto_download=True, data_dir=directory, redownload=force,
+        )
+        try:
+            found = _preferred_file(name, dataset_files(name, directory,
+                                                        include_extras=False))
+            if not found:  # pragma: no cover - the client would have raised
+                raise DownloadError(
+                    f"{DATASETS[name].title} reported success but left no file "
+                    f"matching {DATASETS[name].patterns} in {directory}"
+                )
+            installed[name] = found
+        finally:
+            connection = getattr(client, "conn", None)
+            if connection is not None:
+                connection.close()
+            del client
+
+    return installed
+
+
+def remove(names: Union[str, Iterable[str]], data_dir: Optional[str] = None,
+           *, dry_run: bool = False) -> pd.DataFrame:
+    """
+    Delete datasets from disk, by name, and report the space reclaimed.
+
+    Deletes the dataset's own files and everything derived from them --- an
+    index, a half-finished ``.part``, ChEMBL's extracted archive --- because
+    leaving those behind reclaims a fraction of the space and confuses the next
+    :func:`status`. For ChEMBL that means *every* release and extract in the
+    directory, not only the one a client would open; ``dry_run=True`` lists
+    them first.
+
+    This is destructive and there is no undo beyond fetching again, so pass
+    ``dry_run=True`` first to see the list. Naming the datasets explicitly is
+    deliberate: there is no "all".
+
+    Args:
+        names: Dataset name or names.
+        data_dir: Directory to delete from; None for the per-user default.
+        dry_run: List what would go without deleting anything.
+
+    Returns:
+        A DataFrame with one row per file and the columns ``dataset``,
+        ``path``, ``bytes``, ``size`` and ``removed``. ``df.attrs`` carries
+        ``freed_bytes`` --- what was reclaimed, or what would be.
+
+    Raises:
+        KeyError: If a name is not in the registry.
+
+    Example:
+        >>> from provesid import datasets
+        >>> datasets.remove("chembl", dry_run=True)          # doctest: +SKIP
+        >>> datasets.remove("chembl")                        # doctest: +SKIP
+    """
+    directory = data_directory(data_dir)
+    rows: List[Dict[str, Any]] = []
+    for name in _resolve_names(names):
+        for path in dataset_files(name, directory):
+            size = os.path.getsize(path) if os.path.exists(path) else 0
+            removed = False
+            if not dry_run:
+                try:
+                    os.remove(path)
+                    removed = True
+                except OSError as exc:
+                    # A Windows client still holding the database open is the
+                    # common case; say which file and carry on with the rest.
+                    logger.warning("Could not remove %s: %s", path, exc)
+            rows.append({
+                "dataset": name,
+                "path": path,
+                "bytes": size,
+                "size": human_bytes(size),
+                "removed": removed,
+            })
+
+    frame = pd.DataFrame(rows, columns=["dataset", "path", "bytes", "size", "removed"])
+    freed = int(frame.loc[frame["removed"] | dry_run, "bytes"].sum()) if rows else 0
+    frame.attrs["data_dir"] = directory
+    frame.attrs["freed_bytes"] = freed
+    logger.info("%s %s across %d file(s)",
+                "Would free" if dry_run else "Freed", human_bytes(freed), len(rows))
+    return frame
+
+
+def require(names: Union[str, Iterable[str]], data_dir: Optional[str] = None) -> None:
+    """
+    Raise unless every named dataset is installed.
+
+    What ``Search(datasets="required")`` calls, and what any code that must not
+    silently run on fewer sources should call. The message is the useful part:
+    it names each missing dataset with its size and ends with the exact
+    :func:`fetch` call, so the user never has to look one up.
+
+    Args:
+        names: Dataset name or names.
+        data_dir: Directory to look in; None for the per-user default.
+
+    Raises:
+        MissingDatasetError: If any named dataset is absent. Nothing is
+            downloaded.
+        KeyError: If a name is not in the registry.
+
+    Example:
+        >>> from provesid import datasets
+        >>> datasets.require(["pubchem", "chembl"])          # doctest: +SKIP
+        Traceback (most recent call last):
+        provesid.datasets.MissingDatasetError: 1 dataset is missing from ...
+    """
+    absent = missing(names, data_dir)
+    if not absent:
+        return
+
+    directory = data_directory(data_dir)
+    lines = [
+        f"  {DATASETS[name].title} ({name}): {human_bytes(DATASETS[name].download_bytes)}"
+        f" to download, {human_bytes(DATASETS[name].resident_bytes)} on disk"
+        f" --- {DATASETS[name].role}"
+        for name in absent
+    ]
+    raise MissingDatasetError(
+        f"{len(absent)} dataset(s) missing from {directory}:\n"
+        + "\n".join(lines)
+        + f"\n\nInstall them with:\n  {fetch_command(absent)}\n"
+        "Or pass datasets='present' to run on whatever is already on disk, "
+        "or datasets='auto' to download automatically."
+    )

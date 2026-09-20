@@ -442,7 +442,7 @@ Steps are independently committable and leave the suite green.
 | 1 | ~~**`CheMBL.compact()`: 30 GB → 2.6 GB from a full database already on disk**~~ **done, §11** | **9** | **S** |
 | 2 | ~~rewrite `search_by_name` as a `UNION`; add `ORDER BY` — 743 ms → 10 µs~~ **done, §12** | 9.5, 9.3 | S |
 | 3 | ~~`datasets.py`: `download_file` with resume + checksum; migrate the 5 download sites~~ **done, §13** | 4.2 | M |
-| 4 | `datasets.status/plan/fetch/remove`; `Search(datasets="present")` as the default | 4.1 | M |
+| 4 | ~~`datasets.status/plan/fetch/remove`; `Search(datasets="present")` as the default~~ **done, §14** | 4.1 | M |
 | 5 | build the ChEMBL extract during download; `source=` on `CheMBL` | 9.7 | M |
 | 6 | `close()`, context managers and thread safety on the four SQLite clients | 4.3 | S |
 | 7 | `classyfire.py` raises; rewrite its tests; drop it from the docs' service lists | 4.8 | S |
@@ -1496,3 +1496,182 @@ all.
   beside every FTP file, so every one of the seven source files is verified.
 - Step 4 — `datasets.status/plan/fetch/remove` and `Search(datasets="present")`
   — is next, and is what stops a first run downloading 32 GB without asking.
+  **Landed; see §14.**
+
+---
+
+## 14. Landed on 2026-09-20 — step 4, the dataset manager (§4.1)
+
+§4.1 called the 32 GB first run "the largest user-friendliness defect in the
+package". It asked for four functions and one keyword argument. Both landed,
+with two additions the section did not anticipate and one deliberate omission.
+
+### 14.1 What landed
+
+- `src/provesid/datasets.py` grew a second half: the `Dataset` dataclass, the
+  `DATASETS` registry, `DEFAULT_DATASETS`, `MissingDatasetError`, and
+  `status`, `plan`, `fetch`, `remove`, `require`, `missing`, `is_present`,
+  `dataset_files`, `dataset_names`, `data_directory`, `fetch_command` and
+  `human_bytes`.
+- `Search(datasets=...)` with the three policies of §4.1's table, defaulting
+  to `"present"`.
+- 40 tests in `tests/test_dataset_manager.py`, an example in
+  `examples/datasets/dataset_manager_demo.py`, a §8 in `docs/quickstart.md`,
+  and two `CHANGELOG.md` entries.
+- `datasets`, `DATASETS`, `Dataset`, `MissingDatasetError` and `human_bytes`
+  exported from `provesid`.
+
+The module is now "the bulk datasets: what they are, and how they get here" —
+`download_file` moves the bytes, the registry says which bytes and whether
+they are already on disk. Keeping them together is what lets `status` count a
+leftover `.part` against the dataset it belongs to.
+
+### 14.2 The registry cannot import the clients, and should not
+
+The obvious home for "how big is ChEMBL, and where does it live" is
+`CheMBL` — and it is the wrong one, because constructing a client is exactly
+the act the manager exists to avoid, and because all five client modules
+import `datasets` for `download_file`. So the facts live in a table of frozen
+dataclasses, and `fetch` imports the client it needs through
+`importlib.import_module` at the moment it needs it.
+
+The cost is that two tables now describe the same five sources: `DATASETS`
+here and `Search._ALL_SOURCE_KEYS` there. A test pins them equal, because a
+dataset added to one and not the other would be unreportable by `status` or
+unreachable by `fetch`, with nothing to say so.
+
+### 14.3 Measured sizes, and the peak nobody counts
+
+The sizes in the registry were measured from the copies on this machine rather
+than taken from §4.1's table, which rounded:
+
+| Dataset | Download | Installed |
+|---|---:|---:|
+| PubChem | 2.2 GiB | 2.2 GiB |
+| CompTox | 816.6 MiB | 816.6 MiB |
+| ChEBI | 250 MiB (gz) | 954.2 MiB (SDF + 74.5 MiB index) |
+| ChEMBL 36 | 5.7 GiB | 27.7 GiB |
+| ZeroPM | 438.7 MiB | 438.7 MiB |
+| **four default sources** | **8.9 GiB** | **31.6 GiB** |
+
+Two of those rows are worth the trouble they cost.
+
+**ChEBI's index is a fifth of ChEBI.** It is built on first use rather than
+downloaded, so a registry that listed only the downloaded file would understate
+ChEBI by 74 MiB and `remove` would leave it behind. Derived files are therefore
+a separate `extras` tuple: counted in `status`, deleted by `remove`, and never
+proof that the dataset is installed.
+
+**A laptop with 28 GB free still cannot install ChEMBL.** The archive sits
+beside the database it extracts into, so the worst moment needs 33.4 GiB, not
+27.7 GiB. `plan()` reports that as `attrs["peak_bytes"]` — everything else
+already installed, plus the largest single transient overhead, since the
+datasets install one after another rather than at once. For the four default
+sources it is 37.3 GiB against 31.6 GiB installed. §4.1 does not mention this,
+and it is precisely the failure that wastes an afternoon: 5.8 GB transferred,
+then no space to unpack it.
+
+### 14.4 Two things §4.1 did not ask for
+
+**A leftover `.part` is reported without being a dataset.** An interrupted
+2.2 GB download leaves 2.2 GB on disk that no source can read. `status` counts
+it (it explains a full disk after a cancelled download) and `present` stays
+False (it is not the dataset). Both halves matter: treating it as installed
+would be worse than not reporting it at all.
+
+**`status` names the file a client would actually open.** With `chembl_36.db`
+and `chembl_36_provesid.db` side by side, `CheMBL` opens the extract, so a
+table naming the 27.7 GB original would be describing a database nobody will
+open. `_preferred_file` mirrors `CheMBL._find_local_database`'s rule — newest
+release, extract at equal releases — but reads it off the filename rather than
+opening each candidate, so a status table stays a directory listing. The
+divergence, documented where it is implemented: an extract renamed to hide its
+`_provesid` suffix is misreported here and opened anyway by `CheMBL`, which
+checks the file itself.
+
+### 14.5 `redownload=True` had to become an error
+
+`Search(redownload=True)` means "fetch a fresh copy". Under the new default it
+cannot, and the two plausible readings — ignore it, or treat it as an implicit
+`datasets="auto"` — are both worse than refusing. Ignoring it hands back a
+stale database with no indication; promoting it would let a keyword that used
+to mean "re-download the copy I already have" silently authorise the 32 GB
+first download that this step exists to prevent. So it raises `ValueError`
+naming the two ways forward. Dev-principle §1 permits the break.
+
+### 14.6 `"required"` raises in the constructor
+
+Clients are constructed lazily on the first `search()`, which is where the
+natural place to enforce a policy would be. `"required"` is checked in
+`__init__` instead, so a batch script fails on the line that configured it
+rather than an hour into a run. The check is a `glob` over one directory: no
+client is constructed and nothing is downloaded, which is the whole point.
+
+It skips any source whose client the caller passed in — that client has
+already found its data, wherever it put it — and it does not demand ZeroPM
+unless `use_zeropm=True` put it among the queried sources.
+
+### 14.7 What this does not do
+
+`ChebiSDF`, `CompToxID`, `PubChemID`, `ZeroPM` and `CheMBL` still default to
+`auto_download=True` when constructed directly. `Search` no longer relies on
+that default, which is where the 32 GB came from, but `CheMBL()` on a clean
+machine still fetches 5.8 GB unasked. Changing the five client defaults is a
+wider break than §4.1 asked for and belongs with step 6, which is already
+opening those constructors for `close()` and context-manager support.
+
+`fetch` installs by constructing the client, which for ChEBI also builds the
+index — a few minutes with no progress bar. That is the right definition of
+"installed" (the dataset is usable when `fetch` returns), but it means `fetch`
+is not purely a download.
+
+### 14.8 Verification
+
+- `tests/test_dataset_manager.py`, 40 tests, every one against an explicit
+  `data_dir` in `tmp_path`: the manager's job is to report on a directory, and
+  a test that used the real one would report on whatever the developer happens
+  to have installed. The files it creates are empty — the manager reads names
+  and sizes, never contents.
+- §7 asked for a test that constructs `Search` with no datasets present and
+  asserts that nothing is downloaded and the error names the `datasets.fetch`
+  call. Both exist: `test_present_downloads_nothing_and_reports_what_is_missing`
+  runs a real CAS search in an empty directory with every module's
+  `download_file` monkeypatched to fail the test if called, then asserts the
+  directory is still empty and that each of the four warnings carries its own
+  `provesid.datasets.fetch('...')`; `test_required_raises_in_the_constructor`
+  covers the raising policy.
+- What else is pinned: the registry against `Search._ALL_SOURCE_KEYS`, ChEMBL's
+  peak exceeding its installed size, a `.part` counted but not present, the
+  extract preferred over the release it came from, a newer release preferred
+  over an older extract, ZeroPM's newest version chosen out of two, `plan`
+  totals over a mixed present/missing set, `fetch` skipping what is present and
+  passing `auto_download=True` for what is missing, `fetch` announcing the
+  total before transferring, `remove` taking derived files and every ChEMBL
+  release with it, `dry_run` deleting nothing, and each of the three policies
+  reaching the clients as the right `auto_download` value.
+
+### 14.9 Validation
+
+- `pytest tests/` — **1135 passed, 34 skipped, 3 failed** (9m30s). The three
+  failures are live PubChem 503s in `test_pubchem.py` and `test_pubchemview.py`;
+  they fail identically on the unmodified tree (verified with `git stash`).
+- `mkdocs build --strict` — clean.
+- `examples/datasets/dataset_manager_demo.py` run end to end: the status table
+  for this machine, the 8.9 GiB / 31.6 GiB / 37.3 GiB plan for a clean one, a
+  real CAS search in an empty directory that downloaded nothing and reported
+  four missing sources, and `"required"`'s message.
+- `Search("cas").search("50-00-0")` against the real datasets still returns
+  formaldehyde at confidence 0.9 from all four sources.
+
+### 14.10 Still open
+
+- The five client defaults (§14.7), which step 6 should take.
+- `fetch` was exercised against stub clients, not against the real Zenodo and
+  EBI downloads — that costs ~9 GB, and the transport underneath it is what
+  `tests/test_datasets.py` already covers against a real HTTP server. The first
+  real install will be the proof.
+- No `docs/api/datasets.md` yet; the module has none from step 3 either, and
+  step 18 rebuilds the API reference.
+- Step 5 — building the ChEMBL extract during download, and `source=` on
+  `CheMBL` (§9.7) — is next. It is what turns the 31.6 GiB in §14.3 into
+  ~6.5 GB for a user who never needed the full release in the first place.

@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A dataset manager, and `Search` no longer downloads 32 GB behind your
+  back.** On a clean machine `Search("cas").search("50-00-0")` constructed
+  four source clients that each default to `auto_download=True`, so one CAS
+  lookup fetched ChEBI, CompTox, PubChem and ChEMBL — about 32 GB, of which
+  ChEMBL is 87% and only *enriches* a structure the other sources already
+  found. Nothing announced the total, nothing asked, and nothing offered to
+  proceed with the sources already present. This package is for researchers on
+  laptops, where 32 GB is often the whole free disk.
+
+  `provesid.datasets` now describes the five datasets without opening them, so
+  the decision can be made before the first byte moves:
+
+  ```python
+  from provesid import datasets
+
+  datasets.status()                    # present? size on disk? release? path?
+  datasets.plan(["pubchem", "chebi"])  # what a download would transfer
+  datasets.fetch("pubchem")            # install by name; skips what is present
+  datasets.remove("chembl")            # reclaim the space, by name
+  ```
+
+  `status()` and `plan()` return DataFrames and read only filenames and
+  `stat`, so they are instant with 30 GB of ChEMBL in the directory. `plan()`
+  also reports the *peak* requirement, which for ChEMBL exceeds the installed
+  size by the 5.8 GB archive sitting beside the database it extracts into — a
+  laptop with 28 GB free and 27.7 GB of ChEMBL to install still fails.
+
+- **`Search(datasets=...)`, defaulting to `"present"`.**
+
+  | value | behaviour |
+  |---|---|
+  | `"present"` | use whatever is on disk; name each missing dataset, its size and the `fetch` call that installs it. **The new default.** |
+  | `"auto"` | the behaviour before this release — download whatever is missing |
+  | `"required"` | raise `MissingDatasetError` in the constructor, before any query, naming the missing datasets and the exact `fetch` call |
+
+  `Search` already degraded gracefully when a source was unavailable and
+  already warned that confidence is not comparable across runs, so `"present"`
+  needed no new machinery in the resolver — only that the clients stop
+  downloading behind the caller's back.
+
 - **One resumable, checksummed downloader for every bulk dataset:
   `provesid.datasets.download_file`.** Five modules had each grown their own
   copy of "stream the response into a temporary file with a progress bar", and
@@ -482,6 +522,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PubChemAPI.get_cache_info`.
 
 ### Changed
+- **Breaking: `Search` no longer downloads missing datasets by default.** Pass
+  `datasets="auto"` for the old behaviour. `redownload=True` now requires
+  `datasets="auto"` and raises otherwise, rather than being silently ignored
+  and handing back a stale copy.
 - **`CheMBL.get_compound()` no longer returns `molfile`.** It is a quarter of a
   full ChEMBL database, nothing in PROVESID consumed it, and it is absent from
   the extract above. Build a MOL block from `canonical_smiles` with RDKit when

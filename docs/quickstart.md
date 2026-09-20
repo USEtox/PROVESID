@@ -128,6 +128,36 @@ for cls in (CheMBL, ZeroPM):
         print(f"{cls.__name__}: dataset not yet available ({exc.__class__.__name__})")
 ```
 
+## 8. Which datasets are installed, and what they cost
+
+The offline sources read five bulk datasets, together about 32 GB (about
+6.5 GB once `CheMBL.compact()` has run). None of them is downloaded on your
+behalf: `Search` uses whatever is on disk and reports the rest.
+
+```{code-cell} ipython3
+from provesid import datasets
+
+status = datasets.status()
+print(status[["dataset", "present", "size", "release"]].to_string(index=False))
+print("in", status.attrs["data_dir"])
+```
+
+`datasets.plan()` says what a download would transfer before it starts, and
+`datasets.fetch()` installs one by name:
+
+```{code-cell} ipython3
+todo = datasets.plan(["pubchem", "chebi"])
+print(todo[["dataset", "action", "download", "installed"]].to_string(index=False))
+print("transfer:", datasets.human_bytes(todo.attrs["total_download_bytes"]))
+
+# datasets.fetch(["pubchem", "chebi"])   # resumable, verified, skips what is present
+# datasets.remove("chembl")              # reclaim the space, by name
+```
+
+`Search(datasets=...)` chooses what happens when one is absent: `"present"`
+(the default) runs on the installed sources, `"auto"` downloads what is
+missing, and `"required"` raises and names the `fetch` call.
+
 ## Next
 
 - [Online and Offline Data Methods](data_methods.md)

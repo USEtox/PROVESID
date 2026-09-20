@@ -5,6 +5,13 @@ offline databases (ChEBI, CompTox, PubChemID, ChEMBL) with structure-aware
 matching, confidence scoring, fuzzy name search, Tanimoto similarity search,
 InChIKey-skeleton matching, and salt/solvent stripping.
 
+The datasets these sources read are large --- ~32 GB together, or ~6.5 GB once
+``CheMBL.compact()`` has run --- and none of them is downloaded on the caller's
+behalf.  :class:`Search` queries whatever is installed and reports what is
+missing; :mod:`provesid.datasets` installs them by name.  Pass
+``datasets="auto"`` to download what is missing, or ``datasets="required"`` to
+refuse to run on a partial set.
+
 ZeroPM is **not** among the databases the resolver targets by default.  Its records
 are harvested from regulatory inventories rather than curated compound-by-compound,
 so its name→structure mappings are noisier than the other four sources and, being
@@ -57,6 +64,7 @@ from tqdm import tqdm
 from .chebi import ChebiSDF
 from .chembl import CheMBL
 from .comptox import CompToxID
+from .datasets import DATASETS, fetch_command, human_bytes, require
 from .opsin import PYOPSIN
 from .pubchem import PubChemID
 from .zeropm import ZeroPM
@@ -382,6 +390,10 @@ class Search:
       requires a Java runtime.
     - **Traceability**: ``source_details`` field records which sources were
       queried, whether they matched, and which output fields they contributed.
+    - **No surprise downloads**: the offline datasets total ~32 GB, and none of
+      them is fetched on your behalf.  ``Search`` uses what is installed and
+      reports the rest (``datasets="present"``, the default); install them
+      deliberately with :func:`provesid.datasets.fetch`.
 
     Attributes:
         identifier_type (str): Input identifier type used for all queries.
@@ -407,6 +419,8 @@ class Search:
         consensus_compat_threshold (float): Min similarity to merge with anchor.
         query_weight (float): Weight of query agreement in the confidence score.
         return_alternatives (bool): Attach runner-up summaries when ``n_hits=1``.
+        datasets (str): Dataset policy in force --- ``"present"`` (the default),
+            ``"auto"`` or ``"required"``.  See the constructor.
         sources_available (list[str]): Source keys that initialised successfully,
             filled in on the first :meth:`search` call.  Since corroboration
             drives confidence, a run missing a source scores lower than a
@@ -459,6 +473,11 @@ class Search:
          "token_set_ratio", "QRatio"]
     )
 
+    #: What to do about offline datasets that are not on disk.  ``"present"``
+    #: is the default: a laptop should not spend ~32 GB on a first CAS lookup
+    #: because a source client happens to default to ``auto_download=True``.
+    DATASET_POLICIES: frozenset = frozenset(["present", "auto", "required"])
+
     def __init__(
         self,
         identifier_type: str = "cas",
@@ -482,6 +501,7 @@ class Search:
         consensus_compat_threshold: float = 0.35,
         query_weight: float = 0.5,
         return_alternatives: bool = False,
+        datasets: str = "present",
         data_dir: Optional[Union[str, Path]] = None,
         redownload: bool = False,
         chebi: Optional[ChebiSDF] = None,
@@ -557,10 +577,34 @@ class Search:
                 the method base in the confidence formula.  Defaults to ``0.5``.
             return_alternatives: When ``n_hits == 1``, attach compact runner-up
                 summaries in an ``alternatives`` column.  Defaults to ``False``.
+            datasets: What to do about the offline datasets the sources read,
+                when they are not on disk.  One of:
+
+                ``"present"``
+                    Use whatever is installed and say, once, which sources are
+                    missing and what installing them would cost.  **The
+                    default.**  Nothing is downloaded.
+                ``"auto"``
+                    Download whatever is missing, which on a clean machine is
+                    ~32 GB (~6.5 GB once ``CheMBL.compact()`` has run) for the
+                    four default sources.  This was the behaviour before the
+                    dataset manager landed, and it happened without asking.
+                ``"required"``
+                    Raise :class:`~provesid.datasets.MissingDatasetError` in
+                    the constructor, naming every missing dataset and the
+                    exact ``provesid.datasets.fetch`` call that installs it.
+                    Use this when a run on fewer sources would be worse than
+                    no run at all --- confidence scores are not comparable
+                    across different source sets.
+
+                Install datasets deliberately with
+                :func:`provesid.datasets.fetch`, and see what a download would
+                cost with :func:`provesid.datasets.plan`.
             data_dir: Optional shared data root used when lazily initialising
                 source clients.
             redownload: If True, lazily initialised source clients force a
-                fresh dataset download.
+                fresh dataset download.  Requires ``datasets="auto"``, since
+                the other two policies do not download at all.
             chebi: Pre-initialised :class:`~provesid.ChebiSDF` client.  When
                 ``None`` the client is created lazily on first use.
             comptox: Pre-initialised :class:`~provesid.CompToxID` client.
@@ -571,7 +615,11 @@ class Search:
 
         Raises:
             ValueError: If ``identifier_type`` is not one of the supported
-                values.
+                values, or ``datasets`` is not one of
+                :data:`DATASET_POLICIES`, or ``redownload=True`` was combined
+                with a policy that does not download.
+            provesid.datasets.MissingDatasetError: If ``datasets="required"``
+                and a dataset a queried source needs is not on disk.
         """
         if identifier_type not in self.SUPPORTED_TYPES:
             raise ValueError(
@@ -606,6 +654,21 @@ class Search:
         self.consensus_compat_threshold = float(consensus_compat_threshold)
         self.query_weight = float(query_weight)
         self.return_alternatives = bool(return_alternatives)
+
+        if datasets not in self.DATASET_POLICIES:
+            raise ValueError(
+                f"datasets must be one of {sorted(self.DATASET_POLICIES)}, "
+                f"got {datasets!r}"
+            )
+        if redownload and datasets != "auto":
+            # Silently ignoring it would be worse: the caller asked for a fresh
+            # copy and would get a stale one with no indication.
+            raise ValueError(
+                f"redownload=True downloads, which datasets={datasets!r} does "
+                "not permit. Pass datasets='auto' to re-download, or call "
+                "provesid.datasets.fetch(..., force=True) yourself."
+            )
+        self.datasets = datasets
 
         self.data_dir = str(data_dir) if data_dir is not None else None
         self.redownload = redownload
@@ -646,7 +709,27 @@ class Search:
         self.sources_unavailable: List[str] = []
         self._availability_logged: bool = False
 
+        # "required" is checked here rather than on the first search, so the
+        # run fails while the user is still looking at the line that started
+        # it.  The check is a directory listing -- no client is constructed and
+        # nothing is downloaded.
+        if self.datasets == "required":
+            require(self._datasets_needed(), self.data_dir)
+
     # ── Client lifecycle ──────────────────────────────────────────────────────
+
+    def _datasets_needed(self) -> List[str]:
+        """Dataset names this instance would have to open on disk.
+
+        The queried sources (:attr:`_SOURCE_KEYS`, which excludes ZeroPM unless
+        ``use_zeropm=True``) minus any whose client the caller constructed and
+        passed in --- that client has already found its data, wherever it put
+        it, so demanding a copy in the shared data directory would be wrong.
+
+        Returns:
+            Dataset names, in :attr:`_SOURCE_KEYS` order.
+        """
+        return [key for key in self._SOURCE_KEYS if getattr(self, f"_{key}") is None]
 
     def _ensure_clients(self) -> None:
         """Lazily initialise all offline source clients.
@@ -659,6 +742,12 @@ class Search:
 
         Only the sources in :attr:`_SOURCE_KEYS` are constructed, so ZeroPM's
         (large) database is never even opened unless ``use_zeropm=True``.
+
+        Whether a missing dataset is downloaded here is the ``datasets``
+        policy's decision, and by default it is not: the clients are
+        constructed with ``auto_download=False``, a missing one is reported
+        with the size and the :func:`~provesid.datasets.fetch` call that would
+        install it, and the search runs on the sources that are present.
         """
         if not self._clients_initialized:
             factories: Dict[str, Any] = {
@@ -668,6 +757,7 @@ class Search:
                 "zeropm": ZeroPM,
                 "chembl": CheMBL,
             }
+            auto = self.datasets == "auto"
             for key in self._SOURCE_KEYS:
                 attr, factory = f"_{key}", factories[key]
                 if getattr(self, attr) is None:
@@ -675,10 +765,34 @@ class Search:
                         setattr(
                             self,
                             attr,
-                            factory(data_dir=self.data_dir, redownload=self.redownload),
+                            factory(
+                                data_dir=self.data_dir,
+                                redownload=self.redownload,
+                                auto_download=auto,
+                            ),
                         )
+                    except FileNotFoundError as exc:
+                        if auto:
+                            log.warning(
+                                "Could not initialise offline source %s: %s", key, exc
+                            )
+                        else:
+                            # Under datasets="present" an absent dataset is an
+                            # ordinary state rather than a failure, so the line
+                            # says what it would cost and how to install it
+                            # instead of reading like an error.
+                            dataset = DATASETS[key]
+                            log.warning(
+                                "%s is not installed, so the %s source is not "
+                                "being queried (%s to download, %s on disk). "
+                                "Install it with %s, or pass datasets='auto'.",
+                                dataset.title, key,
+                                human_bytes(dataset.download_bytes),
+                                human_bytes(dataset.resident_bytes),
+                                fetch_command(key),
+                            )
                     except Exception as exc:
-                        log.warning("Could not initialise offline source %s: %s", attr[1:], exc)
+                        log.warning("Could not initialise offline source %s: %s", key, exc)
 
             self._clients_initialized = True
 

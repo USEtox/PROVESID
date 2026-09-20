@@ -1,14 +1,34 @@
-# Dataset download examples
+# Dataset examples
 
-`provesid.datasets` is the one downloader every bulk dataset in PROVESID goes
-through — ChEMBL's 5.8 GB archive, PubChem's 2.2 GB identifier database,
-CompTox, ZeroPM and the ChEBI SDF.
+`provesid.datasets` is two things: the one downloader every bulk dataset in
+PROVESID goes through — ChEMBL's 5.8 GB archive, PubChem's 2.2 GB identifier
+database, CompTox, ZeroPM and the ChEBI SDF — and the manager that decides
+which of them are on this machine.
 
 ## Files
 
+- `dataset_manager_demo.py` - what is installed, what a download would cost,
+  and the three `Search(datasets=...)` policies. Downloads nothing.
 - `resumable_download_demo.py` - resumption, checksums and rejection, shown
   against a local server that drops the connection on purpose. Downloads
   nothing large and needs no network.
+
+## Deciding what to install
+
+```python
+from provesid import datasets
+
+datasets.status()                    # what is on disk, and what it occupies
+datasets.plan(["pubchem", "chebi"])  # what a download would transfer
+datasets.fetch("pubchem")            # install one, resumable and verified
+datasets.remove("chembl")            # reclaim the space, by name
+```
+
+`Search("cas").search("50-00-0")` on a clean machine used to fetch about 32 GB
+without asking, because each source client defaults to `auto_download=True`.
+It no longer does: `Search(datasets="present")` is the default and uses
+whatever is installed, `"auto"` restores the old behaviour, and `"required"`
+raises in the constructor naming the exact `fetch` call.
 
 ## Why it exists
 

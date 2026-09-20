@@ -8,9 +8,14 @@ from .http import (
     RateLimitError,
     ServiceTimeoutError,
 )
+from . import datasets
 from .datasets import (
+    DATASETS,
+    Dataset,
     DownloadError,
+    MissingDatasetError,
     download_file,
+    human_bytes,
     md5_of_file,
     read_checksum,
 )

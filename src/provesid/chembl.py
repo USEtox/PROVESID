@@ -19,7 +19,12 @@ Database tables accessed:
 Those eight tables are the whole of what PROVESID reads.  A full ChEMBL release
 is ~30 GB across 74 tables, the rest of which is bioactivity data this package
 never opens, so :meth:`CheMBL.compact` builds an extract holding only the eight
--- about 2.6 GB, with identical results.  See ``CheMBL.compact`` for details.
+-- about 2.4 GiB, with identical results.  See ``CheMBL.compact`` for details.
+
+A first download builds that extract on the way in and keeps only it
+(``CheMBL(source="sqlite")``, the default), so a machine that has never had
+ChEMBL installs 2.4 GiB rather than 27.7 GiB.  ``CheMBL(source="full")`` keeps
+the whole release instead, for anyone who wants the other 66 tables.
 
 For detailed table schema information, see src/provesid/data/schema_documentation.txt
 """
@@ -65,6 +70,12 @@ class CheMBL:
     db_url : str, optional
         Custom URL for database download.  By default the URL is resolved from
         the EBI ``latest/`` directory listing at download time.
+    source : {'sqlite', 'full'}, optional
+        How a database that is not yet on disk is acquired (default:
+        ``'sqlite'``).  ``'sqlite'`` downloads the release archive, builds the
+        PROVESID extract from it and keeps only that -- 2.4 GiB installed.
+        ``'full'`` keeps the whole 27.7 GiB release.  Ignored when a database
+        is already present: neither route touches what is on disk.
 
     Attributes
     ----------
@@ -77,6 +88,8 @@ class CheMBL:
         makes a download unnecessary.
     release : int or None
         ChEMBL release number parsed from the database filename.
+    source : str
+        The acquisition route this instance was constructed with.
     is_compact : bool
         True when the open database is a PROVESID extract built by
         :meth:`compact` rather than a full ChEMBL release.
@@ -104,13 +117,18 @@ class CheMBL:
     compressed and ~30 GB once extracted. Initial setup downloads and extracts it
     from the EMBL-EBI FTP server.
 
-    Most of that is never read.  :meth:`compact` builds a ~2.6 GB extract holding
-    only the eight tables this class queries, answering identically::
+    Most of that is never read.  :meth:`compact` builds a ~2.4 GiB extract holding
+    only the eight tables this class queries, answering identically, and a first
+    download builds it on the way in::
 
-        CheMBL.compact(remove_source=True)   # 30 GB -> 2.6 GB, then reclaim
+        CheMBL()                             # downloads 5.8 GB, installs 2.4 GiB
+        CheMBL(source="full")                # ...or keeps the whole 27.7 GiB
+        CheMBL.compact(remove_source=True)   # shrink a release already on disk
 
-    A later ``CheMBL()`` opens the extract in preference to a full release of the
-    same number.
+    Only the download route is affected: a release already on disk is opened as
+    it is, and shrinking it is :meth:`compact`'s job rather than something a
+    constructor should do to 27.7 GB unasked.  A later ``CheMBL()`` opens the
+    extract in preference to a full release of the same number.
 
     ``latest/`` is a moving directory: it holds only the current release, so the
     archive name changes with every ChEMBL release.  The version is therefore
@@ -127,6 +145,31 @@ class CheMBL:
 
     #: Matches the SQLite archives advertised in the ``latest/`` listing.
     _ARCHIVE_RE = re.compile(r"chembl_(\d+)_sqlite\.tar\.gz")
+
+    # ── Acquisition ───────────────────────────────────────────────────────────
+
+    #: How a missing database is acquired, and what is kept afterwards.
+    #:
+    #: ``sqlite`` downloads the 5.8 GB release archive, extracts the 27.7 GiB
+    #: database, builds the extract from it and deletes the release; ``full``
+    #: stops after the extraction and keeps all 74 tables.  Both transfer the
+    #: same bytes -- the choice is what stays on disk, not what is fetched.
+    #:
+    #: Streaming ChEMBL's 2.1 GB MySQL dump instead, which would halve the
+    #: transfer and never write the 27.7 GiB file at all, is a separate route
+    #: that is not implemented; :data:`_UNIMPLEMENTED_SOURCES` gives it an
+    #: error message that says so rather than "unknown source".
+    SOURCES: Tuple[str, ...] = ("sqlite", "full")
+
+    #: Route names that are planned but do not exist yet, with the reason.
+    _UNIMPLEMENTED_SOURCES: Dict[str, str] = {
+        "mysql": "streaming ChEMBL's MySQL dump (2.1 GB, no 27.7 GiB "
+                 "intermediate) is not implemented yet",
+    }
+
+    #: A full release smaller than this is not worth suggesting :meth:`compact`
+    #: for -- and in the tests, the miniature databases are far below it.
+    _COMPACT_HINT_BYTES = 1024 ** 3
 
     # ── Compaction ────────────────────────────────────────────────────────────
 
@@ -215,6 +258,7 @@ class CheMBL:
         data_dir: Optional[str] = None,
         db_path: Optional[str] = None,
         redownload: bool = False,
+        source: str = "sqlite",
     ):
         """
         Initialize ChEMBL database interface.
@@ -236,16 +280,25 @@ class CheMBL:
             Full path to a database file. Overrides ``db_name``/``data_dir``.
         redownload : bool, optional
             If True, force re-download when ``auto_download`` is enabled.
+        source : {'sqlite', 'full'}, optional
+            What a download leaves on disk (default: ``'sqlite'``).  With
+            ``'sqlite'`` the release is compacted into the PROVESID extract as
+            the last step of the download and the 27.7 GiB original is deleted,
+            so installing ChEMBL costs 2.4 GiB; with ``'full'`` the whole
+            release is kept.  Only consulted when a download actually happens.
 
         Raises
         ------
         FileNotFoundError
             If database not found and auto_download is False
+        ValueError
+            If ``source`` is not one of :data:`SOURCES`.
         ChEMBLError
             If database connection or validation fails
         """
         self.logger = logging.getLogger(__name__)
         self.db_url = db_url
+        self.source = self._validate_source(source)
 
         if db_path is not None:
             self.db_path = os.path.abspath(os.path.expanduser(db_path))
@@ -325,7 +378,67 @@ class CheMBL:
 
         if self.is_compact:
             self._warn_if_extract_is_stale()
-    
+        else:
+            self._suggest_compacting_a_full_release()
+
+    @classmethod
+    def _validate_source(cls, source: str) -> str:
+        """
+        Check an acquisition route name, and say what is wrong with it.
+
+        Parameters
+        ----------
+        source : str
+            The ``source`` argument as given.
+
+        Returns
+        -------
+        str
+            The same value, once it is known to be a route.
+
+        Raises
+        ------
+        ValueError
+            If the name is not in :data:`SOURCES`.  A route that is planned
+            but unwritten (:data:`_UNIMPLEMENTED_SOURCES`) is named as such,
+            because "unknown source: 'mysql'" would read as a typo.
+        """
+        if source in cls.SOURCES:
+            return source
+        options = ", ".join(repr(name) for name in cls.SOURCES)
+        if source in cls._UNIMPLEMENTED_SOURCES:
+            raise ValueError(
+                f"CheMBL(source={source!r}): "
+                f"{cls._UNIMPLEMENTED_SOURCES[source]}. Use one of {options}."
+            )
+        raise ValueError(
+            f"CheMBL(source={source!r}) is not a download route. "
+            f"Use one of {options}."
+        )
+
+    def _suggest_compacting_a_full_release(self) -> None:
+        """
+        Mention :meth:`compact` when a large full release has been opened.
+
+        The constructor will not shrink a database the user already has --
+        deleting 27 GB is asked for, not assumed -- so the only thing left to
+        do about it is to say that the option exists, once, where the user is
+        already looking.  Silent below :data:`_COMPACT_HINT_BYTES`, since
+        there is then nothing worth reclaiming.
+        """
+        try:
+            size = os.path.getsize(self.db_path)
+        except OSError:  # pragma: no cover - the file was just opened
+            return
+        if size < self._COMPACT_HINT_BYTES:
+            return
+        self.logger.info(
+            "This is a full ChEMBL release (%.2f GB). PROVESID reads eight of "
+            "its 74 tables; CheMBL.compact(remove_source=True) rebuilds it as "
+            "~2.4 GiB with identical results.",
+            size / 1e9,
+        )
+
     def __del__(self):
         """Close database connection when object is destroyed"""
         if hasattr(self, 'conn') and self.conn:
@@ -1111,15 +1224,21 @@ class CheMBL:
         Download and extract ChEMBL SQLite database from EMBL-EBI FTP.
         
         Downloads the compressed tar.gz archive (~5.8 GB for release 37), extracts
-        the SQLite database (~30 GB), and validates its integrity by querying the
-        molecule_dictionary table.
+        the SQLite database (~27.7 GiB), and validates its integrity by querying
+        the molecule_dictionary table.
+
+        Unless this instance was constructed with ``source="full"``, the
+        release is then compacted into the PROVESID extract (:meth:`compact`)
+        and the full database is deleted, leaving ~2.4 GiB on disk and moving
+        ``db_path`` onto the extract.  The two together never need more room
+        than the extraction already did: the archive is deleted before the
+        extract is built.
 
         The download is resumable. An interrupted transfer leaves a ``.part``
         file beside the archive and the next call continues from it, which
         matters more here than anywhere else in the package: this is the
         largest single download PROVESID makes, and it used to start again from
-        zero. Consider :meth:`compact` afterwards -- it reduces the extracted
-        30 GB to about 2.6 GB.
+        zero.
         
         Parameters
         ----------
@@ -1133,6 +1252,13 @@ class CheMBL:
         ------
         ChEMBLError
             If download, extraction, or validation fails
+
+        Notes
+        -----
+        A compaction that fails after a successful download does *not* raise:
+        the full release is in place by then and answers every query, so the
+        failure costs disk rather than function.  It is logged as a warning
+        naming :meth:`compact`, and ``db_path`` stays on the full release.
         
         Examples
         --------
@@ -1187,7 +1313,13 @@ class CheMBL:
                 raise ChEMBLError(f"Database validation failed: {str(e)}") from e
 
             os.replace(staged_path, self.db_path)
+            # Before compacting, not after: the extract is built from the
+            # database, so 5.8 GB of archive held on to here would raise the
+            # peak by the size of a download nobody needs any more.
             os.remove(archive_path)
+
+            if self.source == "sqlite":
+                self._compact_after_download()
 
             self.logger.info("ChEMBL database download and setup complete")
 
@@ -1205,6 +1337,52 @@ class CheMBL:
             if isinstance(e, ChEMBLError):
                 raise
             raise ChEMBLError(f"Database setup failed: {str(e)}") from e
+
+    def _compact_after_download(self) -> None:
+        """
+        Turn the freshly downloaded release into the extract, and keep only it.
+
+        This is the whole of ``source="sqlite"``: the archive route has to
+        write the 27.7 GiB database before anything can be read out of it, so
+        the saving is made at the end rather than avoided at the start. The
+        extract is verified against the release before the release is deleted
+        (:meth:`compact`), so the file that survives is the one that was
+        checked.
+
+        ``force=True`` is passed deliberately: a re-download means the caller
+        asked for this release again, and an extract left over from a previous
+        attempt at the same release would otherwise stop it.
+
+        On success ``db_path`` moves onto the extract, which is the file every
+        later query -- and the connection this constructor is about to open --
+        will use.
+
+        Notes
+        -----
+        A failure here is logged, not raised. The release is already in place
+        and usable; what is lost is disk, not data, and the alternative would
+        be to throw away a 5.8 GB download over a step that can be repeated
+        with one call.
+        """
+        full_path = self.db_path
+        extract_path = self.compact_path_for(full_path)
+        try:
+            self.compact(
+                source_path=full_path,
+                dest_path=extract_path,
+                remove_source=True,
+                force=True,
+            )
+        except Exception as exc:
+            self.logger.warning(
+                "ChEMBL downloaded and extracted, but building the PROVESID "
+                "extract from it failed (%s). The full release is in place at "
+                "%s and answers every query; rerun the compaction with "
+                "CheMBL.compact(remove_source=True) to reclaim the space.",
+                exc, full_path,
+            )
+            return
+        self.db_path = extract_path
 
     def _extract_database(self, archive_path: str, dest_path: str) -> None:
         """

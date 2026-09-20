@@ -443,7 +443,7 @@ Steps are independently committable and leave the suite green.
 | 2 | ~~rewrite `search_by_name` as a `UNION`; add `ORDER BY` — 743 ms → 10 µs~~ **done, §12** | 9.5, 9.3 | S |
 | 3 | ~~`datasets.py`: `download_file` with resume + checksum; migrate the 5 download sites~~ **done, §13** | 4.2 | M |
 | 4 | ~~`datasets.status/plan/fetch/remove`; `Search(datasets="present")` as the default~~ **done, §14** | 4.1 | M |
-| 5 | build the ChEMBL extract during download; `source=` on `CheMBL` | 9.7 | M |
+| 5 | ~~build the ChEMBL extract during download; `source=` on `CheMBL`~~ **done, §15** | 9.7 | M |
 | 6 | `close()`, context managers and thread safety on the four SQLite clients | 4.3 | S |
 | 7 | `classyfire.py` raises; rewrite its tests; drop it from the docs' service lists | 4.8 | S |
 | 8 | `cache.py`: persistent dir, parameterised service functions, key version | 4.7 | S |
@@ -1228,7 +1228,8 @@ three helpers that read a database now close explicitly in a `finally`.
 - `keep_inchi=False` is implemented and tested but unmeasured on real data at
   this commit; §9.6's 1.55 GB comes from the prototype.
 - Routes 2 and 3 of §9.7 (build during download, stream the MySQL dump) are not
-  started. `compact()` is deliberately the whole of step 1.
+  started. `compact()` is deliberately the whole of step 1. ~~Route 2~~ —
+  **done, §15**.
 
 ---
 
@@ -1675,3 +1676,161 @@ is not purely a download.
 - Step 5 — building the ChEMBL extract during download, and `source=` on
   `CheMBL` (§9.7) — is next. It is what turns the 31.6 GiB in §14.3 into
   ~6.5 GB for a user who never needed the full release in the first place.
+  **Landed; see §15**, at 6.3 GiB.
+
+---
+
+## 15. Landed on 2026-09-20 — step 5, `CheMBL(source=...)` (§9.7 route 2)
+
+§9.7 asked for "the `sqlite.tar.gz` route, unchanged except that
+`download_database` finishes by building the extract and removing the
+intermediate". That is what landed. Step 1 (§11) could only shrink a release
+that was *already* on disk, which left the worst case untouched: a machine that
+had never had ChEMBL still installed 27.7 GiB and then had to be told to shrink
+it. A first install now costs **2.42 GiB**.
+
+### 15.1 What landed
+
+- `CheMBL(source=...)`, with `SOURCES = ("sqlite", "full")` as a documented
+  class attribute and `"sqlite"` as the default. `"sqlite"` compacts the
+  release as the last step of the download and deletes it; `"full"` is the
+  behaviour of every release until now.
+- `_compact_after_download`, called from `download_database`, and
+  `_validate_source`, called from `__init__` before anything is fetched.
+- `_UNIMPLEMENTED_SOURCES`, so that `source="mysql"` — route 3, step 11 — says
+  it is not implemented rather than reading as a typo.
+- `_suggest_compacting_a_full_release`: one INFO line when a full release over
+  1 GiB is opened, naming `compact`. The constructor does not compact what it
+  finds (§15.4), so saying the option exists is the only thing left to do.
+- `datasets.DATASETS["chembl"]` resized to what an install now leaves, plus
+  `chembl_*.db.tmp` among its `extras`.
+- 15 tests (14 in `tests/test_chembl_compact.py`, 1 in
+  `tests/test_dataset_manager.py`), `examples/chembl/download_source_demo.py`,
+  a `CHANGELOG.md` entry, and the size claims in `search.py`, `datasets.py`,
+  `docs/quickstart.md`, `docs/api/chembl.md` and `examples/chembl/README.md`
+  brought in line.
+
+### 15.2 The archive is deleted before the extract is built, and that is the whole peak question
+
+§9.7 called route 2's transient peak "exactly the laptop problem §4.1 is
+about". The peak is decided by one line's position. Three files can exist
+during an install — the 5.7 GiB archive, the 27.7 GiB release, the 2.42 GiB
+extract — and the order they are removed in decides which two overlap:
+
+| moment | archive | release | extract | total |
+|---|---:|---:|---:|---:|
+| extracting | 5.7 | 27.7 | — | **33.4 GiB** |
+| compacting, archive already gone | — | 27.7 | 2.4 | 30.1 GiB |
+| compacting, archive kept | 5.7 | 27.7 | 2.4 | 35.8 GiB |
+
+So `os.remove(archive_path)` moved to *before* the compaction rather than
+after it, and the result is that **route 2 needs no more free disk than the
+full route always did**: the peak stays the extraction moment, 33.4 GiB, and
+what changes is only what is left at the end. Had the archive been kept until
+the download function returned — the obvious ordering, and the one that reads
+more naturally — the new default would have raised the requirement by 2.4 GiB
+for every user, including those with the disk to spare.
+
+### 15.3 A compaction that fails does not throw away the download
+
+`_compact_after_download` logs a warning and returns; it does not raise. By the
+time it runs, the release is in place and answers every query, so a failure
+costs disk rather than function — and the alternative is discarding a 5.8 GB
+transfer over a step that `CheMBL.compact(remove_source=True)` repeats in one
+call. The warning names that call and the path the release is at, and
+`db_path` stays on the release, so the object the constructor returns is
+usable either way.
+
+Two things make that safe rather than merely convenient. `compact` already
+verifies the extract against its source before deleting anything (§11.2), so
+"the compaction failed" never means "the release was deleted anyway". And it
+builds into `<dest>.tmp` and `os.replace`s, so the `force=True` this path
+passes cannot destroy a good extract from an earlier release of the same
+number when the rebuild fails.
+
+### 15.4 `source` describes a download, not a directory
+
+`CheMBL(source="sqlite")` on a machine that already has `chembl_36.db`
+downloads nothing and compacts nothing. That is deliberate and is pinned by a
+test: deleting 27 GB is something to ask for (`compact(remove_source=True)`),
+not something a constructor should do because a keyword argument has a default.
+The same test forbids any network access, since "already installed" must also
+mean "not re-fetched".
+
+What is left is the hint of §15.1 — and it is silent below 1 GiB, which keeps
+it out of the miniature databases the tests build and, more to the point, stops
+it firing where there is nothing to reclaim.
+
+### 15.5 What the registry had to say
+
+§14.3 measured ChEMBL at 27.7 GiB installed and called its 33.4 GiB peak "the
+peak nobody counts". With the extract as the default, the two swap roles: the
+peak is now more than ten times the installed size, and it is the only number
+that decides whether the install succeeds.
+
+| | before | after |
+|---|---:|---:|
+| ChEMBL download | 5.7 GiB | 5.7 GiB |
+| ChEMBL installed | 27.7 GiB | **2.42 GiB** |
+| ChEMBL peak | 33.4 GiB | 33.4 GiB |
+| four default sources, installed | 31.6 GiB | **6.3 GiB** |
+| four default sources, peak | 37.3 GiB | 37.3 GiB |
+
+`resident_bytes` is the measured size of `chembl_36_provesid.db` on this
+machine (2 599 391 232 bytes), not §9.3's rounded 2.60 GB. A test pins the
+registry's ChEMBL row against `CheMBL.__init__`'s `source` default, because
+these sizes are shown to a user *before* a 5.8 GB transfer: if the default ever
+moves back, the number that made them agree to it would be a lie.
+
+### 15.6 Verification
+
+- `tests/test_chembl_compact.py` grew two fixtures and four classes. The tests
+  do not stub the download path: a miniature release is packaged as a real
+  `chembl_36/chembl_36_sqlite/chembl_36.db` tar.gz, `download_file` is replaced
+  by a copy, and everything after it — extraction, validation, compaction,
+  verification, deletion — runs for real.
+- What is pinned: that the default leaves only the extract and no `.tar.gz`,
+  `.incoming` or `.tmp` behind; that the extract answers and carries its
+  provenance; that `"full"` keeps the release and builds no extract; that both
+  routes request the same archive; that a release already on disk is neither
+  re-fetched nor compacted; that `redownload=True` rebuilds over an existing
+  extract; that a failed compaction keeps the release, keeps it queryable and
+  names `compact` in the warning; that a bad `source` raises before the network
+  is touched; and that `"mysql"` says it is unimplemented.
+- The compaction hint has its own three tests, including that an extract is
+  never told to compact itself.
+
+### 15.7 Validation
+
+- `pytest tests/` — **1150 passed, 34 skipped, 3 failed** (10m33s). The three
+  failures are the live PubChem 503s of §14.9, unchanged and unrelated:
+  `test_error_handling_invalid_cid`, `test_malformed_property_names` and
+  `TestPubChemView::test_error_handling`, each of which asserts on an error
+  message and gets `HTTP 503` from PubChem instead.
+- `mkdocs build --strict` — clean.
+- `examples/chembl/download_source_demo.py` run end to end: it builds a
+  miniature release, serves it over a real HTTP server on localhost, installs
+  it both ways, prints what each route leaves on disk (0.18 MB against
+  3.76 MB, 95.3% smaller), shows the two route errors, and ends with
+  `datasets.plan("chembl")` for the real thing.
+- `datasets.plan()` on this machine now reports 8.9 GiB / 6.3 GiB / 37.3 GiB
+  for the four default sources, against 8.9 / 31.6 / 37.3 before.
+- `Search("cas").search("50-00-0")` against the real datasets still returns
+  formaldehyde, `WSFSSNUMVMOOMR-UHFFFAOYSA-N`, at confidence 0.9. Nothing in
+  this step touches a query path: the changes are the constructor's argument
+  check, the tail of `download_database`, one log line, and sizes in a table.
+
+### 15.8 Still open
+
+- **Route 3 (step 11), `source="mysql"`.** 2.1 GB transferred instead of
+  5.7 GiB and no 27.7 GiB intermediate at all, which is the version of this
+  that a laptop with 20 GB free can actually run. §9.7 wants it verified
+  against route 2 table by table; route 2 is now the thing to verify against.
+- The real 5.8 GB download has still not been run end to end (§13.7, §14.10).
+  Every step of it is exercised, but against a miniature release.
+- `keep_inchi` is not exposed on the constructor. §9.6's 1.55 GB variant is
+  reachable only by compacting by hand afterwards, which is the right default
+  surface for something that degrades `Search` output.
+- The five client defaults (§14.7) are unchanged: `CheMBL()` on a clean machine
+  still downloads without being asked — 2.42 GiB now rather than 27.7 GiB.
+  Step 6.

@@ -532,8 +532,9 @@ class Dataset:
         resident_bytes: Size on disk once installed, measured, including
             anything built on first use.
         peak_bytes: Most disk needed at any one moment during installation.
-            Larger than ``resident_bytes`` only for ChEMBL, whose archive sits
-            beside the database it extracts into.
+            Larger than ``resident_bytes`` only for ChEMBL, which downloads a
+            5.8 GB archive, extracts a 27.7 GiB database beside it and only
+            then compacts that into the 2.4 GiB it keeps.
         source: Where the file comes from, for messages that have to tell a
             user what is about to be fetched.
         note: Anything a user deciding whether to fetch this should know.
@@ -562,7 +563,9 @@ class Dataset:
 #:
 #: Sizes were measured on 2026-09-20 from the copies on a machine that had all
 #: five: ChEBI SDF 879.7 MiB plus a 74.5 MiB index, CompTox 816.6 MiB, PubChem
-#: 2.16 GiB, ChEMBL 36 27.7 GiB from a 5.8 GB archive, ZeroPM 438.7 MiB. They
+#: 2.16 GiB, ChEMBL 36 2.42 GiB as the extract an install now keeps (27.7 GiB
+#: as the full release it is built from, out of a 5.8 GB archive), ZeroPM
+#: 438.7 MiB. They
 #: are advisory --- a later release is a little larger --- and are used to tell
 #: the user what a download will cost before it starts, not to check anything.
 DATASETS: Dict[str, Dataset] = {
@@ -607,13 +610,21 @@ DATASETS: Dict[str, Dataset] = {
         role="enrichment only --- adds ChEMBL IDs to structures already found",
         patterns=("chembl_*.db",),
         extras=("chembl_*_sqlite.tar.gz", "chembl_*_sqlite.tar.gz.part",
-                "chembl_*_sqlite.tar.gz.part.source", "chembl_*.db.incoming"),
+                "chembl_*_sqlite.tar.gz.part.source", "chembl_*.db.incoming",
+                "chembl_*.db.tmp"),
         download_bytes=5800 * _MB,
-        resident_bytes=29739835392,
+        # What is left when the install finishes: the extract, not the release.
+        # ``CheMBL(source="sqlite")`` -- the default -- compacts the 27.7 GiB
+        # database into 2.42 GiB and deletes it, so what this dataset costs to
+        # install and what it costs to keep are an order of magnitude apart,
+        # and ``peak_bytes`` below is the number that decides whether it fits.
+        resident_bytes=2599391232,
         peak_bytes=29739835392 + 5800 * _MB,
         source="EBI FTP (chembl_NN_sqlite.tar.gz)",
-        note="87% of a full install, and it only enriches. CheMBL.compact() "
-             "shrinks it to 2.4 GiB afterwards with identical results",
+        note="installs as a 2.4 GiB extract, but the 5.8 GB archive and the "
+             "27.7 GiB release it is built from both exist on the way in --- "
+             "33.4 GiB has to be free. CheMBL(source='full') keeps the "
+             "release",
     ),
     "zeropm": Dataset(
         name="zeropm",
@@ -1000,8 +1011,9 @@ def plan(names: Optional[Union[str, Iterable[str]]] = None,
 
         ``df.attrs`` carries ``data_dir``, ``total_download_bytes``,
         ``total_resident_bytes`` and ``peak_bytes`` --- the last being the most
-        disk needed at any one moment, which for ChEMBL exceeds the installed
-        size by the 5.8 GB archive it extracts from.
+        disk needed at any one moment, which for ChEMBL is more than ten times
+        the installed size, because the 2.4 GiB extract is built from a
+        27.7 GiB release that is downloaded, unpacked and then deleted.
 
     Raises:
         KeyError: If a name is not in the registry.
@@ -1038,8 +1050,8 @@ def plan(names: Optional[Union[str, Iterable[str]]] = None,
     frame.attrs["total_resident_bytes"] = int(frame["resident_bytes"].sum()) if rows else 0
     # Peak disk is not the sum of the peaks: the datasets are installed one
     # after another, so the worst moment is everything else already on disk
-    # plus the largest transient overhead of a single install -- ChEMBL's 5.8 GB
-    # archive, which is deleted once the database has been extracted from it.
+    # plus the largest transient overhead of a single install -- ChEMBL's, whose
+    # archive and full release are both deleted once the extract is built.
     overhead = (frame["peak_bytes"] - frame["resident_bytes"]).max() if rows else 0
     frame.attrs["peak_bytes"] = int(frame["resident_bytes"].sum() + overhead) if rows else 0
     return frame
@@ -1089,7 +1101,8 @@ def fetch(names: Union[str, Iterable[str]], data_dir: Optional[str] = None,
 
     Args:
         names: Dataset name or names. There is no "all" default: fetching
-            everything is a 32 GB decision and has to be spelled out.
+            everything transfers ~9 GiB and needs ~37 GiB free while ChEMBL is
+            unpacked, which is a decision that has to be spelled out.
         data_dir: Directory to install into; None for the per-user default.
         force: Re-download datasets that are already installed. For ChEMBL this
             fetches the current release, which may be a newer one.

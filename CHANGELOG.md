@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Installing ChEMBL now costs 2.4 GiB, not 27.7 GiB: `CheMBL(source=...)`.**
+  `CheMBL.compact()` could already shrink a release *already on disk*, which
+  left the worst case untouched — a machine that had never had ChEMBL still
+  installed 27.7 GiB and had to be told to shrink it afterwards.
+
+  The download now finishes by building the extract and deleting the release
+  it came from:
+
+  ```python
+  CheMBL()                  # 5.8 GB transferred, 2.4 GiB installed (default)
+  CheMBL(source="full")     # ...or keep all 74 tables, 27.7 GiB
+  ```
+
+  Both routes transfer the same archive: the choice is what stays on disk. The
+  extract is verified against the release — `quick_check`, a row count per
+  table, and 500 compounds compared column by column — *before* the release is
+  deleted, so the file that survives is the one that was checked.
+
+  `source` only describes a download. A release already on disk is opened as
+  it is: shrinking 27 GB is `compact()`'s job, not something a constructor
+  should do unasked. Opening a full release now logs the one line that says
+  the option exists.
+
+  A compaction that fails after a successful download is logged, not raised.
+  The release is in place by then and answers every query, so the failure
+  costs disk rather than function, and throwing away a 5.8 GB download over a
+  step that can be repeated with one call would be the worse trade.
+  `CheMBL(source="mysql")` — streaming ChEMBL's 2.1 GB MySQL dump, which would
+  halve the transfer and never write the 27.7 GiB file at all — raises a
+  `ValueError` saying it is not implemented rather than one that reads like a
+  typo.
+
+- **`datasets.plan()` now tells the truth about ChEMBL.** Its registry entry
+  said 27.7 GiB installed; it is 2.4 GiB, from a 5.8 GB download, with a peak
+  of 33.4 GiB while the archive and the full release both exist. That peak is
+  the number a laptop actually fails on, and it is now the one that is
+  reported: for the four default sources, 8.9 GiB downloaded, **6.3 GiB
+  installed** (down from 31.6 GiB), 37.3 GiB needed at the worst moment.
+
 - **A dataset manager, and `Search` no longer downloads 32 GB behind your
   back.** On a clean machine `Search("cas").search("50-00-0")` constructed
   four source clients that each default to `auto_download=True`, so one CAS

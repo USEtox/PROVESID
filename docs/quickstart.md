@@ -130,9 +130,11 @@ for cls in (CheMBL, ZeroPM):
 
 ## 8. Which datasets are installed, and what they cost
 
-The offline sources read five bulk datasets, together about 32 GB (about
-6.5 GB once `CheMBL.compact()` has run). None of them is downloaded on your
-behalf: `Search` uses whatever is on disk and reports the rest.
+The offline sources read five bulk datasets, together about 6.7 GiB installed
+— ChEMBL is compacted to the eight tables PROVESID reads as the last step of
+its download, so it costs 2.4 GiB rather than 27.7 GiB. None of them is
+downloaded on your behalf: `Search` uses whatever is on disk and reports the
+rest.
 
 ```{code-cell} ipython3
 from provesid import datasets
@@ -149,6 +151,8 @@ print("in", status.attrs["data_dir"])
 todo = datasets.plan(["pubchem", "chebi"])
 print(todo[["dataset", "action", "download", "installed"]].to_string(index=False))
 print("transfer:", datasets.human_bytes(todo.attrs["total_download_bytes"]))
+# attrs["peak_bytes"] is the free disk needed at the worst moment, which for
+# ChEMBL is far more than it installs: 33.4 GiB to leave 2.4 GiB behind.
 
 # datasets.fetch(["pubchem", "chebi"])   # resumable, verified, skips what is present
 # datasets.remove("chembl")              # reclaim the space, by name

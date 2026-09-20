@@ -15,6 +15,7 @@ whatever the developer happens to have installed.  The files it creates are
 empty or near-empty --- the manager reads names and sizes, never contents.
 """
 
+import inspect
 import os
 
 import pytest
@@ -56,15 +57,34 @@ class TestRegistry:
             assert dataset.peak_bytes >= dataset.resident_bytes
 
     def test_chembl_peak_exceeds_what_it_installs(self):
-        """ChEMBL's archive sits beside the database it extracts into.
+        """ChEMBL is built out of files far larger than the one it leaves.
 
-        A laptop with 28 GB free and 27.7 GB of ChEMBL to install still fails,
-        which is exactly the surprise the manager exists to prevent.
+        The archive and the full release both exist before the extract is
+        built, so a laptop with 28 GB free still cannot install a dataset that
+        ends up costing 2.4 GiB --- exactly the surprise the manager exists to
+        prevent.
         """
         chembl = DATASETS["chembl"]
-        assert chembl.peak_bytes > chembl.resident_bytes
+        assert chembl.peak_bytes > 10 * chembl.resident_bytes
         assert all(DATASETS[name].peak_bytes == DATASETS[name].resident_bytes
                    for name in ("pubchem", "comptox", "zeropm"))
+
+    def test_chembl_is_sized_as_the_extract_the_default_route_installs(self):
+        """The registry must describe the route ``fetch`` actually takes.
+
+        ``fetch`` constructs ``CheMBL`` with its default ``source``, which
+        compacts the release and deletes it, so what lands on disk is the
+        ~2.4 GiB extract and not the 27.7 GiB download it was built from. If
+        that default ever moves, these sizes become a lie told before a 5.8 GB
+        transfer.
+        """
+        from provesid import CheMBL
+
+        assert inspect.signature(CheMBL.__init__).parameters["source"].default \
+            == "sqlite"
+        chembl = DATASETS["chembl"]
+        assert chembl.resident_bytes < chembl.download_bytes
+        assert 2 * 1024 ** 3 < chembl.resident_bytes < 4 * 1024 ** 3
 
     def test_unknown_name_is_rejected_with_the_known_ones(self):
         with pytest.raises(KeyError, match="pubchem"):

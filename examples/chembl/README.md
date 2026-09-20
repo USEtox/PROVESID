@@ -9,7 +9,9 @@ ChEMBL is a manually curated database of bioactive molecules with drug-like prop
 ## Files
 
 - `chembl_tutorial.md` - Comprehensive tutorial covering all ChEMBL functionality
-- `compact_demo.py` - Shrink a ChEMBL release from ~30 GB to ~2.6 GB
+- `compact_demo.py` - Shrink a ChEMBL release already on disk, ~27.7 GiB to ~2.4 GiB
+- `download_source_demo.py` - `CheMBL(source=...)`: install as the 2.4 GiB
+  extract, or keep the full release
 - `name_search_demo.py` - Name and synonym lookup, exact and substring
 - `demo_implementation.py` - Minimal end-to-end usage
 
@@ -18,7 +20,8 @@ ChEMBL is a manually curated database of bioactive molecules with drug-like prop
 ```python
 from provesid import CheMBL
 
-# Initialize (auto-downloads database if needed)
+# Initialize (auto-downloads if needed: 5.8 GB transferred, 2.4 GiB installed,
+# because the release is compacted to the eight tables PROVESID reads).
 chembl = CheMBL()
 
 # Search for aspirin by ChEMBL ID
@@ -35,9 +38,13 @@ print(f"LogP: {props['alogp']}")
 ## Database Information
 
 - **Database**: current ChEMBL release SQLite, resolved from `latest/` (v37 as of 2026-08)
-- **Size**: ~30 GB uncompressed, ~5.8 GB compressed (release 37; grows each release).
-  `CheMBL.compact()` reduces an installed release to ~2.6 GB — see
-  `compact_demo.py`.
+- **Size**: ~5.8 GB compressed, ~27.7 GiB uncompressed (release 37; grows each
+  release). A download keeps only the ~2.4 GiB PROVESID extract unless you ask
+  for `CheMBL(source="full")` — see `download_source_demo.py`. `CheMBL.compact()`
+  does the same to a release already on disk — see `compact_demo.py`.
+- **Free disk needed to install**: ~33.4 GiB. The archive and the full release
+  both exist on the way in, even though only 2.4 GiB is left behind;
+  `provesid.datasets.plan("chembl")` reports it as `peak_bytes`.
 - **Source**: https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/
 - **Auto-download**: Yes (on first use)
 

@@ -5,9 +5,9 @@ offline databases (ChEBI, CompTox, PubChemID, ChEMBL) with structure-aware
 matching, confidence scoring, fuzzy name search, Tanimoto similarity search,
 InChIKey-skeleton matching, and salt/solvent stripping.
 
-The datasets these sources read are large --- ~32 GB together, or ~6.5 GB once
-``CheMBL.compact()`` has run --- and none of them is downloaded on the caller's
-behalf.  :class:`Search` queries whatever is installed and reports what is
+The datasets these sources read are large --- ~8.9 GiB to download and ~6.3 GiB
+installed, ChEMBL being compacted from 27.7 GiB to 2.4 GiB as it arrives --- and
+none of them is downloaded on the caller's behalf.  :class:`Search` queries whatever is installed and reports what is
 missing; :mod:`provesid.datasets` installs them by name.  Pass
 ``datasets="auto"`` to download what is missing, or ``datasets="required"`` to
 refuse to run on a partial set.
@@ -390,8 +390,8 @@ class Search:
       requires a Java runtime.
     - **Traceability**: ``source_details`` field records which sources were
       queried, whether they matched, and which output fields they contributed.
-    - **No surprise downloads**: the offline datasets total ~32 GB, and none of
-      them is fetched on your behalf.  ``Search`` uses what is installed and
+    - **No surprise downloads**: the offline datasets are ~8.9 GiB to fetch and
+      ~6.3 GiB installed, and none of them is fetched on your behalf.  ``Search`` uses what is installed and
       reports the rest (``datasets="present"``, the default); install them
       deliberately with :func:`provesid.datasets.fetch`.
 
@@ -586,9 +586,11 @@ class Search:
                     default.**  Nothing is downloaded.
                 ``"auto"``
                     Download whatever is missing, which on a clean machine is
-                    ~32 GB (~6.5 GB once ``CheMBL.compact()`` has run) for the
-                    four default sources.  This was the behaviour before the
-                    dataset manager landed, and it happened without asking.
+                    ~8.9 GiB transferred and ~6.3 GiB installed for the four
+                    default sources --- but up to ~37 GiB of free disk at the
+                    worst moment, while ChEMBL's release is unpacked and
+                    compacted.  This was the behaviour before the dataset
+                    manager landed, and it happened without asking.
                 ``"required"``
                     Raise :class:`~provesid.datasets.MissingDatasetError` in
                     the constructor, naming every missing dataset and the

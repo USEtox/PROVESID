@@ -7,6 +7,7 @@
       heading_level: 2
       members:
         - __init__
+        - compact
         - download_database
         - search_by_chembl_id
         - search_by_name
@@ -31,10 +32,15 @@ The ChEMBL module provides access to the ChEMBL SQLite database, a manually cura
 ## Database Information
 
 - **Database**: current ChEMBL release, resolved from `latest/` (v37 as of 2026-08)
-- **Format**: SQLite (~30 GB uncompressed for release 37)
+- **Format**: SQLite (~27.7 GiB uncompressed for release 37)
 - **Source**: [EMBL-EBI FTP](https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/)
 - **Auto-download**: Yes (on first use)
 - **Compressed size**: ~5.8 GB (release 37)
+- **Installed size**: ~2.4 GiB. `CheMBL(source="sqlite")`, the default, compacts
+  the release into the eight tables PROVESID reads and deletes the rest;
+  `CheMBL(source="full")` keeps all 74 tables at ~27.7 GiB.
+- **Free disk needed**: ~33.4 GiB during installation, whichever route you take —
+  the archive and the full release both exist before either is removed.
 
 ## Key Features
 

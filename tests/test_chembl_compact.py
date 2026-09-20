@@ -14,8 +14,13 @@ when no full database is present.
 """
 
 import glob
+import inspect
+import logging
 import os
+import shutil
 import sqlite3
+import tarfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -370,6 +375,201 @@ class TestOpeningAnExtract:
         assert compound is not None
         assert "molfile" not in compound
         assert compound["canonical_smiles"] is not None
+
+
+# ── Acquisition: source= ──────────────────────────────────────────────────────
+
+def _make_archive(tmp_path, release=36, compounds=25):
+    """Package a miniature release the way EBI does, nested two deep.
+
+    ChEMBL's archive holds ``chembl_NN/chembl_NN_sqlite/chembl_NN.db``, and the
+    depth has changed between releases, so the extraction walks the tree rather
+    than assuming a layout. The tests use the real shape.
+    """
+    staging = tmp_path / "staging" / f"chembl_{release}" / f"chembl_{release}_sqlite"
+    staging.mkdir(parents=True)
+    _make_full_chembl(staging / f"chembl_{release}.db", n_compounds=compounds)
+
+    archive = tmp_path / f"chembl_{release}_sqlite.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(staging / f"chembl_{release}.db",
+                arcname=f"chembl_{release}/chembl_{release}_sqlite/"
+                        f"chembl_{release}.db")
+    return str(archive)
+
+
+@pytest.fixture
+def served_release(tmp_path, monkeypatch):
+    """Stand in for the 5.8 GB transfer with a local copy of a tiny archive.
+
+    Returns the URL the fake download answers to; ``download_file`` is replaced
+    for the duration, so nothing reaches the network and the rest of the
+    download path --- extraction, validation, compaction, cleanup --- runs for
+    real.
+    """
+    archive = _make_archive(tmp_path)
+    url = "http://example.invalid/chembl_36_sqlite.tar.gz"
+    calls = []
+
+    def fake_download_file(requested_url, dest, **kwargs):
+        calls.append((requested_url, dest))
+        shutil.copyfile(archive, dest)
+        return dest
+
+    monkeypatch.setattr("provesid.chembl.download_file", fake_download_file)
+    return SimpleNamespace(url=url, calls=calls)
+
+
+def _install(tmp_path, served_release, **kwargs):
+    """Construct a CheMBL that downloads the miniature release."""
+    return CheMBL(data_dir=str(tmp_path / "data"), db_url=served_release.url,
+                  **kwargs)
+
+
+class TestSourceValidation:
+    """``source`` is checked before anything is fetched."""
+
+    def test_default_is_the_compacting_route(self):
+        assert inspect.signature(CheMBL.__init__).parameters["source"].default == "sqlite"
+
+    def test_an_unknown_route_is_refused(self, tmp_path):
+        with pytest.raises(ValueError) as exc_info:
+            CheMBL(data_dir=str(tmp_path), source="ftp")
+        assert "'sqlite'" in str(exc_info.value)
+
+    def test_the_mysql_route_says_it_is_not_implemented(self, tmp_path):
+        """'mysql' is a planned route, so it must not read as a typo."""
+        with pytest.raises(ValueError) as exc_info:
+            CheMBL(data_dir=str(tmp_path), source="mysql")
+        assert "not implemented" in str(exc_info.value)
+
+    def test_the_check_happens_before_any_download(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "provesid.chembl.download_file",
+            lambda *a, **k: pytest.fail("a bad source must not reach the network"),
+        )
+        with pytest.raises(ValueError):
+            CheMBL(data_dir=str(tmp_path), source="nonsense")
+
+
+class TestDownloadBuildsTheExtract:
+    """``source="sqlite"``: what a first install leaves on disk."""
+
+    def test_only_the_extract_survives(self, tmp_path, served_release):
+        chembl = _install(tmp_path, served_release)
+        directory = tmp_path / "data"
+
+        assert chembl.db_path == str(directory / "chembl_36_provesid.db")
+        assert chembl.is_compact
+        assert chembl.release == 36
+        assert not os.path.exists(directory / "chembl_36.db"), \
+            "the full release must be deleted once the extract verifies"
+        assert glob.glob(str(directory / "*.tar.gz")) == []
+        assert glob.glob(str(directory / "*.incoming")) == []
+        assert glob.glob(str(directory / "*.tmp")) == []
+
+    def test_the_extract_answers_and_knows_where_it_came_from(self, tmp_path,
+                                                              served_release):
+        chembl = _install(tmp_path, served_release)
+
+        assert chembl.search_by_chembl_id("CHEMBL7")["pref_name"] == "COMPOUND 7"
+        assert chembl.provenance["release"] == "36"
+        assert chembl.provenance["source_database"] == "chembl_36.db"
+
+    def test_full_keeps_the_release_and_builds_no_extract(self, tmp_path,
+                                                          served_release):
+        chembl = _install(tmp_path, served_release, source="full")
+        directory = tmp_path / "data"
+
+        assert chembl.db_path == str(directory / "chembl_36.db")
+        assert not chembl.is_compact
+        assert not os.path.exists(directory / "chembl_36_provesid.db")
+        assert glob.glob(str(directory / "*.tar.gz")) == []
+
+    def test_both_routes_transfer_the_same_archive(self, tmp_path, served_release):
+        """The choice is what is kept, not what is fetched."""
+        _install(tmp_path, served_release, source="full")
+        assert served_release.calls[0][0] == served_release.url
+        assert served_release.calls[0][1].endswith("chembl_36.db.tar.gz")
+
+    def test_a_database_already_on_disk_is_left_alone(self, tmp_path, monkeypatch):
+        """``source`` describes a download; it must not compact what is here."""
+        directory = tmp_path / "data"
+        directory.mkdir()
+        _make_full_chembl(directory / "chembl_36.db")
+        monkeypatch.setattr(
+            "provesid.chembl.download_file",
+            lambda *a, **k: pytest.fail("an installed release must not be refetched"),
+        )
+
+        chembl = CheMBL(data_dir=str(directory), source="sqlite")
+
+        assert chembl.db_path == str(directory / "chembl_36.db")
+        assert not chembl.is_compact
+        assert not os.path.exists(directory / "chembl_36_provesid.db")
+
+    def test_redownload_rebuilds_over_an_existing_extract(self, tmp_path,
+                                                          served_release):
+        """An extract from a previous attempt must not block the next one."""
+        chembl = _install(tmp_path, served_release)
+
+        again = _install(tmp_path, served_release, redownload=True)
+
+        assert again.db_path == chembl.db_path
+        assert again.is_compact
+        assert len(served_release.calls) == 2, "the archive was fetched again"
+        # The whole route ran a second time, deletion included.
+        assert not os.path.exists(tmp_path / "data" / "chembl_36.db")
+
+    def test_a_failed_compaction_keeps_the_release_and_says_so(
+        self, tmp_path, served_release, monkeypatch, caplog
+    ):
+        """A download is worth too much to throw away over the step after it."""
+        def explode(*args, **kwargs):
+            raise ChEMBLError("no space left on device")
+
+        monkeypatch.setattr(CheMBL, "compact", staticmethod(explode))
+
+        with caplog.at_level(logging.WARNING, logger="provesid.chembl"):
+            chembl = _install(tmp_path, served_release)
+
+        directory = tmp_path / "data"
+        assert chembl.db_path == str(directory / "chembl_36.db")
+        assert os.path.exists(chembl.db_path)
+        assert chembl.search_by_chembl_id("CHEMBL3") is not None
+        assert "CheMBL.compact(remove_source=True)" in caplog.text
+        assert "no space left on device" in caplog.text
+
+
+class TestCompactionHint:
+    """Opening a large full release mentions the option, once."""
+
+    def test_a_big_full_release_suggests_compacting(self, tmp_path, monkeypatch, caplog):
+        _make_full_chembl(tmp_path / "chembl_36.db")
+        monkeypatch.setattr(CheMBL, "_COMPACT_HINT_BYTES", 0)
+
+        with caplog.at_level(logging.INFO, logger="provesid.chembl"):
+            CheMBL(data_dir=str(tmp_path), auto_download=False)
+
+        assert "CheMBL.compact(remove_source=True)" in caplog.text
+
+    def test_a_small_database_says_nothing(self, tmp_path, caplog):
+        """Below the threshold there is nothing to reclaim, so no advice."""
+        _make_full_chembl(tmp_path / "chembl_36.db")
+
+        with caplog.at_level(logging.INFO, logger="provesid.chembl"):
+            CheMBL(data_dir=str(tmp_path), auto_download=False)
+
+        assert "CheMBL.compact" not in caplog.text
+
+    def test_an_extract_is_never_told_to_compact(self, tmp_path, caplog):
+        CheMBL.compact(_make_full_chembl(tmp_path / "chembl_36.db"))
+        os.remove(tmp_path / "chembl_36.db")
+
+        with caplog.at_level(logging.INFO, logger="provesid.chembl"):
+            CheMBL(data_dir=str(tmp_path), auto_download=False)
+
+        assert "CheMBL.compact" not in caplog.text
 
 
 # ── Against a real release ────────────────────────────────────────────────────

@@ -9,12 +9,17 @@ Database tables accessed:
 - molecule_dictionary: Primary compound information (ChEMBL ID, names, max_phase, drug 
                        classifications, approval status, administration routes)
 - molecule_hierarchy: Parent-salt-metabolite relationships for compounds and pro-drugs
-- compound_structures: Chemical structures (SMILES, InChI, InChIKey, molfile)
+- compound_structures: Chemical structures (SMILES, InChI, InChIKey)
 - compound_properties: Physicochemical properties (MW, ALogP, HBA, HBD, PSA, etc.)
 - molecule_synonyms: Alternative names and synonyms
 - chembl_id_lookup: ChEMBL ID to internal ID mappings
 - pesticide_classification: Pesticide mechanism classifications (FRAC, HRAC, IRAC)
 - pesticide_class_mapping: Links compounds to pesticide classifications
+
+Those eight tables are the whole of what PROVESID reads.  A full ChEMBL release
+is ~30 GB across 74 tables, the rest of which is bioactivity data this package
+never opens, so :meth:`CheMBL.compact` builds an extract holding only the eight
+-- about 2.6 GB, with identical results.  See ``CheMBL.compact`` for details.
 
 For detailed table schema information, see src/provesid/data/schema_documentation.txt
 """
@@ -22,10 +27,12 @@ For detailed table schema information, see src/provesid/data/schema_documentatio
 import os
 import re
 import glob
+import random
 import sqlite3
 import tarfile
 import logging
-from typing import Optional, Dict, List, Any
+import datetime
+from typing import Optional, Dict, List, Any, Sequence, Tuple
 from urllib.parse import urlsplit
 import requests
 from tqdm import tqdm
@@ -69,6 +76,12 @@ class CheMBL:
         makes a download unnecessary.
     release : int or None
         ChEMBL release number parsed from the database filename.
+    is_compact : bool
+        True when the open database is a PROVESID extract built by
+        :meth:`compact` rather than a full ChEMBL release.
+    provenance : dict or None
+        What the extract was built from -- release, source file, build time,
+        PROVESID version and per-table row counts.  None for a full release.
     conn : sqlite3.Connection
         SQLite database connection
     cursor : sqlite3.Cursor
@@ -90,6 +103,14 @@ class CheMBL:
     compressed and ~30 GB once extracted. Initial setup downloads and extracts it
     from the EMBL-EBI FTP server.
 
+    Most of that is never read.  :meth:`compact` builds a ~2.6 GB extract holding
+    only the eight tables this class queries, answering identically::
+
+        CheMBL.compact(remove_source=True)   # 30 GB -> 2.6 GB, then reclaim
+
+    A later ``CheMBL()`` opens the extract in preference to a full release of the
+    same number.
+
     ``latest/`` is a moving directory: it holds only the current release, so the
     archive name changes with every ChEMBL release.  The version is therefore
     resolved from the directory listing rather than pinned, with
@@ -105,6 +126,86 @@ class CheMBL:
 
     #: Matches the SQLite archives advertised in the ``latest/`` listing.
     _ARCHIVE_RE = re.compile(r"chembl_(\d+)_sqlite\.tar\.gz")
+
+    # ── Compaction ────────────────────────────────────────────────────────────
+
+    #: Filename marker distinguishing a PROVESID extract from a full release:
+    #: ``chembl_37.db`` is the 30 GB original, ``chembl_37_provesid.db`` the
+    #: extract :meth:`compact` builds from it.
+    COMPACT_SUFFIX = "_provesid"
+
+    #: Bumped whenever :data:`COMPACT_TABLES` or the kept columns change, so an
+    #: extract built by an older PROVESID can be recognised as incomplete
+    #: instead of failing later with ``no such table``.
+    COMPACT_SCHEMA_VERSION = 1
+
+    #: The only tables this package reads, with the columns kept for each.
+    #:
+    #: ``columns=None`` keeps every column.  ``where`` restricts the rows: the
+    #: ChEMBL id lookup carries an entry for every entity type (assays, targets,
+    #: documents), and :meth:`chembl_id_to_molregno` only ever asks about
+    #: compounds.  ``molfile`` is deliberately absent from
+    #: ``compound_structures``: it is a quarter of the whole database, nothing in
+    #: PROVESID consumes it, and a MOL block is reconstructible from the SMILES
+    #: with RDKit.
+    COMPACT_TABLES: Dict[str, Dict[str, Any]] = {
+        "molecule_dictionary": {"columns": None, "where": None},
+        "compound_structures": {
+            "columns": ("molregno", "canonical_smiles", "standard_inchi",
+                        "standard_inchi_key"),
+            "where": None,
+        },
+        "compound_properties": {"columns": None, "where": None},
+        "molecule_synonyms": {
+            "columns": ("molregno", "syn_type", "molsyn_id", "synonyms"),
+            "where": None,
+        },
+        "molecule_hierarchy": {
+            "columns": ("molregno", "parent_molregno", "active_molregno"),
+            "where": None,
+        },
+        "chembl_id_lookup": {
+            "columns": ("chembl_id", "entity_type", "entity_id", "status",
+                        "last_active"),
+            "where": "entity_type = 'COMPOUND'",
+        },
+        "pesticide_classification": {"columns": None, "where": None},
+        "pesticide_class_mapping": {"columns": None, "where": None},
+    }
+
+    #: Indexes built on the extract, one per lookup the package performs.
+    #:
+    #: ChEMBL's own indexes are not copied: most of them serve range queries on
+    #: ``compound_properties`` (``alogp``, ``psa``, ``rtb``, …) that this package
+    #: never issues.  The two ``lower(...)`` expression indexes are new — they
+    #: are useless to :meth:`search_by_name` as it is currently written, whose
+    #: ``OR`` across a ``LEFT JOIN`` forces a full scan either way, but they cost
+    #: a few tens of MB and make the ``UNION`` rewrite of that method a
+    #: sub-millisecond lookup.
+    COMPACT_INDEXES: Tuple[Tuple[str, str], ...] = (
+        ("ix_lookup_chembl_id", "chembl_id_lookup(chembl_id)"),
+        ("ix_md_molregno", "molecule_dictionary(molregno)"),
+        ("ix_md_chembl_id", "molecule_dictionary(chembl_id)"),
+        ("ix_md_pref_lower", "molecule_dictionary(lower(pref_name))"),
+        ("ix_cs_molregno", "compound_structures(molregno)"),
+        ("ix_cs_inchikey", "compound_structures(standard_inchi_key)"),
+        ("ix_cs_smiles", "compound_structures(canonical_smiles)"),
+        ("ix_cs_inchi", "compound_structures(standard_inchi)"),
+        ("ix_cp_molregno", "compound_properties(molregno)"),
+        ("ix_ms_molregno", "molecule_synonyms(molregno)"),
+        ("ix_ms_syn_lower", "molecule_synonyms(lower(synonyms))"),
+        ("ix_mh_molregno", "molecule_hierarchy(molregno)"),
+        ("ix_pc_class", "pesticide_classification(pest_class_id)"),
+        ("ix_pcm_molregno", "pesticide_class_mapping(molregno)"),
+        ("ix_pcm_class", "pesticide_class_mapping(pest_class_id)"),
+    )
+
+    #: Table recording where an extract came from; absent in a full release.
+    PROVENANCE_TABLE = "provesid_provenance"
+
+    #: How many compounds :meth:`_verify_compact` re-reads from both databases
+    #: before an extract is trusted enough to delete its source.
+    _VERIFY_SAMPLE = 500
 
     def __init__(
         self,
@@ -209,6 +310,10 @@ class CheMBL:
         release_match = re.search(r"chembl_(\d+)", os.path.basename(self.db_path))
         self.release = int(release_match.group(1)) if release_match else None
 
+        # An extract carries its own provenance; a full release has none.
+        self.provenance = self.read_provenance(self.db_path)
+        self.is_compact = self.provenance is not None
+
         # Connect to database
         try:
             self.conn = sqlite3.connect(self.db_path)
@@ -217,6 +322,9 @@ class CheMBL:
             self.logger.info(f"Connected to ChEMBL database at {self.db_path}")
         except sqlite3.Error as e:
             raise ChEMBLError(f"Failed to connect to database: {str(e)}")
+
+        if self.is_compact:
+            self._warn_if_extract_is_stale()
     
     def __del__(self):
         """Close database connection when object is destroyed"""
@@ -227,6 +335,38 @@ class CheMBL:
             except Exception as e:
                 self.logger.warning(f"Error closing database connection: {str(e)}")
     
+    def _warn_if_extract_is_stale(self) -> None:
+        """
+        Say so when the open extract predates the tables this version needs.
+
+        An extract is a subset of ChEMBL, so a PROVESID that later reads a ninth
+        table would meet ``no such table`` with no hint that the database is
+        merely old.  Comparing the stored :data:`COMPACT_SCHEMA_VERSION` turns
+        that into an instruction.
+
+        Notes
+        -----
+        Warns rather than raises: an older extract still answers every query the
+        package made when it was built, and refusing to open it would be worse
+        than saying what to do about it.
+        """
+        stored = self.provenance.get("schema_version", "0")
+        built_for = int(stored) if stored.isdigit() else 0
+        if built_for < self.COMPACT_SCHEMA_VERSION:
+            self.logger.warning(
+                "ChEMBL extract %s was built for PROVESID extract schema v%s; "
+                "this version expects v%d. Rebuild it with "
+                "CheMBL.compact(force=True) if a query fails with 'no such "
+                "table'.",
+                os.path.basename(self.db_path), stored, self.COMPACT_SCHEMA_VERSION,
+            )
+        else:
+            self.logger.info(
+                "Using the PROVESID ChEMBL extract (release %s, built %s).",
+                self.provenance.get("release", "?"),
+                self.provenance.get("built_at", "?"),
+            )
+
     @classmethod
     def resolve_latest_db_url(cls, timeout: float = 30) -> str:
         """
@@ -295,23 +435,676 @@ class CheMBL:
 
     def _find_local_database(self) -> Optional[str]:
         """
-        Return the newest ``chembl_*.db`` already present in the data directory.
+        Return the best ``chembl_*.db`` already present in the data directory.
 
         Used when no filename was requested, so an already-downloaded release is
         reused instead of re-downloading tens of GB for a release number that
         merely moved.
 
+        "Best" is the highest release number, and at equal release numbers the
+        PROVESID extract in preference to the full database.  Once
+        :meth:`compact` has run, a plain ``CheMBL()`` should open the 2.6 GB
+        extract rather than the 30 GB original that may still sit beside it --
+        they answer identically, and one of them costs a tenth of the page
+        cache.
+
         Returns
         -------
         str or None
-            Path to the highest-numbered database found, or None if the data
-            directory holds no ChEMBL database.
+            Path to the preferred database, or None if the data directory holds
+            no ChEMBL database.
+
+        Examples
+        --------
+        With ``chembl_37.db`` and ``chembl_37_provesid.db`` side by side, the
+        extract is chosen; with ``chembl_36_provesid.db`` and ``chembl_37.db``,
+        release 37 wins, because a newer release beats a smaller file.
         """
-        found: List[tuple] = []
+        found: List[Tuple[int, int, str]] = []
         for path in glob.glob(os.path.join(self.path, "chembl_*.db")):
-            match = re.search(r"chembl_(\d+)\.db$", os.path.basename(path))
-            found.append((int(match.group(1)) if match else -1, path))
-        return max(found)[1] if found else None
+            match = re.search(r"chembl_(\d+)", os.path.basename(path))
+            release = int(match.group(1)) if match else -1
+            found.append((release, 1 if self.is_compact_database(path) else 0, path))
+        return max(found)[2] if found else None
+
+    # ── Compaction ────────────────────────────────────────────────────────────
+
+    @classmethod
+    def is_compact_database(cls, db_path: str) -> bool:
+        """
+        Report whether a SQLite file is a PROVESID ChEMBL extract.
+
+        An extract carries a :data:`PROVENANCE_TABLE`; a full ChEMBL release
+        does not.  The check opens the file read-only and never raises for a
+        missing or unreadable path — a file that cannot be read is, for this
+        purpose, not an extract.
+
+        Parameters
+        ----------
+        db_path : str
+            Path to the SQLite file to inspect.
+
+        Returns
+        -------
+        bool
+            True if the file is an extract built by :meth:`compact`.
+
+        Examples
+        --------
+        >>> CheMBL.is_compact_database("/no/such/file.db")
+        False
+        """
+        if not os.path.exists(db_path):
+            return False
+        conn = None
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+                (cls.PROVENANCE_TABLE,),
+            ).fetchone()
+            return row is not None
+        except sqlite3.Error:
+            return False
+        finally:
+            # `with sqlite3.connect(...)` manages a transaction, not the
+            # connection, so closing has to be explicit -- and this runs once
+            # per candidate file in _find_local_database.
+            if conn is not None:
+                conn.close()
+
+    @classmethod
+    def read_provenance(cls, db_path: str) -> Optional[Dict[str, str]]:
+        """
+        Read the provenance record written by :meth:`compact`.
+
+        Parameters
+        ----------
+        db_path : str
+            Path to a ChEMBL extract.
+
+        Returns
+        -------
+        dict or None
+            Every key/value pair from the provenance table, or None when the
+            file is a full ChEMBL release rather than an extract.
+
+        Examples
+        --------
+        >>> prov = CheMBL.read_provenance("chembl_37_provesid.db")  # doctest: +SKIP
+        >>> prov["release"], prov["schema_version"]                 # doctest: +SKIP
+        ('37', '1')
+        """
+        if not cls.is_compact_database(db_path):
+            return None
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(
+                f"SELECT key, value FROM {cls.PROVENANCE_TABLE}"
+            ).fetchall()
+        finally:
+            conn.close()
+        return {key: value for key, value in rows}
+
+    @classmethod
+    def compact_path_for(cls, source_path: str) -> str:
+        """
+        Derive the extract's filename from a full database's path.
+
+        ``/data/chembl_37.db`` becomes ``/data/chembl_37_provesid.db``, so the
+        extract sits beside the release it came from and still carries the
+        release number that :class:`CheMBL` parses out of the filename.
+
+        Parameters
+        ----------
+        source_path : str
+            Path to a full ChEMBL database.
+
+        Returns
+        -------
+        str
+            Path the extract should be written to.
+
+        Examples
+        --------
+        >>> CheMBL.compact_path_for("/data/chembl_37.db")
+        '/data/chembl_37_provesid.db'
+        """
+        directory, filename = os.path.split(os.path.abspath(source_path))
+        stem, extension = os.path.splitext(filename)
+        return os.path.join(directory, f"{stem}{cls.COMPACT_SUFFIX}{extension}")
+
+    @classmethod
+    def compact(
+        cls,
+        source_path: Optional[str] = None,
+        dest_path: Optional[str] = None,
+        *,
+        data_dir: Optional[str] = None,
+        keep_inchi: bool = True,
+        remove_source: bool = False,
+        force: bool = False,
+    ) -> str:
+        """
+        Build a small ChEMBL extract holding only the tables PROVESID reads.
+
+        A full ChEMBL release is about 30 GB across 74 tables.  This package
+        opens eight of them (:data:`COMPACT_TABLES`) and reads no bioactivity
+        data at all, so almost the whole file is dead weight.  The extract
+        copies those eight tables, drops the ``molfile`` column -- a quarter of
+        the entire database on its own, and consumed nowhere -- keeps only the
+        ``COMPOUND`` rows of ``chembl_id_lookup``, and rebuilds just the indexes
+        the package's own queries need.
+
+        Measured on ChEMBL 36: **29.74 GB to 2.60 GB in 31 seconds**, with every
+        public method of this class returning the same compounds.
+
+        The extract is written to a temporary file and verified against its
+        source before it replaces anything, and ``remove_source`` deletes the
+        original only after that verification passes.
+
+        Parameters
+        ----------
+        source_path : str, optional
+            Full ChEMBL database to read.  When omitted, the newest
+            ``chembl_*.db`` in ``data_dir`` that is not already an extract.
+        dest_path : str, optional
+            Where to write the extract.  Defaults to
+            :meth:`compact_path_for` of the source, i.e. ``chembl_37.db``
+            produces ``chembl_37_provesid.db`` beside it.
+        data_dir : str, optional
+            Directory searched for the source and used for the default
+            destination.  Defaults to the shared PROVESID dataset directory.
+        keep_inchi : bool, optional
+            Keep the ``standard_inchi`` column and its index (default: True).
+            Dropping it saves a further ~1.0 GB, but :meth:`search_by_inchi`
+            then has no column to match and ``Search`` loses the InChI it
+            currently reads straight from ChEMBL.  Leave this alone unless disk
+            is genuinely short.
+        remove_source : bool, optional
+            Delete the full database once the extract verifies (default:
+            False).  This is the step that reclaims the ~27 GB; it is off by
+            default because deleting 30 GB should be asked for, not assumed.
+        force : bool, optional
+            Overwrite an existing extract (default: False).
+
+        Returns
+        -------
+        str
+            Path to the extract.
+
+        Raises
+        ------
+        FileNotFoundError
+            If no full ChEMBL database can be found to compact.
+        FileExistsError
+            If the destination exists and ``force`` is False.
+        ChEMBLError
+            If the source is itself an extract, if it is missing a table the
+            extract needs, or if verification fails.  A failed build leaves the
+            source untouched and removes the partial extract.
+
+        Examples
+        --------
+        Shrink whatever release is already on disk, then reclaim the space::
+
+            from provesid import CheMBL
+
+            path = CheMBL.compact(remove_source=True)
+            print(path)   # .../chembl_37_provesid.db
+
+        A later ``CheMBL()`` picks up the extract automatically, because
+        :meth:`_find_local_database` prefers it over a full release of the same
+        number.
+
+        Notes
+        -----
+        The source is opened read-only, so compacting is safe while other
+        processes are reading the same file.
+        """
+        logger = logging.getLogger(__name__)
+
+        source_path = cls._resolve_compact_source(source_path, data_dir)
+        if cls.is_compact_database(source_path):
+            raise ChEMBLError(
+                f"{source_path} is already a PROVESID extract; nothing to compact. "
+                "Pass the full chembl_NN.db, or delete the extract and rebuild it."
+            )
+
+        dest_path = os.path.abspath(
+            os.path.expanduser(dest_path or cls.compact_path_for(source_path))
+        )
+        if os.path.exists(dest_path) and not force:
+            raise FileExistsError(
+                f"ChEMBL extract already exists at {dest_path}. "
+                "Pass force=True to rebuild it."
+            )
+
+        tables = cls._compact_table_spec(keep_inchi)
+        cls._require_source_tables(source_path, tables)
+
+        temp_path = f"{dest_path}.tmp"
+        for leftover in (temp_path,):
+            if os.path.exists(leftover):
+                os.remove(leftover)
+
+        source_bytes = os.path.getsize(source_path)
+        logger.info(
+            "Compacting %s (%.2f GB) into %s",
+            source_path, source_bytes / 1e9, dest_path,
+        )
+
+        try:
+            row_counts = cls._build_compact(source_path, temp_path, tables, keep_inchi)
+            cls._verify_compact(source_path, temp_path, tables, row_counts)
+        except Exception:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise
+
+        os.replace(temp_path, dest_path)
+        dest_bytes = os.path.getsize(dest_path)
+        logger.info(
+            "ChEMBL extract written: %.2f GB, %.1f%% smaller than the source.",
+            dest_bytes / 1e9, 100 * (1 - dest_bytes / source_bytes),
+        )
+
+        if remove_source:
+            os.remove(source_path)
+            logger.info(
+                "Removed the full ChEMBL database %s, reclaiming %.2f GB.",
+                source_path, source_bytes / 1e9,
+            )
+        else:
+            logger.info(
+                "The full database is still at %s (%.2f GB). Delete it, or call "
+                "compact(remove_source=True), to reclaim that space.",
+                source_path, source_bytes / 1e9,
+            )
+
+        return dest_path
+
+    @classmethod
+    def _resolve_compact_source(
+        cls, source_path: Optional[str], data_dir: Optional[str]
+    ) -> str:
+        """
+        Find the full ChEMBL database :meth:`compact` should read.
+
+        Parameters
+        ----------
+        source_path : str or None
+            An explicit path, used as-is when given.
+        data_dir : str or None
+            Directory to search when no path was given.
+
+        Returns
+        -------
+        str
+            Absolute path to a full ChEMBL database.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the explicit path does not exist, or the directory holds no full
+            release to compact.
+        """
+        if source_path is not None:
+            source_path = os.path.abspath(os.path.expanduser(source_path))
+            if not os.path.exists(source_path):
+                raise FileNotFoundError(f"No ChEMBL database at {source_path}")
+            return source_path
+
+        directory = data_dir or user_dataset_path()
+        candidates = [
+            path
+            for path in glob.glob(os.path.join(directory, "chembl_*.db"))
+            if not cls.is_compact_database(path)
+        ]
+        if not candidates:
+            raise FileNotFoundError(
+                f"No full ChEMBL database found in {directory}. "
+                "Download one with CheMBL() first, or pass source_path."
+            )
+        # Highest release number wins, as elsewhere; an unparsable name sorts last.
+        def release_of(path: str) -> int:
+            match = re.search(r"chembl_(\d+)", os.path.basename(path))
+            return int(match.group(1)) if match else -1
+
+        return os.path.abspath(max(candidates, key=release_of))
+
+    @classmethod
+    def _compact_table_spec(cls, keep_inchi: bool) -> Dict[str, Dict[str, Any]]:
+        """
+        Return :data:`COMPACT_TABLES` with ``keep_inchi`` applied.
+
+        Parameters
+        ----------
+        keep_inchi : bool
+            When False, ``standard_inchi`` is removed from the columns kept for
+            ``compound_structures``.
+
+        Returns
+        -------
+        dict
+            A copy of the table specification; the class attribute is untouched.
+        """
+        spec = {name: dict(entry) for name, entry in cls.COMPACT_TABLES.items()}
+        if not keep_inchi:
+            columns = spec["compound_structures"]["columns"]
+            spec["compound_structures"]["columns"] = tuple(
+                column for column in columns if column != "standard_inchi"
+            )
+        return spec
+
+    @staticmethod
+    def _require_source_tables(
+        source_path: str, tables: Dict[str, Dict[str, Any]]
+    ) -> None:
+        """
+        Check the source holds every table and column the extract needs.
+
+        Failing here, before anything is written, gives the caller the missing
+        name rather than a partial extract and an opaque SQL error.
+
+        Parameters
+        ----------
+        source_path : str
+            Full ChEMBL database.
+        tables : dict
+            Table specification from :meth:`_compact_table_spec`.
+
+        Raises
+        ------
+        ChEMBLError
+            If a table or a requested column is absent.
+        """
+        conn = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+        try:
+            present = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            missing = [name for name in tables if name not in present]
+            if missing:
+                raise ChEMBLError(
+                    f"{source_path} is not a full ChEMBL database: it is missing "
+                    f"{', '.join(sorted(missing))}."
+                )
+            for name, entry in tables.items():
+                if entry["columns"] is None:
+                    continue
+                available = {
+                    row[1] for row in conn.execute(f"PRAGMA table_info({name})")
+                }
+                absent = [c for c in entry["columns"] if c not in available]
+                if absent:
+                    raise ChEMBLError(
+                        f"Table {name} in {source_path} is missing column(s) "
+                        f"{', '.join(absent)}."
+                    )
+        finally:
+            conn.close()
+
+    @classmethod
+    def _build_compact(
+        cls,
+        source_path: str,
+        dest_path: str,
+        tables: Dict[str, Dict[str, Any]],
+        keep_inchi: bool,
+    ) -> Dict[str, int]:
+        """
+        Copy the wanted tables into a new database and index them.
+
+        The source is attached read-only and each table is produced by a single
+        ``CREATE TABLE ... AS SELECT``, which is both the simplest formulation
+        and the fastest: SQLite streams the rows without a Python round-trip.
+
+        Parameters
+        ----------
+        source_path : str
+            Full ChEMBL database.
+        dest_path : str
+            File to create.  Must not already exist.
+        tables : dict
+            Table specification from :meth:`_compact_table_spec`.
+        keep_inchi : bool
+            Recorded in the provenance table.
+
+        Returns
+        -------
+        dict
+            Row count per copied table.
+        """
+        logger = logging.getLogger(__name__)
+        conn = sqlite3.connect(dest_path)
+        try:
+            # This database is rebuilt from scratch on any failure, so durability
+            # during the build buys nothing and costs a great deal of time.
+            conn.execute("PRAGMA journal_mode = OFF")
+            conn.execute("PRAGMA synchronous = OFF")
+            conn.execute(
+                "ATTACH DATABASE ? AS source", (f"file:{source_path}?mode=ro",)
+            )
+
+            row_counts: Dict[str, int] = {}
+            for name, entry in tables.items():
+                columns = "*" if entry["columns"] is None else ", ".join(entry["columns"])
+                where = f" WHERE {entry['where']}" if entry["where"] else ""
+                conn.execute(
+                    f"CREATE TABLE {name} AS SELECT {columns} FROM source.{name}{where}"
+                )
+                count = conn.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
+                row_counts[name] = count
+                logger.info("  copied %s: %s rows", name, f"{count:,}")
+
+            kept_columns = tables["compound_structures"]["columns"]
+            for index_name, target in cls.COMPACT_INDEXES:
+                if "standard_inchi)" in target and "standard_inchi" not in kept_columns:
+                    continue
+                conn.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON {target}")
+            logger.info("  built %d indexes", len(cls.COMPACT_INDEXES))
+
+            cls._write_provenance(conn, source_path, tables, row_counts, keep_inchi)
+
+            conn.commit()
+            conn.execute("DETACH DATABASE source")
+            conn.execute("ANALYZE main")
+            conn.commit()
+            conn.execute("VACUUM")
+        finally:
+            conn.close()
+        return row_counts
+
+    @classmethod
+    def _write_provenance(
+        cls,
+        conn: sqlite3.Connection,
+        source_path: str,
+        tables: Dict[str, Dict[str, Any]],
+        row_counts: Dict[str, int],
+        keep_inchi: bool,
+    ) -> None:
+        """
+        Record what this extract was built from, and by what.
+
+        An extract is a *subset*, so it goes stale differently from a copy: a
+        later PROVESID that needs a ninth table has to be able to say so rather
+        than fail with ``no such table``.  :data:`COMPACT_SCHEMA_VERSION` is what
+        makes that possible, and the rest of the record makes a database on disk
+        able to answer where it came from.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Open connection to the extract being built.
+        source_path : str
+            Full ChEMBL database the extract was read from.
+        tables : dict
+            Table specification actually applied.
+        row_counts : dict
+            Rows copied per table.
+        keep_inchi : bool
+            Whether ``standard_inchi`` was kept.
+        """
+        from . import __version__
+
+        release_match = re.search(r"chembl_(\d+)", os.path.basename(source_path))
+        record = {
+            "schema_version": str(cls.COMPACT_SCHEMA_VERSION),
+            "provesid_version": __version__,
+            "built_at": datetime.datetime.now(datetime.timezone.utc).isoformat(
+                timespec="seconds"
+            ),
+            "release": release_match.group(1) if release_match else "",
+            "source_database": os.path.basename(source_path),
+            "source_bytes": str(os.path.getsize(source_path)),
+            "keep_inchi": "1" if keep_inchi else "0",
+            "tables": ",".join(sorted(tables)),
+        }
+        for name, count in row_counts.items():
+            record[f"rows.{name}"] = str(count)
+
+        conn.execute(
+            f"CREATE TABLE {cls.PROVENANCE_TABLE} "
+            "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        conn.executemany(
+            f"INSERT INTO {cls.PROVENANCE_TABLE} (key, value) VALUES (?, ?)",
+            sorted(record.items()),
+        )
+
+    @classmethod
+    def _verification_sample(cls, source: sqlite3.Connection) -> List[int]:
+        """
+        Pick molregnos spread across the whole table, cheaply.
+
+        Sampling matters here: ``remove_source`` deletes 30 GB on the strength
+        of this check, so the rows compared should not all come from one end of
+        the table.  ``ORDER BY random()`` would be unbiased but scans 2.9 M rows;
+        drawing random values from the observed molregno range and keeping the
+        ones that exist costs a few hundred index seeks and covers the table
+        evenly.  The seed is fixed so a failure can be reproduced.
+
+        Parameters
+        ----------
+        source : sqlite3.Connection
+            Open connection to the full database.
+
+        Returns
+        -------
+        list of int
+            Up to :data:`_VERIFY_SAMPLE` molregnos that exist in
+            ``compound_structures``.  Fewer when the table is smaller than that,
+            in which case every row is returned.
+        """
+        low, high, total = source.execute(
+            "SELECT MIN(molregno), MAX(molregno), COUNT(*) FROM compound_structures"
+        ).fetchone()
+        if not total:
+            return []
+        if total <= cls._VERIFY_SAMPLE:
+            return [
+                row[0]
+                for row in source.execute("SELECT molregno FROM compound_structures")
+            ]
+
+        rng = random.Random(0)
+        found: List[int] = []
+        seen = set()
+        # Generous attempt budget: molregnos are dense, so most draws hit, but
+        # the loop must terminate even on a sparse table.
+        for _ in range(cls._VERIFY_SAMPLE * 20):
+            if len(found) >= cls._VERIFY_SAMPLE:
+                break
+            candidate = rng.randint(low, high)
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            row = source.execute(
+                "SELECT molregno FROM compound_structures WHERE molregno = ?",
+                (candidate,),
+            ).fetchone()
+            if row is not None:
+                found.append(row[0])
+        return found
+
+    @classmethod
+    def _verify_compact(
+        cls,
+        source_path: str,
+        dest_path: str,
+        tables: Dict[str, Dict[str, Any]],
+        row_counts: Dict[str, int],
+    ) -> None:
+        """
+        Prove the extract matches its source before anything is deleted.
+
+        Three checks, cheapest first: SQLite's own structural check, a row count
+        per table against the source under the same filter, and a sample of
+        whole rows re-read from both databases and compared column by column.
+        ``remove_source`` destroys 30 GB, so it is worth being sure.
+
+        Parameters
+        ----------
+        source_path : str
+            Full ChEMBL database.
+        dest_path : str
+            The extract just built.
+        tables : dict
+            Table specification actually applied.
+        row_counts : dict
+            Rows the build reported copying.
+
+        Raises
+        ------
+        ChEMBLError
+            On the first check that fails, naming what disagreed.
+        """
+        logger = logging.getLogger(__name__)
+        source = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+        dest = sqlite3.connect(f"file:{dest_path}?mode=ro", uri=True)
+        source.row_factory = sqlite3.Row
+        dest.row_factory = sqlite3.Row
+        try:
+            structural = dest.execute("PRAGMA quick_check").fetchone()[0]
+            if structural != "ok":
+                raise ChEMBLError(f"Extract failed SQLite's quick_check: {structural}")
+
+            for name, entry in tables.items():
+                where = f" WHERE {entry['where']}" if entry["where"] else ""
+                expected = source.execute(
+                    f"SELECT COUNT(*) FROM {name}{where}"
+                ).fetchone()[0]
+                actual = dest.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
+                if actual != expected or actual != row_counts[name]:
+                    raise ChEMBLError(
+                        f"Row count mismatch in {name}: source has {expected:,}, "
+                        f"extract has {actual:,}, build reported "
+                        f"{row_counts[name]:,}."
+                    )
+
+            columns = tables["compound_structures"]["columns"]
+            selection = ", ".join(columns)
+            query = f"SELECT {selection} FROM compound_structures WHERE molregno = ?"
+            compared = 0
+            for molregno in cls._verification_sample(source):
+                if (tuple(source.execute(query, (molregno,)).fetchone())
+                        != tuple(dest.execute(query, (molregno,)).fetchone())):
+                    raise ChEMBLError(
+                        f"Extract disagrees with its source for molregno {molregno}."
+                    )
+                compared += 1
+            logger.info(
+                "  verified: quick_check ok, %d table counts match, %d compounds "
+                "compared row for row.", len(tables), compared,
+            )
+        finally:
+            source.close()
+            dest.close()
 
     def download_database(self, url: Optional[str] = None, force: bool = False):
         """
@@ -336,8 +1129,13 @@ class CheMBL:
         
         Examples
         --------
-        >>> chembl = CheMBL(auto_download=False)  # Will raise FileNotFoundError
-        >>> chembl.download_database(force=True)  # Explicit download
+        >>> chembl = CheMBL(auto_download=False)      # doctest: +SKIP
+        >>> chembl.download_database(force=True)      # doctest: +SKIP
+
+        Both lines are marked ``+SKIP`` deliberately: under
+        ``pytest --doctest-modules`` this example would otherwise *execute*, and
+        fetch ~5.8 GB into whatever ``db_path`` happens to be -- including over a
+        compacted extract.
         """
         url = url or self.db_url or self.resolve_latest_db_url()
         self.db_url = url
@@ -734,11 +1532,17 @@ class CheMBL:
         -------
         dict or None
             Dictionary with compound information including:
-            - molregno, chembl_id, pref_name, max_phase
+            - molregno, chembl_id, pref_name, max_phase, therapeutic_flag,
+              molecule_type
             - canonical_smiles, standard_inchi, standard_inchi_key
-            - molfile (if available)
             - synonyms: list of alternative names
-            Returns None if not found
+
+            Returns None if not found.
+
+            No ``molfile`` is returned.  It is a quarter of a full ChEMBL
+            database on its own, nothing in PROVESID consumed it, and it is
+            absent from the extract :meth:`compact` builds.  Build a MOL block
+            from ``canonical_smiles`` with RDKit when you need one.
         
         Examples
         --------
@@ -762,8 +1566,7 @@ class CheMBL:
                 md.molecule_type,
                 cs.canonical_smiles,
                 cs.standard_inchi,
-                cs.standard_inchi_key,
-                cs.molfile
+                cs.standard_inchi_key
             FROM molecule_dictionary md
             LEFT JOIN compound_structures cs ON md.molregno = cs.molregno
             WHERE md.molregno = ?

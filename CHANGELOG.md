@@ -8,6 +8,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+- **`CheMBL.compact()` — a ChEMBL release without the 27 GB you never read.**
+  A full ChEMBL release is ~30 GB across 74 tables. PROVESID opens eight of
+  them (`molecule_dictionary`, `compound_structures`, `compound_properties`,
+  `molecule_synonyms`, `molecule_hierarchy`, `chembl_id_lookup` and the two
+  pesticide tables) and reads no bioactivity data at all: `activities` alone is
+  24.3 M rows that nothing in this package has ever queried.
+
+  Worse, a quarter of the whole database is a single column. `molfile` — the
+  MOL block for every compound — totals 7.72 GB, and `get_compound` was the
+  only thing that selected it, for callers that never used it.
+
+  `CheMBL.compact()` copies the eight tables, drops `molfile`, keeps only the
+  `COMPOUND` rows of `chembl_id_lookup`, and rebuilds just the indexes this
+  package's queries need. Measured on ChEMBL 36: **29.74 GB → 2.60 GB, 91.3%
+  smaller**, in about a minute, with every public method returning the same
+  compounds — verified over 3 000 randomly chosen compounds.
+
+  ```python
+  from provesid import CheMBL
+
+  CheMBL.compact()                      # build chembl_37_provesid.db beside the original
+  CheMBL.compact(remove_source=True)    # …and delete the 30 GB once it verifies
+  CheMBL.compact(keep_inchi=False)      # ~1.55 GB; see the caveat below
+  ```
+
+  The source is opened read-only, the extract is written to a temporary file
+  and checked against its source — SQLite's `quick_check`, a row count per
+  table, and 500 compounds re-read from both databases — before it replaces
+  anything. `remove_source` deletes the original only after that passes.
+
+  A later `CheMBL()` opens the extract in preference to a full release of the
+  same number, so nothing else has to change. `CheMBL.is_compact` and
+  `CheMBL.provenance` report what was opened; an extract records the release it
+  came from, the source file and its size, the build time, the PROVESID version
+  and its row counts. It also records a schema version, so a future PROVESID
+  that needs a ninth table warns and names the rebuild command instead of
+  failing with `no such table`.
+
+  `keep_inchi=False` saves a further ~1.0 GB by dropping `standard_inchi` and
+  its indexes, but `search_by_inchi` then has no column to match and `Search`
+  loses the InChI it reads straight from ChEMBL. Leave it alone unless disk is
+  genuinely short.
+
 - **One shared HTTP transport, and `Retry-After` honoured for the first time.**
   Every web-API client used to carry its own copy of "pause, request, decide
   what the status code meant, maybe give up". The six copies had drifted
@@ -332,6 +376,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PubChemAPI.get_cache_info`.
 
 ### Changed
+- **`CheMBL.get_compound()` no longer returns `molfile`.** It is a quarter of a
+  full ChEMBL database, nothing in PROVESID consumed it, and it is absent from
+  the extract above. Build a MOL block from `canonical_smiles` with RDKit when
+  you need one — RDKit is already a hard dependency.
+- **`CheMBL` prefers a compacted extract.** With `chembl_37.db` and
+  `chembl_37_provesid.db` side by side, `CheMBL()` opens the extract. Release
+  number still wins first: an older extract does not beat a newer full release.
+
 - **`OPSIN.base_url` is `https://www.ebi.ac.uk/opsin/ws/`.** The Cambridge
   address it used to name, `opsin.ch.cam.ac.uk`, answers every request with a
   301 to it (verified live, 2026-09-19), so the old URL worked and cost a

@@ -1973,3 +1973,18 @@ by the suite, whose `testpaths` is `tests`.
 - The shared clock is a `threading.Lock`, so it paces threads in one process.
   Two processes still have two clocks, and nothing in the package coordinates
   across them.
+
+---
+
+## 24. Assessed on 2026-09-20 — where this plan stands
+
+After steps 1–4, 6, 9 and 12 landed, the whole package was re-read and
+re-measured, and the remaining work was re-planned against what the four landed
+steps actually taught. The result, including a new section on building
+`pubchem_id.db` automatically from PubChem's FTP site instead of a manual CSV
+download, is:
+
+**`plans/2026-09-20-post-refactor-status-and-improvements.md`**
+
+That document supersedes this one for *sequencing*. This one remains the record
+of what was done and why, and §13's verification gate still applies unchanged.

@@ -440,7 +440,7 @@ Steps are independently committable and leave the suite green.
 | # | Commit | §  | Size |
 |---:|---|---|---|
 | 1 | ~~**`CheMBL.compact()`: 30 GB → 2.6 GB from a full database already on disk**~~ **done, §11** | **9** | **S** |
-| 2 | rewrite `search_by_name` as a `UNION`; add `ORDER BY` — 743 ms → 10 µs | 9.5, 9.3 | S |
+| 2 | ~~rewrite `search_by_name` as a `UNION`; add `ORDER BY` — 743 ms → 10 µs~~ **done, §12** | 9.5, 9.3 | S |
 | 3 | `datasets.py`: `download_file` with resume + checksum; migrate the 5 download sites | 4.2 | M |
 | 4 | `datasets.status/plan/fetch/remove`; `Search(datasets="present")` as the default | 4.1 | M |
 | 5 | build the ChEMBL extract during download; `source=` on `CheMBL` | 9.7 | M |
@@ -1220,15 +1220,136 @@ three helpers that read a database now close explicitly in a `finally`.
 - The 30 GB original is **not** deleted unless asked. On this machine both files
   now exist; `CheMBL.compact(remove_source=True, force=True)` reclaims the
   27.14 GB whenever you want it.
-- Step 2 (§9.5, the `search_by_name` `UNION` rewrite) is untouched. The two
-  `lower(...)` expression indexes are already built into every extract, so that
-  change is now a one-method edit with its index support waiting for it.
-- §9.3's ordering instability is unfixed: `search_by_name` still has no `ORDER
-  BY`. The new tests compare sets rather than lists, which is correct but also
-  concedes the point.
+- ~~Step 2 (§9.5, the `search_by_name` `UNION` rewrite)~~ — **done, §12**.
+- ~~§9.3's ordering instability~~ — **done, §12**. The tests added in step 1
+  still compare sets rather than lists, which remains correct.
 - §4.13 — passing one client to `Search` disables the others — was found doing
   this work and is not fixed.
 - `keep_inchi=False` is implemented and tested but unmeasured on real data at
   this commit; §9.6's 1.55 GB comes from the prototype.
 - Routes 2 and 3 of §9.7 (build during download, stream the MySQL dump) are not
   started. `compact()` is deliberately the whole of step 1.
+
+---
+
+## 12. Landed on 2026-09-20 — step 2, the `search_by_name` rewrite (§9.5, §9.3)
+
+§9.5 predicted 743 ms → 10 µs from a `UNION` rewrite, and §9.3 asked for an
+`ORDER BY`. Both landed together, because they are the same method and the
+second is only meaningful once the first has settled what "the matching rows"
+means.
+
+### 12.1 What landed
+
+- `CheMBL.search_by_name` now issues a `UNION` of two single-table lookups —
+  one on `molecule_dictionary(lower(pref_name))`, one on
+  `molecule_synonyms(lower(synonyms))` — instead of an `OR` across a
+  `LEFT JOIN`, and closes with `ORDER BY molregno LIMIT ?`.
+- The `COMPACT_INDEXES` comment no longer says the two `lower(...)` expression
+  indexes are useless to this method. They are now the whole point of it.
+- 32 tests in `tests/test_chembl_name_search.py`, an example in
+  `examples/chembl/name_search_demo.py`, and a `CHANGELOG.md` entry.
+
+Both modes changed shape; only `exact=True` changed speed by orders of
+magnitude, because a leading-wildcard `LIKE` is a scan whatever the query
+shape.
+
+### 12.2 Measured, on ChEMBL 36
+
+200 real search terms — 150 preferred names and 50 synonyms, drawn at random
+with a fixed seed — against both databases on this machine:
+
+| | exact lookup, per call |
+|---|---:|
+| full release, old query | 764.4 ms |
+| full release, new query | 220.9 ms |
+| extract, old query | 559.7 ms |
+| **extract, new query** | **10.1 µs** |
+
+| | substring lookup, per call |
+|---|---:|
+| extract, old query | 665.2 ms |
+| extract, new query | 274.8 ms |
+
+So §9.5's headline holds: **764 ms → 10 µs, ~76 000×**, against the full
+release that is today's default. What §9.5 did not say is that the rewrite
+pays on a full release too — 764 ms → 221 ms, 3.5×, with no indexes at all —
+because removing the join removes the automatic covering index SQLite was
+building on `molecule_synonyms` for every call. A user who has not run
+`compact()` still gets most of an order of magnitude.
+
+The plan on the extract is now what §9.5 wanted:
+
+```
+MERGE (UNION)
+LEFT   SEARCH molecule_dictionary USING INDEX ix_md_pref_lower (<expr>=?)
+RIGHT  SEARCH molecule_synonyms  USING INDEX ix_ms_syn_lower  (<expr>=?)
+```
+
+against the old
+
+```
+SCAN md USING INDEX ix_md_molregno
+BLOOM FILTER ON ms (molregno=?)
+SEARCH ms USING AUTOMATIC COVERING INDEX (molregno=?) LEFT-JOIN
+```
+
+### 12.3 Equivalence
+
+Compared as *sets* of molregnos with a limit high enough that neither query
+truncates — because the old query's truncation is exactly the thing that is not
+reproducible:
+
+- 200 exact terms — **0 differences**;
+- 25 substring fragments — **0 differences**;
+- 50 exact terms checked for sortedness — **0 unsorted results**.
+
+### 12.4 One semantic difference, and why it does not matter
+
+The `LEFT JOIN` drove everything from `molecule_dictionary`, so a synonym row
+whose `molregno` is not in `molecule_dictionary` could never match. The synonym
+arm of the `UNION` has no such anchor and would return that orphan molregno.
+
+`get_compound` selects `FROM molecule_dictionary`, so an orphan yields `None`
+and is dropped from the result either way. ChEMBL has no orphans in practice —
+the 200-term comparison above would have found them — but the outcome is
+identical by construction rather than by luck, which is why no extra filter was
+added.
+
+### 12.5 The tests
+
+`tests/test_chembl_name_search.py` builds a miniature ChEMBL of 200 compounds,
+laid out for the cases that matter rather than for realism: 40 compounds share
+one preferred name so that `limit` has to *choose*, rows are inserted in
+descending `molregno` so a sorted result cannot be an accident of physical row
+order, and one name is one compound's `pref_name` and a different compound's
+synonym so the two arms have to merge.
+
+Three things are pinned that were not pinned before:
+
+- the **legacy query is kept in the test file** and the rewrite is asserted to
+  find the same compounds, per term, as the shape it replaced;
+- a truncated result is asserted **stable across a `VACUUM`**, which is the
+  concrete form of §9.3's instability;
+- the **query plan itself** is asserted, via SQLite's trace hook, so a future
+  edit that quietly reintroduces a join or a scan fails a test rather than a
+  benchmark nobody runs. The hook reports statements with parameters already
+  substituted, which is what makes the recovered SQL plannable as it stands.
+
+### 12.6 Validation
+
+- `pytest tests/` — **1068 passed, 34 skipped, 0 failed** (8m01s).
+- `examples/chembl/name_search_demo.py` run against the real extract.
+
+One process note, since it will recur at every step: `uv run pytest` re-resolves
+`uv.lock`, pulling in the whole chebifier/`chebai` optional extra — 1 883 added
+lines, CUDA wheels included — which has nothing to do with the change under
+test. The lockfile was reverted here. It is worth deciding, before step 3, that
+either the lock is committed once deliberately or the test command stops
+writing it.
+
+### 12.7 Still open
+
+- §4.13 — passing one client to `Search` disables the others — remains unfixed.
+- Steps 3 and 4 (`datasets.py`) are next, and every later step's first-run
+  story depends on them.

@@ -261,6 +261,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- **`CheMBL.search_by_name` scanned all 2.9 M compounds on every call, and its
+  truncated results were not reproducible.** The method asked one question of
+  two tables:
+
+  ```sql
+  SELECT DISTINCT md.molregno FROM molecule_dictionary md
+  LEFT JOIN molecule_synonyms ms ON md.molregno = ms.molregno
+  WHERE LOWER(md.pref_name) = LOWER(?) OR LOWER(ms.synonyms) = LOWER(?)
+  LIMIT ?
+  ```
+
+  Neither arm can use an index in that shape — `LOWER(col) = ?` defeats an index
+  on `col`, and an `OR` whose arms live in different tables across a `LEFT JOIN`
+  defeats indexing altogether — so SQLite scanned `molecule_dictionary` in full
+  for every lookup. Adding expression indexes changes nothing on its own; the
+  query shape is the problem.
+
+  It is now a `UNION` of two independently indexable lookups, one per table.
+  Measured on ChEMBL 36, exact lookups:
+
+  | | per call |
+  |---|---:|
+  | full release, old query | 764 ms |
+  | full release, new query | 221 ms |
+  | `compact()` extract, old query | 560 ms |
+  | **`compact()` extract, new query** | **10 µs** |
+
+  The 10 µs comes from the `lower(pref_name)` and `lower(synonyms)` expression
+  indexes that `CheMBL.compact()` already builds into every extract; a full
+  release has no such indexes and still scans, but it scans two small queries
+  instead of a join. `exact=False` cannot be indexed either way — a
+  leading-wildcard `LIKE` is a scan by construction — and improves from 665 ms
+  to 275 ms on the extract for the same reason the join is gone.
+
+  The rewrite returns the same compounds: 0 differences over 200 real names and
+  25 substring fragments.
+
+- **`CheMBL.search_by_name` returned a different set of compounds run to run.**
+  `LIMIT` with no `ORDER BY` returns whatever the query plan happens to produce,
+  so a name matching more compounds than `limit` silently changed *which* ones
+  came back — after a `VACUUM`, an index change or a SQLite upgrade. Comparing
+  a `compact()` extract against its source found 25 of 60 names differing in
+  order, and none in content, which is what put the defect in view.
+
+  Results are now ordered by `molregno`, so a truncated result is the `limit`
+  lowest `molregno` values and is the same on every call and every copy of the
+  database.
+
 - **OPSIN threw away the reason for every failure it reported.** OPSIN answers a
   name it cannot parse with HTTP 404 and a complete JSON body —
   `{"status": "FAILURE", "message": "notachemical12345 was uninterpretable due

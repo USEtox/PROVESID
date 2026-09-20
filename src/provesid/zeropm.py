@@ -8,16 +8,30 @@ from typing import Optional
 
 # Try relative import first, fall back to direct import for testing
 from .datasets import download_file
+from .sqlite_client import SQLiteClient
 from .utils import user_dataset_path
 
 
-class ZeroPM:
+class ZeroPM(SQLiteClient):
     """
     Class to extract data from the ZeroPM SQLite database using SQL queries.
     This class provides the same functionality as ZeroPM but uses SQL instead of pandas.
     SMILES are generated on-the-fly from InChI using RDKit.
     
     The database file will be automatically downloaded if not found locally.
+
+    Connection handling comes from
+    :class:`~provesid.sqlite_client.SQLiteClient`: use the class as a context
+    manager, or call :meth:`~provesid.sqlite_client.SQLiteClient.close` when
+    finished, and query it from as many threads as you like --- each gets its
+    own connection.  This is the one client that also *writes*
+    (:meth:`create_indexes`, :meth:`create_view`); SQLite serialises those
+    against the reading connections.
+
+    Example
+    -------
+    >>> with ZeroPM() as zpm:                      # doctest: +SKIP
+    ...     df = zpm.get_id_table_from_cas("50-00-0")
     """
     
     # Default download URL for the ZeroPM database
@@ -79,17 +93,14 @@ class ZeroPM:
                     f"Please run ZeroPM.download_database() or set auto_download=True"
                 )
         
-        # Create connection (will be reused for queries)
-        self.conn = sqlite3.connect(self.db_path)
-        self.cursor = self.conn.cursor()
+        # Create the connection.  One per thread, reused for every query on
+        # that thread and released by close() or by leaving a ``with`` block.
+        # row_factory stays unset: this module's queries index rows by
+        # position, and sqlite3.Row would be a behaviour change.
+        self._open_database(self.db_path, row_factory=None)
         
         # Cache chemical names for fuzzy matching (lazy loading)
         self._chemical_names_cache = None
-    
-    def __del__(self):
-        """Close database connection when object is destroyed."""
-        if hasattr(self, 'conn'):
-            self.conn.close()
     
     def download_database(self, url=None, force=False):
         """

@@ -37,14 +37,25 @@ import logging
 from typing import Dict, List, Optional, Any, Union
 
 from .datasets import download_file
+from .sqlite_client import SQLiteClient
 from .utils import user_dataset_path
 
 
-class CompToxID:
+class CompToxID(SQLiteClient):
     """
     Interface to CompTox Chemicals Dashboard SQLite database.
 
     The database file is automatically downloaded on first use when missing.
+
+    Inherits its connection handling from
+    :class:`~provesid.sqlite_client.SQLiteClient`: use it as a context
+    manager, or call :meth:`~provesid.sqlite_client.SQLiteClient.close` when
+    finished, and query it from as many threads as you like --- each gets its
+    own connection.
+
+    Example:
+        >>> with CompToxID() as db:                     # doctest: +SKIP
+        ...     dtxsid = db.casrn_to_dtxsid("50-78-2")
     """
 
     # Default database filename
@@ -117,17 +128,13 @@ class CompToxID:
                     f"Download URL: {self.db_url}"
                 )
 
-        # Connect to database
-        self.conn = sqlite3.connect(self.db_path)
-        self.conn.row_factory = sqlite3.Row  # Access columns by name
+        # Connect to the database.  One connection per thread, released by
+        # close() or by leaving a ``with`` block --- see
+        # :class:`~provesid.sqlite_client.SQLiteClient`.
+        self._open_database(self.db_path)
 
         # Verify the database has the expected table
         self._verify_database()
-
-    def __del__(self):
-        """Close database connection on deletion."""
-        if hasattr(self, "conn"):
-            self.conn.close()
 
     def download_database(self, url: Optional[str] = None, force: bool = False) -> str:
         """

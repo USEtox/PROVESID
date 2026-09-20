@@ -241,7 +241,7 @@ class TestPubChemIDReturnTypes:
     """Test PubChemID method return types with a mocked SQLite connection."""
 
     def _make_mock_pubchem(self, rows, columns):
-        """Create a PubChemID with mocked _conn."""
+        """Create a PubChemID over a mocked connection, without __init__."""
         from provesid.pubchem import PubChemID
 
         mock_conn = MagicMock(spec=sqlite3.Connection)
@@ -252,7 +252,7 @@ class TestPubChemIDReturnTypes:
         mock_conn.execute.return_value = mock_cursor
 
         obj = object.__new__(PubChemID)
-        obj.conn = mock_conn
+        obj._adopt_connection(mock_conn)
         return obj
 
     def test_get_by_inchikey_returns_dict_or_none(self):
@@ -299,7 +299,7 @@ class TestCompToxIDReturnTypes:
         mock_conn.execute.return_value = mock_cursor
 
         obj = object.__new__(CompToxID)
-        obj.conn = mock_conn
+        obj._adopt_connection(mock_conn)
         return obj
 
     def test_get_by_dtxsid_returns_dict_or_none(self):

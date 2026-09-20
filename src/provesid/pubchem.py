@@ -12,6 +12,7 @@ from typing import Dict, List, Union, Optional, Any
 from urllib.parse import quote
 from .cache import cached, is_empty_result
 from .datasets import download_file
+from .sqlite_client import SQLiteClient
 from .http import (
     HTTPClient,
     Outcome,
@@ -1971,7 +1972,7 @@ class PubChemAPI:
         return results
 
 
-class PubChemID:
+class PubChemID(SQLiteClient):
     """
     Interface to PubChem ID SQLite database for fast identifier lookup and conversion.
     
@@ -1981,12 +1982,21 @@ class PubChemID:
     
     The database is built from PubChem_CAS_202601.csv using the build_pubchem_id_db.py script.
     
+    Connection handling comes from
+    :class:`~provesid.sqlite_client.SQLiteClient`: use the class as a context
+    manager, or call :meth:`~provesid.sqlite_client.SQLiteClient.close` when
+    finished, and query it from as many threads as you like --- each gets its
+    own connection.
+
     Attributes:
         db_path (str): Path to the SQLite database file
-        conn (sqlite3.Connection): Database connection
+        conn (sqlite3.Connection): This thread's database connection
     
     Example:
         >>> from provesid import PubChemID
+        >>> with PubChemID() as db:                  # doctest: +SKIP
+        ...     inchi = db.cas_to_inchi("50-78-2")
+        >>>
         >>> db = PubChemID()
         >>> 
         >>> # Lookup by CAS
@@ -2124,14 +2134,11 @@ class PubChemID:
                     "Set auto_download=True or run PubChemID.download_database()."
                 )
         
-        self.conn = sqlite3.connect(self.db_path)
-        self.conn.row_factory = sqlite3.Row  # Access columns by name
-    
-    def __del__(self):
-        """Close database connection on deletion."""
-        if hasattr(self, 'conn'):
-            self.conn.close()
-    
+        # One connection per thread, released by close() or by leaving a
+        # ``with`` block --- see
+        # :class:`~provesid.sqlite_client.SQLiteClient`.
+        self._open_database(self.db_path)
+
     @staticmethod
     def download_database(
         db_path: Optional[str] = None,

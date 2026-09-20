@@ -59,6 +59,7 @@ nav:
     - ChEBI: api/chebi.md
     - Search: api/search.md
     - HTTP Transport: api/http.md
+    - SQLite Clients: api/sqlite_clients.md
 
 exclude_docs: |
   examples/*/README.md

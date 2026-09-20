@@ -162,6 +162,42 @@ print("transfer:", datasets.human_bytes(todo.attrs["total_download_bytes"]))
 (the default) runs on the installed sources, `"auto"` downloads what is
 missing, and `"required"` raises and names the `fetch` call.
 
+## 9. Closing a database, and querying one from several threads
+
+`PubChemID`, `CompToxID`, `ZeroPM` and `CheMBL` hold a local SQLite file open.
+Use them as context managers, or call `close()`, so the file is released when
+you are done with it — which is what lets a later download replace it:
+
+```{code-cell} ipython3
+from provesid import PubChemID
+
+try:
+    with PubChemID(auto_download=False) as db:
+        print(db.cas_to_inchi("50-78-2"))
+    print("closed:", db.closed)
+except FileNotFoundError:
+    print("pubchem_id.db is not installed")
+```
+
+Each thread gets its own connection, so a pool over a list of identifiers is
+the ordinary thing to write:
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+
+with PubChemID() as db:
+    with ThreadPoolExecutor(8) as pool:
+        rows = list(pool.map(db.get_by_cas, cas_numbers))
+```
+
+`Search` is a context manager too, and closes the clients it constructed —
+though not one you passed to it yourself, which stays yours:
+
+```python
+with Search("cas") as s:
+    df = s.search(["50-00-0", "64-17-5"])
+```
+
 ## Next
 
 - [Online and Offline Data Methods](data_methods.md)

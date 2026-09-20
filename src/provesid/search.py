@@ -56,7 +56,8 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from types import TracebackType
+from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 import pandas as pd
 from tqdm import tqdm
@@ -67,6 +68,7 @@ from .comptox import CompToxID
 from .datasets import DATASETS, fetch_command, human_bytes, require
 from .opsin import PYOPSIN
 from .pubchem import PubChemID
+from .sqlite_client import DatabaseClosedError
 from .zeropm import ZeroPM
 from .tools import (
     apply_candidate_to_result,
@@ -445,6 +447,10 @@ class Search:
 
         # Anchor IUPAC names to a real structure via OPSIN (needs Java)
         df = Search("name", use_opsin=True).search("2-(acetyloxy)benzoic acid")
+
+        # Hand the four databases back when the run is over
+        with Search("cas") as s:
+            df = s.search(["50-00-0", "64-17-5"])
     """
 
     SUPPORTED_TYPES: frozenset = frozenset(
@@ -701,6 +707,13 @@ class Search:
         self._zeropm = zeropm
         self._chembl = chembl
 
+        # Source keys whose client this instance constructed, and may
+        # therefore close.  A client the caller passed in belongs to the
+        # caller and outlives this Search; closing it would be closing
+        # someone else's database.
+        self._owned_clients: List[str] = []
+        self._closed: bool = False
+
         # Track whether automatic client init has been attempted.
         self._clients_initialized: bool = any(
             c is not None for c in [chebi, comptox, pubchem, zeropm, chembl]
@@ -751,6 +764,12 @@ class Search:
         with the size and the :func:`~provesid.datasets.fetch` call that would
         install it, and the search runs on the sources that are present.
         """
+        if self._closed:
+            raise DatabaseClosedError(
+                "This Search was closed; the databases it opened are no longer "
+                "available. Construct a new Search to query again."
+            )
+
         if not self._clients_initialized:
             factories: Dict[str, Any] = {
                 "chebi": ChebiSDF,
@@ -773,6 +792,7 @@ class Search:
                                 auto_download=auto,
                             ),
                         )
+                        self._owned_clients.append(key)
                     except FileNotFoundError as exc:
                         if auto:
                             log.warning(
@@ -817,6 +837,73 @@ class Search:
                 ", ".join(self._SOURCE_DISPLAY[k] for k in self.sources_unavailable),
             )
         self._availability_logged = True
+
+    def close(self) -> None:
+        """Close the source clients this instance constructed.
+
+        A :class:`Search` may hold four SQLite databases open — CompTox,
+        PubChemID, ChEMBL and, with ``use_zeropm=True``, ZeroPM — totalling
+        several gigabytes of mapped file.  Until this method existed there was
+        no way to hand them back short of dropping the ``Search`` and waiting
+        for the collector, which on Windows meant the files stayed locked.
+
+        Only clients this instance built are closed.  One passed to the
+        constructor belongs to the caller, who may still be using it, and
+        closing it here would be closing someone else's database.
+
+        Idempotent.  After it returns, :meth:`search` raises
+        :class:`~provesid.sqlite_client.DatabaseClosedError` rather than
+        quietly running against whatever is left.
+
+        Example::
+
+            with Search("cas") as s:
+                df = s.search(["50-00-0", "64-17-5"])
+            # the four databases are closed here
+        """
+        if self._closed:
+            return
+        self._closed = True
+
+        for key in self._owned_clients:
+            attr = f"_{key}"
+            client = getattr(self, attr, None)
+            close = getattr(client, "close", None)
+            if close is not None:
+                try:
+                    close()
+                except Exception as exc:  # pragma: no cover - close rarely fails
+                    log.warning("Error closing the %s client: %s", key, exc)
+            setattr(self, attr, None)
+
+        self._owned_clients = []
+
+    def __enter__(self) -> "Search":
+        """Return the resolver, so ``with Search(...) as s`` binds it.
+
+        Returns:
+            Search: ``self``.
+        """
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> bool:
+        """Close the clients this instance constructed, on the way out.
+
+        Args:
+            exc_type: Exception class, or None.
+            exc_value: Exception instance, or None.
+            traceback: Traceback, or None.
+
+        Returns:
+            bool: False --- an exception raised in the block propagates.
+        """
+        self.close()
+        return False
 
     @staticmethod
     def _validate_n_hits(n_hits: Union[int, str]) -> Union[int, str]:

@@ -9,6 +9,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The four SQLite clients can be closed, used in a `with` block, and queried
+  from several threads.** `PubChemID`, `CompToxID`, `ZeroPM` and `CheMBL` each
+  opened a connection in `__init__` and closed it in `__del__`, and nowhere
+  else. All four now inherit `provesid.SQLiteClient`:
+
+  ```python
+  with PubChemID() as db:                 # released at the end of the block
+      inchi = db.cas_to_inchi("50-78-2")
+
+  db = CompToxID()
+  db.close()                              # or by hand; idempotent
+  db.closed                               # True
+
+  with PubChemID() as db:                 # a connection per thread
+      with ThreadPoolExecutor(8) as pool:
+          rows = list(pool.map(db.get_by_cas, cas_numbers))
+  ```
+
+  The threading case is the one users met first: a single connection is bound
+  to the thread that created it, so the obvious way to resolve ten thousand
+  CAS numbers against a local 2.2 GB database died on the first worker with
+  `sqlite3.ProgrammingError: SQLite objects created in a thread can only be
+  used in that same thread`. Each thread now gets its own connection and
+  cursor, opened on its first query; `close()` closes all of them, from
+  whichever thread calls it.
+
+  Per-thread connections rather than `check_same_thread=False`, which removes
+  the *check* and not the problem: every thread would still share one
+  `self.cursor`, and these clients `execute` in one statement and `fetchone`
+  in the next, so two threads interleaving those would read each other's rows.
+  A wrong answer is a worse failure than the exception it replaces.
+
+  Threads are now *possible*, which is not the same as faster: a tight loop of
+  nothing but local lookups is slower on a pool than in a plain loop (5 000
+  `get_by_cas` calls: 0.29 s serially, 14.65 s on eight threads), because each
+  query takes tens of microseconds and the GIL handoff around it costs more.
+  That is `sqlite3` under CPython, not this change — plain `sqlite3.connect`
+  per thread measures the same. A pool pays when each item also waits on
+  something: 400 lookups each followed by 20 ms of waiting took 8.52 s
+  serially and 1.17 s on eight threads.
+
+  `Search` is a context manager too, and closes the source clients it
+  constructed — but not one passed to its constructor, which belongs to the
+  caller. Querying a closed client or a closed `Search` raises
+  `DatabaseClosedError`, a `RuntimeError` subclass that names the client and
+  the file, rather than sqlite3's `Cannot operate on a closed database`.
+  `__del__` remains as a backstop, so code that never closes anything behaves
+  as it did.
+
 - **Installing ChEMBL now costs 2.4 GiB, not 27.7 GiB: `CheMBL(source=...)`.**
   `CheMBL.compact()` could already shrink a release *already on disk*, which
   left the worst case untouched — a machine that had never had ChEMBL still

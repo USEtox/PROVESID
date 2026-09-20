@@ -14,6 +14,7 @@ PROVESID provides Python interfaces to several major chemical databases and web 
 - **[CAS Common Chemistry](cascommonchem.md)** - CAS Registry data access
 - **[OPSIN](opsin.md)** - IUPAC name to structure conversion
 - **[ClassyFire](classyfire.md)** - Chemical structure classification
+- **[SQLite Clients](sqlite_clients.md)** - Closing, `with` and threads for the four local-database clients
 
 ## Quick Reference
 

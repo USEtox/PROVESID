@@ -42,6 +42,7 @@ from urllib.parse import urlsplit
 import requests
 from tqdm import tqdm
 from .datasets import DownloadError, download_file
+from .sqlite_client import SQLiteClient
 from .utils import user_dataset_path
 
 
@@ -50,7 +51,7 @@ class ChEMBLError(Exception):
     pass
 
 
-class CheMBL:
+class CheMBL(SQLiteClient):
     """
     Interface to the ChEMBL SQLite database for chemical compound queries.
     
@@ -97,12 +98,14 @@ class CheMBL:
         What the extract was built from -- release, source file, build time,
         PROVESID version and per-table row counts.  None for a full release.
     conn : sqlite3.Connection
-        SQLite database connection
+        This thread's SQLite database connection
     cursor : sqlite3.Cursor
-        Database cursor for queries
+        This thread's cursor for queries
 
     Examples
     --------
+    >>> with CheMBL() as chembl:                 # doctest: +SKIP
+    ...     compound = chembl.search_by_chembl_id('CHEMBL25')
     >>> chembl = CheMBL()
     >>> compound = chembl.search_by_chembl_id('CHEMBL25')  # Aspirin
     >>> print(compound['pref_name'])
@@ -134,6 +137,12 @@ class CheMBL:
     archive name changes with every ChEMBL release.  The version is therefore
     resolved from the directory listing rather than pinned, with
     :data:`DEFAULT_DB_URL` as the fallback when the listing cannot be read.
+
+    Connection handling comes from
+    :class:`~provesid.sqlite_client.SQLiteClient`: use the class as a context
+    manager, or call :meth:`~provesid.sqlite_client.SQLiteClient.close` when
+    finished, and query it from as many threads as you like --- each gets its
+    own connection.
     """
 
     LATEST_DIR_URL = "https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/"
@@ -367,11 +376,11 @@ class CheMBL:
         self.provenance = self.read_provenance(self.db_path)
         self.is_compact = self.provenance is not None
 
-        # Connect to database
+        # Connect to the database.  One connection per thread, released by
+        # close() or by leaving a ``with`` block --- see
+        # :class:`~provesid.sqlite_client.SQLiteClient`.
         try:
-            self.conn = sqlite3.connect(self.db_path)
-            self.conn.row_factory = sqlite3.Row  # Enable column access by name
-            self.cursor = self.conn.cursor()
+            self._open_database(self.db_path)
             self.logger.info(f"Connected to ChEMBL database at {self.db_path}")
         except sqlite3.Error as e:
             raise ChEMBLError(f"Failed to connect to database: {str(e)}")
@@ -439,15 +448,6 @@ class CheMBL:
             size / 1e9,
         )
 
-    def __del__(self):
-        """Close database connection when object is destroyed"""
-        if hasattr(self, 'conn') and self.conn:
-            try:
-                self.conn.close()
-                self.logger.debug("Closed ChEMBL database connection")
-            except Exception as e:
-                self.logger.warning(f"Error closing database connection: {str(e)}")
-    
     def _warn_if_extract_is_stale(self) -> None:
         """
         Say so when the open extract predates the tables this version needs.

@@ -201,7 +201,7 @@ an `.md5` beside every file (verified: `CID-SMILES.gz.md5` →
 so both features are real for the largest dataset in §8. Five call sites collapse
 to five one-line calls.
 
-### 4.3 Four SQLite clients that cannot be closed (S)
+### 4.3 Four SQLite clients that cannot be closed (S) — **done, §16**
 
 `PubChemID`, `CompToxID`, `ZeroPM` and `CheMBL` each open a connection in
 `__init__` and close it in `__del__`. None has a public `close()`, none supports
@@ -444,7 +444,7 @@ Steps are independently committable and leave the suite green.
 | 3 | ~~`datasets.py`: `download_file` with resume + checksum; migrate the 5 download sites~~ **done, §13** | 4.2 | M |
 | 4 | ~~`datasets.status/plan/fetch/remove`; `Search(datasets="present")` as the default~~ **done, §14** | 4.1 | M |
 | 5 | ~~build the ChEMBL extract during download; `source=` on `CheMBL`~~ **done, §15** | 9.7 | M |
-| 6 | `close()`, context managers and thread safety on the four SQLite clients | 4.3 | S |
+| 6 | ~~`close()`, context managers and thread safety on the four SQLite clients~~ **done, §16** | 4.3 | S |
 | 7 | `classyfire.py` raises; rewrite its tests; drop it from the docs' service lists | 4.8 | S |
 | 8 | `cache.py`: persistent dir, parameterised service functions, key version | 4.7 | S |
 | 9 | **`pubchem_ftp.py`: the FTP identifier builder** | **8** | **L** |
@@ -1834,3 +1834,178 @@ moves back, the number that made them agree to it would be a lie.
 - The five client defaults (§14.7) are unchanged: `CheMBL()` on a clean machine
   still downloads without being asked — 2.42 GiB now rather than 27.7 GiB.
   Step 6.
+
+---
+
+## 16. Landed on 2026-09-20 — step 6, `close()`, `with` and threads (§4.3)
+
+§4.3 asked for "a `close()`, `__enter__`/`__exit__`, and either
+`check_same_thread=False` with a documented 'read-only, safe to share'
+contract or a thread-local connection", with `__del__` kept as a backstop and
+`Search` closing the clients it constructed. All of that landed, as one mixin
+rather than four copies. Of the two options §4.3 offered, only the second was
+available — §16.3.
+
+### 16.1 What landed
+
+- `src/provesid/sqlite_client.py` (406 lines): `SQLiteClient`, the mixin, and
+  `DatabaseClosedError`. `_open_database` is the one call a client makes;
+  `conn`, `cursor`, `closed` and `db_file` are properties; `close`,
+  `__enter__`, `__exit__` and `__del__` are the lifetime. Both are exported
+  from `provesid`.
+- `PubChemID`, `CompToxID`, `ZeroPM` and `CheMBL` inherit it. Each lost its
+  `self.conn = sqlite3.connect(...)` and its `__del__`; none of their 186
+  `self.conn` / `self.cursor` call sites changed.
+- `Search.close`, `__enter__`, `__exit__`, and `_owned_clients` — the source
+  keys whose client this instance built, which is what it may close (§16.4).
+  A closed `Search` raises from `_ensure_clients` rather than searching on.
+- `_adopt_connection`, for an instance built without `__init__` (§16.6).
+- 50 tests in `tests/test_sqlite_lifecycle.py`,
+  `examples/sqlite_clients/` (a demo and a README), `docs/api/sqlite_clients.md`
+  in the nav and the API index, a `docs/quickstart.md` section, and a
+  `CHANGELOG.md` entry.
+
+### 16.2 The hazard is `self.cursor`, not `self.conn`
+
+§4.3 described the threading problem as a connection created in one thread
+being used in another. That is the *symptom*; it is also the benign half. The
+four clients hold 186 references to `self.conn` and `self.cursor` between
+them, and 166 of those are `self.cursor` — 135 in `zeropm.py`, 31 in
+`chembl.py` — written as two statements:
+
+```python
+self.cursor.execute("SELECT ... WHERE cas = ?", (cas,))
+result = self.cursor.fetchone()
+```
+
+That is why `check_same_thread=False`, the first of §4.3's two options, is the
+wrong one. It removes the check and leaves every thread sharing one cursor, so
+two threads interleaving those two statements read each other's rows. The
+exception it would silence is the thing protecting the caller from a wrong
+answer, and a wrong answer in a chemical identifier resolver is a far worse
+outcome than a traceback. So the unit of thread affinity has to be the cursor,
+not just the connection, and `SQLiteClient` hands out one of each per thread.
+
+`check_same_thread=False` is still passed — but for a different reason, and
+only because per-thread connections make it safe: `close()` runs on whichever
+thread owns the object, and it has to be able to close the connections the
+workers opened.
+
+### 16.3 "Read-only, safe to share" was not available
+
+§4.3's other option assumed these are read-only databases. `ZeroPM` is not:
+`create_indexes` and `create_view` both execute DDL and commit
+(`zeropm.py:1663`, `zeropm.py:2001`). Opening with `mode=ro` would have broken
+them, and a contract that says "read-only" while one client writes is worse
+than no contract. Per-thread connections need no such promise — SQLite
+serialises the writes itself — which is the second reason the choice was made
+the way it was.
+
+### 16.4 `Search` closes what it built, and nothing else
+
+`_ensure_clients` records a source key in `_owned_clients` only when it
+successfully constructed that client. A client passed to the constructor is
+never in the list, so `Search.close()` leaves it open: it belongs to the
+caller, who may still be using it, and closing someone else's database on the
+way out of a `with` block is not a service. Both halves are pinned by tests.
+
+A closed `Search` raises `DatabaseClosedError` from `_ensure_clients` rather
+than rebuilding its clients. Rebuilding would be the surprising choice — a
+`with` block that quietly re-opens 6.3 GiB of databases after it ends is not
+what the block said.
+
+### 16.5 Threads make the pool work; they do not make it fast
+
+Worth recording because the obvious reading of this step is "PROVESID is now
+faster on many cores", and it is not. Measured on this machine against the
+real `pubchem_id.db`:
+
+| workload | serial | 4 threads | 8 threads |
+|---|---:|---:|---:|
+| 5 000 `get_by_cas` | 0.29 s | 4.80 s | 14.65 s |
+| 400 `get_by_cas`, each + 20 ms wait | 8.52 s | — | 1.17 s |
+
+A warm local lookup takes tens of microseconds, which is less than the GIL
+handoff around the `sqlite3` call costs, so a pool over nothing but lookups
+loses badly. This is not something the mixin introduced: a plain
+`sqlite3.connect` per thread, with no PROVESID in the picture, measures the
+same (0.06 s serial against 2.94 s on eight threads), and chunking the work
+does not help. A pool pays when each item also waits on something, which is
+the case a user actually reaches for it in — a lookup feeding a request, a
+file read, an RDKit call — and there it is 7.3×.
+
+So the value of this step is that the pool no longer *fails*, plus the two
+lifetime features. The docs, the example and the CHANGELOG all say so rather
+than leaving the reader to infer a speedup.
+
+### 16.6 Two things §4.3 did not anticipate
+
+**`conn` became a property, which broke two test helpers.**
+`tests/test_search_new_methods.py` builds a client with `object.__new__` and
+then assigns `obj.conn = mock_conn`, which a read-only property refuses. A
+setter would have been the easy fix and the wrong one: assigning to `conn`
+leaves the replaced connection open and off the registry, so nothing would
+ever close it. `_adopt_connection` is that assignment with the bookkeeping
+kept — it registers the connection, so `close()` still reaches it — and it
+also makes an in-memory database a supported way to build a client.
+
+**`close()` has to work on a half-built object.** `__del__` calls it, and
+`__del__` runs on an instance whose constructor raised before
+`_open_database` — a missing database file, for instance, which is an
+ordinary path with `auto_download=False`. Every attribute access in `close`
+and `closed` therefore goes through `getattr(self, ..., default)`, and
+`closed` reports `True` for an object that owns nothing.
+
+### 16.7 Verification
+
+- `tests/test_sqlite_lifecycle.py`, 50 tests in two halves. The first builds a
+  three-row database in `tmp_path` and exercises the mixin through a
+  ten-line `TinyClient`, so closing, re-closing, `with`, the per-thread
+  handles, the `__del__` backstop, the row factory and an adopted connection
+  are all tested without an installed dataset. The second runs the same
+  contract against all four real clients, parametrised and skipped per
+  dataset, plus five `Search` tests.
+- Two of the threading tests needed a `threading.Barrier` to be tests at all:
+  without one, `ThreadPoolExecutor` finishes each task before starting the
+  next worker, so four submissions run on one thread and "each thread gets its
+  own connection" passes trivially against a single connection.
+- What is pinned: that a closed client names itself and its file in the error;
+  that the error is a `RuntimeError` subclass, so existing handlers still
+  catch it; that `close` is idempotent and reaches connections opened on other
+  threads; that a worker thread sees `DatabaseClosedError` rather than
+  sqlite3's own; that `__exit__` closes while letting the exception through;
+  that `ZeroPM`'s tuple rows survive; that a write on one thread is visible on
+  another; and that `conn` has no setter.
+
+### 16.8 Validation
+
+- `pytest tests/` — **1200 passed, 34 skipped, 3 failed** of 1 237 collected
+  (8m08s). The three failures are the live PubChem 503s of §14.9 and §15.7 —
+  `test_error_handling_invalid_cid`, `test_malformed_property_names` and
+  `TestPubChemView::test_error_handling` — unchanged and unrelated. An
+  intermediate run also failed the six `test_search_new_methods.py` mock
+  tests of §16.6; those are fixed and pass.
+- `mkdocs build --strict` — clean, after `__exit__`'s three parameters were
+  annotated: griffe warns on an unannotated parameter, and `--strict` turns
+  that into a failure.
+- `examples/sqlite_clients/connection_lifetime_demo.py` run end to end: it
+  builds a ten-row database, shows `with`, `close`, the error message, 2 000
+  lookups on eight threads over nine connections, and `close()` reaching all
+  five connections a barriered pool left open, then queries the real
+  PubChemID, CompToxID and CheMBL.
+- `Search("cas").search("50-00-0")` against the real datasets still returns
+  formaldehyde, `WSFSSNUMVMOOMR-UHFFFAOYSA-N`, at confidence 0.9.
+
+### 16.9 Still open
+
+- `ChebiSDF` is not an `SQLiteClient` — it holds a pickled index in memory
+  rather than a file handle — so `Search.close()` skips it. It is the one
+  source whose memory a `with` block does not hand back.
+- Nothing calls `close()` on the client an instance-level
+  `download_database(force=True)` is about to replace. On Windows that
+  `os.replace` still fails against a live object; the remedy is now available
+  (`close()` first) but not automatic. Wiring it would mean a `reopen()` on
+  the mixin, which is a step of its own.
+- The five client defaults (§14.7, §15.8) are still unchanged: `CheMBL()` on a
+  clean machine downloads without being asked. That is `Search`'s default
+  today, not the clients'.

@@ -48,6 +48,7 @@ from .pubchem import (
     PubChemID,
 )
 from .comptox import CompToxID
+from .sqlite_client import SQLiteClient, DatabaseClosedError
 from .pubchemview import (
     PubChemView,
     PropertyData,

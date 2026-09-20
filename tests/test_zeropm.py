@@ -57,23 +57,36 @@ class TestZeroPMInitialization:
             zpm.download_database()
     
     def test_download_database_force_parameter(self):
-        """Test download_database with force=True parameter"""
+        """force=True gets past the exists check and starts the download.
+
+        The downloader is patched out: what is under test is that
+        FileExistsError is not raised and that the right destination is
+        requested, not that 100 MB arrives.
+        """
         zpm = ZeroPM()
-        # Create a mock for requests.get to avoid actual download
-        with patch('provesid.zeropm.requests.get') as mock_get:
-            # Mock response
-            mock_response = MagicMock()
-            mock_response.headers = {'content-length': '1000'}
-            mock_response.iter_content = lambda chunk_size: [b'test_data']
-            mock_get.return_value = mock_response
-            
-            # Should not raise error with force=True
-            try:
-                zpm.download_database(force=True)
-            except Exception:
-                # It's ok if this fails due to mocking, we just want to verify
-                # that FileExistsError is not raised with force=True
-                pass
+        with patch('provesid.zeropm.download_file') as mock_download:
+            assert zpm.download_database(force=True) == zpm.db_path
+
+        mock_download.assert_called_once()
+        url, dest = mock_download.call_args.args
+        assert url == zpm.db_url
+        assert dest == zpm.db_path
+
+    def test_download_database_rejects_a_file_that_is_not_a_database(self, tmp_path):
+        """The verify callback handed to download_file is a real check.
+
+        It runs on the .part file, before anything is moved into place, so a
+        damaged download cannot replace a working database.
+        """
+        zpm = ZeroPM()
+        with patch('provesid.zeropm.download_file') as mock_download:
+            zpm.download_database(force=True)
+        verify = mock_download.call_args.kwargs["verify"]
+
+        not_a_database = tmp_path / "junk.db"
+        not_a_database.write_bytes(b"this is not SQLite")
+        with pytest.raises(RuntimeError, match="corrupted"):
+            verify(str(not_a_database))
 
 
 

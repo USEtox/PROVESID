@@ -8,6 +8,12 @@ from .http import (
     RateLimitError,
     ServiceTimeoutError,
 )
+from .datasets import (
+    DownloadError,
+    download_file,
+    md5_of_file,
+    read_checksum,
+)
 from .cascommonchem import (
     CASCommonChem,
     CASCommonChemError,

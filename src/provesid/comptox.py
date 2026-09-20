@@ -35,8 +35,8 @@ import sqlite3
 import logging
 
 from typing import Dict, List, Optional, Any, Union
-import requests
-from tqdm import tqdm
+
+from .datasets import download_file
 from .utils import user_dataset_path
 
 
@@ -136,6 +136,11 @@ class CompToxID:
         The file is approximately 856 MB and is not shipped with the GitHub
         repository due to size limitations.
 
+        The transfer is resumable: an interrupted download leaves a ``.part``
+        file beside the destination and the next call continues from it rather
+        than fetching the 856 MB again. The file is checked before it is moved
+        into place, so a failed download never replaces a working database.
+
         Args:
             url (str, optional): Download URL. If None, uses `self.db_url`.
             force (bool, optional): If True, overwrite existing database file.
@@ -145,7 +150,9 @@ class CompToxID:
 
         Raises:
             FileExistsError: If the database already exists and `force` is False.
-            RuntimeError: If download or validation fails.
+            provesid.datasets.DownloadError: If the download could not be
+                completed.
+            RuntimeError: If the file that arrived is not the CompTox database.
         """
         download_url = url or self.db_url
 
@@ -154,67 +161,38 @@ class CompToxID:
                 f"Database already exists at: {self.db_path}. Use force=True to overwrite."
             )
 
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        temp_path = f"{self.db_path}.tmp"
+        def must_contain_the_chemicals_table(path):
+            """Reject a download that is not the CompTox database.
+
+            Run on the ``.part`` file, before it is moved into place. The
+            previous implementation renamed first and checked afterwards, so a
+            failed check left the broken file where the good one had been.
+            """
+            connection = sqlite3.connect(path)
+            try:
+                found = connection.execute(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type='table' AND name='chemicals'"
+                ).fetchone()
+            finally:
+                connection.close()
+            if not found:
+                raise RuntimeError(
+                    "Downloaded database does not contain 'chemicals' table"
+                )
 
         self.logger.warning(
             "CompTox database download starting (~856 MB). "
             "Please ensure you have enough disk space and stable internet."
         )
-        self.logger.warning(f"Source: {download_url}")
-        self.logger.warning(f"Destination: {self.db_path}")
-
-        try:
-            response = requests.get(download_url, stream=True, timeout=60)
-            response.raise_for_status()
-
-            total_size = int(response.headers.get("content-length", 0))
-            chunk_size = 1024 * 1024
-
-            with open(temp_path, "wb") as f:
-                if total_size > 0:
-                    with tqdm(
-                        total=total_size,
-                        unit="B",
-                        unit_scale=True,
-                        desc="Downloading CompTox database",
-                    ) as progress_bar:
-                        for chunk in response.iter_content(chunk_size=chunk_size):
-                            if chunk:
-                                f.write(chunk)
-                                progress_bar.update(len(chunk))
-                else:
-                    for chunk in response.iter_content(chunk_size=chunk_size):
-                        if chunk:
-                            f.write(chunk)
-
-            if os.path.exists(self.db_path):
-                os.remove(self.db_path)
-            os.replace(temp_path, self.db_path)
-
-            try:
-                test_connection = sqlite3.connect(self.db_path)
-                cursor = test_connection.cursor()
-                cursor.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='chemicals'"
-                )
-                if not cursor.fetchone():
-                    raise RuntimeError("Downloaded database does not contain 'chemicals' table")
-            finally:
-                if "test_connection" in locals():
-                    test_connection.close()
-
-            self.logger.warning("CompTox database downloaded and validated successfully.")
-            return self.db_path
-
-        except requests.exceptions.RequestException as exc:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            raise RuntimeError(f"Failed to download CompTox database: {exc}") from exc
-        except Exception:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            raise
+        download_file(
+            download_url,
+            self.db_path,
+            verify=must_contain_the_chemicals_table,
+            description="CompTox database",
+            log=self.logger,
+        )
+        return self.db_path
 
     def _verify_database(self):
         """Verify the database has the expected table structure."""

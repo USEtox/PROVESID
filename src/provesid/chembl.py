@@ -36,6 +36,7 @@ from typing import Optional, Dict, List, Any, Sequence, Tuple
 from urllib.parse import urlsplit
 import requests
 from tqdm import tqdm
+from .datasets import DownloadError, download_file
 from .utils import user_dataset_path
 
 
@@ -1112,6 +1113,13 @@ class CheMBL:
         Downloads the compressed tar.gz archive (~5.8 GB for release 37), extracts
         the SQLite database (~30 GB), and validates its integrity by querying the
         molecule_dictionary table.
+
+        The download is resumable. An interrupted transfer leaves a ``.part``
+        file beside the archive and the next call continues from it, which
+        matters more here than anywhere else in the package: this is the
+        largest single download PROVESID makes, and it used to start again from
+        zero. Consider :meth:`compact` afterwards -- it reduces the extracted
+        30 GB to about 2.6 GB.
         
         Parameters
         ----------
@@ -1143,96 +1151,105 @@ class CheMBL:
         if os.path.exists(self.db_path) and not force:
             self.logger.info(f"Database already exists at {self.db_path}")
             return
-        
-        self.logger.info(f"Downloading ChEMBL database from {url}")
-        
-        # Temporary files
-        tar_gz_path = self.db_path + ".tar.gz.tmp"
-        
+
+        # The archive is kept beside the database rather than in a temporary
+        # directory, so that an interrupted download's .part file is found and
+        # resumed by the next call.  5.8 GB is far too much to fetch twice.
+        archive_path = self.db_path + ".tar.gz"
+
+        # The database is extracted under a temporary name and only moved onto
+        # db_path once it has answered a query, so a failed extraction cannot
+        # destroy the release that is already there -- the same contract the
+        # other four downloads now keep through download_file's `verify`.
+        staged_path = self.db_path + ".incoming"
+
         try:
-            # Download compressed archive with progress bar
-            response = requests.get(url, stream=True, timeout=30)
-            response.raise_for_status()
-            
-            total_size = int(response.headers.get('content-length', 0))
-            
-            with open(tar_gz_path, 'wb') as f:
-                with tqdm(total=total_size, unit='B', unit_scale=True, 
-                         desc="Downloading ChEMBL database") as pbar:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            pbar.update(len(chunk))
-            
-            self.logger.info(f"Download complete. Extracting database...")
-            
-            # Extract tar.gz archive
-            # ChEMBL archive structure: chembl_NN_sqlite.tar.gz -> chembl_NN/chembl_NN.db
-            with tarfile.open(tar_gz_path, 'r:gz') as tar:
-                # Find the .db file in the archive
-                db_members = [m for m in tar.getmembers() if m.name.endswith('.db')]
-                
-                if not db_members:
-                    raise ChEMBLError("No .db file found in the tar.gz archive")
-                
-                db_member = db_members[0]
-                self.logger.info(f"Extracting {db_member.name}...")
-                
-                # Extract with progress bar
-                with tqdm(total=db_member.size, unit='B', unit_scale=True,
-                         desc="Extracting database") as pbar:
-                    # Extract to temp location first
-                    tar.extract(db_member, path=self.path)
-                    pbar.update(db_member.size)
-                
-                # Move extracted file to final location
-                extracted_path = os.path.join(self.path, db_member.name)
-                if extracted_path != self.db_path:
-                    os.rename(extracted_path, self.db_path)
-                    # Remove the now-empty directories the archive created.  The
-                    # nesting depth varies between releases (37 ships
-                    # chembl_37/chembl_37_sqlite/chembl_37.db), so walk up from
-                    # the member's own directory and stop at the data directory
-                    # or at the first non-empty one.
-                    extracted_dir = os.path.dirname(extracted_path)
-                    while os.path.abspath(extracted_dir) != os.path.abspath(self.path):
-                        try:
-                            os.rmdir(extracted_dir)
-                        except OSError:
-                            break
-                        extracted_dir = os.path.dirname(extracted_dir)
-            
+            download_file(
+                url,
+                archive_path,
+                description=f"ChEMBL archive ({os.path.basename(url)})",
+                log=self.logger,
+            )
+
+            self.logger.info("Download complete. Extracting database...")
+            self._extract_database(archive_path, staged_path)
+
             # Validate database integrity
             self.logger.info("Validating database integrity...")
             try:
-                test_conn = sqlite3.connect(self.db_path)
+                test_conn = sqlite3.connect(staged_path)
                 test_cursor = test_conn.cursor()
                 test_cursor.execute("SELECT COUNT(*) FROM molecule_dictionary")
                 count = test_cursor.fetchone()[0]
                 test_conn.close()
                 self.logger.info(f"Database validated successfully. Contains {count:,} compounds.")
             except sqlite3.Error as e:
-                os.remove(self.db_path)
-                raise ChEMBLError(f"Database validation failed: {str(e)}")
-            
-            # Clean up temporary files
-            if os.path.exists(tar_gz_path):
-                os.remove(tar_gz_path)
-            
+                raise ChEMBLError(f"Database validation failed: {str(e)}") from e
+
+            os.replace(staged_path, self.db_path)
+            os.remove(archive_path)
+
             self.logger.info("ChEMBL database download and setup complete")
-            
-        except requests.RequestException as e:
-            if os.path.exists(tar_gz_path):
-                os.remove(tar_gz_path)
-            raise ChEMBLError(f"Download failed: {str(e)}")
+
+        except DownloadError as e:
+            # The .part file is left where it is: the next call resumes from
+            # it rather than fetching 5.8 GB again.
+            raise ChEMBLError(f"Download failed: {str(e)}") from e
         except Exception as e:
-            # Clean up on any error
-            if os.path.exists(tar_gz_path):
-                os.remove(tar_gz_path)
-            if os.path.exists(self.db_path):
-                os.remove(self.db_path)
-            raise ChEMBLError(f"Database setup failed: {str(e)}")
-    
+            # Extraction or validation failed, so the archive is suspect and
+            # the half-built database is worthless. Both go; whatever was at
+            # db_path before is untouched.
+            for path in (staged_path, archive_path):
+                if os.path.exists(path):
+                    os.remove(path)
+            if isinstance(e, ChEMBLError):
+                raise
+            raise ChEMBLError(f"Database setup failed: {str(e)}") from e
+
+    def _extract_database(self, archive_path: str, dest_path: str) -> None:
+        """
+        Pull the single ``.db`` member out of a ChEMBL archive.
+
+        ChEMBL's archive nests the database at a depth that varies between
+        releases --- 37 ships ``chembl_37/chembl_37_sqlite/chembl_37.db`` ---
+        so the directories the extraction created are walked back up and
+        removed afterwards, stopping at the data directory or at the first one
+        that is not empty.
+
+        Args:
+            archive_path: The downloaded ``.tar.gz``.
+            dest_path: Where the extracted database is moved to. The caller
+                passes a staging name, not ``db_path``, so that a failure here
+                cannot destroy a release already on disk.
+
+        Raises:
+            ChEMBLError: If the archive holds no ``.db`` member.
+        """
+        with tarfile.open(archive_path, 'r:gz') as tar:
+            db_members = [m for m in tar.getmembers() if m.name.endswith('.db')]
+
+            if not db_members:
+                raise ChEMBLError("No .db file found in the tar.gz archive")
+
+            db_member = db_members[0]
+            self.logger.info(f"Extracting {db_member.name}...")
+
+            with tqdm(total=db_member.size, unit='B', unit_scale=True,
+                      desc="Extracting database") as pbar:
+                tar.extract(db_member, path=self.path)
+                pbar.update(db_member.size)
+
+            extracted_path = os.path.join(self.path, db_member.name)
+            os.replace(extracted_path, dest_path)
+
+            extracted_dir = os.path.dirname(extracted_path)
+            while os.path.abspath(extracted_dir) != os.path.abspath(self.path):
+                try:
+                    os.rmdir(extracted_dir)
+                except OSError:
+                    break
+                extracted_dir = os.path.dirname(extracted_dir)
+
     def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         """Convert sqlite3.Row to dictionary"""
         if row is None:

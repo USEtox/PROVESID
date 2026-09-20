@@ -22,6 +22,7 @@ from typing import Dict, List, Optional, Union, Any
 from rdkit import Chem
 import pandas as pd
 from tqdm import tqdm
+from .datasets import CHUNK_SIZE, download_file
 from .http import HTTPClient, NotFoundError, ServiceError, ServiceTimeoutError
 from .utils import user_dataset_path
 
@@ -1053,6 +1054,11 @@ class ChebiSDF:
         
         The file is downloaded as a gzip archive (~250 MB) and automatically
         extracted to the data directory (~868 MB uncompressed).
+
+        The transfer is resumable: an interrupted download leaves a ``.part``
+        file beside the archive and the next call continues from it. The gzip
+        archive is kept until the SDF has been extracted and checked, so a
+        failure during extraction does not cost another download.
         
         Args:
             url (str, optional): URL to download from. If None, uses default ChEBI FTP URL.
@@ -1060,106 +1066,77 @@ class ChebiSDF:
             
         Returns:
             str: Path to the downloaded and extracted SDF file
-            
+
         Raises:
             FileExistsError: If the file already exists and force=False
-            requests.exceptions.RequestException: If the download fails
-            
+            provesid.datasets.DownloadError: If the download could not be
+                completed
+            RuntimeError: If the extracted file is empty
+            gzip.BadGzipFile: If the archive is damaged -- gzip's CRC and
+                length trailer catch a truncated transfer for free
+
         Example:
-            >>> chebi_sdf = ChebiSDF(auto_download=False)
-            >>> chebi_sdf.download_sdf()  # Manually trigger download
+            >>> chebi_sdf = ChebiSDF(auto_download=False)   # doctest: +SKIP
+            >>> chebi_sdf.download_sdf()                    # doctest: +SKIP
         """
         download_url = url or self.sdf_url
-        
+
         # Check if file already exists
         if os.path.exists(self.sdf_path) and not force:
             raise FileExistsError(
                 f"ChEBI SDF file already exists at: {self.sdf_path}\n"
                 f"Use force=True to overwrite"
             )
-        
-        # Create data directory if it doesn't exist
-        data_dir = os.path.dirname(self.sdf_path)
-        os.makedirs(data_dir, exist_ok=True)
-        
-        self.logger.info(f"Downloading ChEBI SDF from: {download_url}")
-        self.logger.info(f"Destination: {self.sdf_path}")
-        
-        temp_path = self.sdf_path + '.tmp'
-        gz_path = self.sdf_path + '.gz.tmp'
+
+        # The gzip is kept beside the SDF rather than in a temporary directory,
+        # so an interrupted download's .part file is found and resumed next
+        # time instead of fetching the archive again.
+        gz_path = self.sdf_path + ".gz"
+        temp_path = self.sdf_path + ".tmp"
 
         try:
-            # Stream the download with progress bar
-            response = requests.get(download_url, stream=True, timeout=60)
-            response.raise_for_status()
-            
-            # Get total file size
-            total_size = int(response.headers.get('content-length', 0))
-            
-            # Download gzipped file to temporary location
-            with open(gz_path, 'wb') as f:
-                if total_size > 0:
-                    with tqdm(total=total_size, unit='B', unit_scale=True, 
-                             desc="Downloading ChEBI SDF") as pbar:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            if chunk:
-                                f.write(chunk)
-                                pbar.update(len(chunk))
-                else:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-            
+            download_file(
+                download_url,
+                gz_path,
+                description="ChEBI SDF",
+                log=self.logger,
+            )
+
             self.logger.info("Download complete. Extracting gzip archive...")
-            
-            # Extract gzipped file
+
+            # gzip's CRC and length trailer make this the truncation check the
+            # plain downloads never had: a short archive fails here rather than
+            # producing a half-written SDF.
             with gzip.open(gz_path, 'rb') as f_in:
                 with open(temp_path, 'wb') as f_out:
-                    # Copy with progress bar
-                    file_size = os.path.getsize(gz_path)
-                    with tqdm(total=file_size, unit='B', unit_scale=True, 
-                             desc="Extracting ChEBI SDF") as pbar:
+                    with tqdm(total=os.path.getsize(gz_path), unit='B',
+                              unit_scale=True, desc="Extracting ChEBI SDF") as pbar:
                         while True:
-                            chunk = f_in.read(8192)
+                            chunk = f_in.read(CHUNK_SIZE)
                             if not chunk:
                                 break
                             f_out.write(chunk)
                             pbar.update(len(chunk))
-            
-            # Move temp file to final location
-            if os.path.exists(self.sdf_path):
-                os.remove(self.sdf_path)
-            os.rename(temp_path, self.sdf_path)
-            
-            # Clean up temporary gzip file
-            if os.path.exists(gz_path):
-                os.remove(gz_path)
-            
-            self.logger.info(f"✓ ChEBI SDF file downloaded and extracted successfully")
+
+            # Verify the file is valid before it replaces anything.
+            with open(temp_path, 'r', encoding='utf-8', errors='ignore') as f:
+                if not any(f.readline() for _ in range(5)):
+                    raise RuntimeError("Downloaded file appears to be empty")
+
+            os.replace(temp_path, self.sdf_path)
+            os.remove(gz_path)
+
+            self.logger.info("✓ ChEBI SDF file downloaded and extracted successfully")
             self.logger.info(f"✓ File location: {self.sdf_path}")
-            
-            # Verify the file is valid by checking first few lines
-            try:
-                with open(self.sdf_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    first_lines = [f.readline() for _ in range(5)]
-                    if not any(first_lines):
-                        raise RuntimeError("Downloaded file appears to be empty")
-                self.logger.info("✓ File verified successfully")
-            except Exception as e:
-                os.remove(self.sdf_path)
-                raise RuntimeError(f"Downloaded file is corrupted: {e}")
-            
             return self.sdf_path
-            
-        except requests.exceptions.RequestException as e:
-            # Clean up temp files if they exist
-            if os.path.exists(gz_path):
-                os.remove(gz_path)
+
+        except Exception:
+            # The .gz is left where it is when it downloaded cleanly, so a
+            # failure in extraction does not cost another 300 MB transfer.
             if os.path.exists(temp_path):
                 os.remove(temp_path)
-            self.logger.error(f"Failed to download ChEBI SDF: {e}")
             raise
-    
+
     def _build_index(self) -> Dict:
         """
         Build index from SDF file for fast lookups.

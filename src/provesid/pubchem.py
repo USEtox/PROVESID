@@ -6,10 +6,12 @@ import json
 import logging
 import re
 import os
+import sqlite3
 import pandas as pd
 from typing import Dict, List, Union, Optional, Any
 from urllib.parse import quote
 from .cache import cached, is_empty_result
+from .datasets import download_file
 from .http import (
     HTTPClient,
     Outcome,
@@ -2090,8 +2092,6 @@ class PubChemID:
         Raises:
             FileNotFoundError: If database file doesn't exist and auto_download is False
         """
-        import sqlite3
-
         self.logger = logging.getLogger(__name__)
         self.db_url = db_url or self.DEFAULT_DB_URL
         self._api = api
@@ -2140,7 +2140,13 @@ class PubChemID:
     ) -> str:
         """
         Download PubChem ID database from Zenodo.
-        
+
+        The transfer is resumable: an interrupted download leaves a ``.part``
+        file beside the destination and the next call continues from it rather
+        than fetching the 2.2 GB again. The file is opened and queried before
+        it is moved into place, so a damaged download never replaces a working
+        database.
+
         Args:
             db_path (str, optional): Path where to save the database. If None, uses default
                                     location in the persistent user dataset directory.
@@ -2150,24 +2156,24 @@ class PubChemID:
         
         Returns:
             str: Path to the downloaded database file
-        
+
+        Raises:
+            FileExistsError: If the database exists and ``force`` is False.
+            provesid.datasets.DownloadError: If the download could not be
+                completed.
+            RuntimeError: If the file that arrived is not the PubChem ID
+                database.
+
         Example:
             >>> from provesid import PubChemID
-            >>> # Download to default location
-            >>> PubChemID.download_database()
-            >>> 
-            >>> # Or specify custom location
-            >>> PubChemID.download_database(db_path='/path/to/pubchem_id.db')
-        
+            >>> PubChemID.download_database()                            # doctest: +SKIP
+            >>> PubChemID.download_database(db_path='/tmp/pubchem_id.db')  # doctest: +SKIP
+
         Note:
-            After uploading to Zenodo, update the zenodo_url parameter with the actual URL.
             The database file is ~2.2 GB, so download may take several minutes.
         """
-        import requests
-        from tqdm import tqdm
-
         logger = logging.getLogger(__name__)
-        
+
         if db_path is None:
             db_path = os.path.join(
                 user_dataset_path(),
@@ -2176,68 +2182,35 @@ class PubChemID:
         else:
             db_path = os.path.abspath(os.path.expanduser(db_path))
 
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
-
         if os.path.exists(db_path) and not force:
             raise FileExistsError(
                 f"Database already exists at: {db_path}. Use force=True to overwrite."
             )
-        
-        if zenodo_url is None:
-            zenodo_url = PubChemID.DEFAULT_DB_URL
-        
-        logger.info("Downloading PubChem ID database from: %s", zenodo_url)
-        logger.info("Destination: %s", db_path)
-        logger.info("This is a large file (~2.2 GB), please be patient.")
-        
-        # Create temporary file path
-        temp_path = db_path + '.tmp'
-        
-        try:
-            # Download with progress bar
-            response = requests.get(zenodo_url, stream=True)
-            response.raise_for_status()
-            
-            total_size = int(response.headers.get('content-length', 0))
-            
-            with open(temp_path, 'wb') as f:
-                with tqdm(total=total_size, unit='B', unit_scale=True, desc="Downloading") as pbar:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            pbar.update(len(chunk))
-            
-            logger.info("Download complete. Verifying...")
-            
-            # Verify it's a valid SQLite database
-            import sqlite3
+
+        def must_be_the_compounds_database(path):
+            """Reject a download that cannot answer the query this class asks."""
+            connection = sqlite3.connect(path)
             try:
-                conn = sqlite3.connect(temp_path)
-                cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) FROM compounds")
-                count = cursor.fetchone()[0]
-                conn.close()
-                logger.info("Database verified: %s compounds", f"{count:,}")
-            except Exception as e:
-                raise RuntimeError(f"Downloaded file is not a valid database: {e}")
-            
-            # Move to final location
-            if os.path.exists(db_path):
-                os.remove(db_path)
-            os.rename(temp_path, db_path)
-            
-            logger.info("Database ready at %s", db_path)
-            return db_path
-            
-        except requests.exceptions.RequestException as e:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            raise RuntimeError(f"Failed to download database: {e}")
-        except Exception as e:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            raise RuntimeError(f"Error during download: {e}")
-    
+                count = connection.execute(
+                    "SELECT COUNT(*) FROM compounds"
+                ).fetchone()[0]
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Downloaded file is not a valid database: {exc}"
+                ) from exc
+            finally:
+                connection.close()
+            logger.info("Database verified: %s compounds", f"{count:,}")
+
+        logger.info("This is a large file (~2.2 GB), please be patient.")
+        return download_file(
+            zenodo_url or PubChemID.DEFAULT_DB_URL,
+            db_path,
+            verify=must_be_the_compounds_database,
+            description="PubChem ID database",
+            log=logger,
+        )
+
     def get_by_cid(self, cid: int) -> Optional[Dict[str, Any]]:
         """
         Get compound information by PubChem CID.

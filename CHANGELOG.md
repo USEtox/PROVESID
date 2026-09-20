@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **One resumable, checksummed downloader for every bulk dataset:
+  `provesid.datasets.download_file`.** Five modules had each grown their own
+  copy of "stream the response into a temporary file with a progress bar", and
+  all five shared the same three defects — no retry, no resumption, no
+  checksum. An interrupted 5.8 GB ChEMBL download started again from zero, and
+  so did an interrupted 2.2 GB PubChem one.
+
+  Corruption was caught unevenly, too. The two gzipped downloads got truncation
+  detection for free from gzip's CRC and length trailer; the three plain SQLite
+  downloads had none. A file truncated in its interior opens cleanly and fails
+  much later, on the first query that touches a missing page — which a user
+  reads as a data problem, not a download problem.
+
+  `download_file` streams into a `.part` file beside the destination, resumes
+  it with an HTTP `Range` request, and applies four checks in order, each of
+  which leaves the destination untouched if it fails:
+
+  1. the byte count against the size the server declared;
+  2. an MD5, from `expected_md5` or fetched from `checksum_url` — PubChem's FTP
+     mirror publishes an `.md5` beside every file;
+  3. the caller's own `verify` callback, handed the finished file;
+  4. an atomic rename.
+
+  ```python
+  from provesid.datasets import download_file
+
+  download_file(url, "/data/CID-SMILES.gz", checksum_url=url + ".md5")
+  ```
+
+  A file rejected by its checksum or by `verify` is deleted rather than kept:
+  it is already complete, so resuming it would fail the same check again. A
+  transfer that merely stopped is kept, and the next call continues from it —
+  but only when it came from the same URL, recorded in a `.part.source` marker
+  beside it. A partial left by a different download is discarded instead of
+  being spliced onto this one, which a checksum would catch but only PubChem's
+  FTP mirror publishes one.
+
+  `PubChemID.download_database`, `CompToxID.download_database`,
+  `ZeroPM.download_database`, `CheMBL.download_database` and
+  `ChebiSDF.download_sdf` are now one call each into this.
+
 - **`CheMBL.compact()` — a ChEMBL release without the 27 GB you never read.**
   A full ChEMBL release is ~30 GB across 74 tables. PROVESID opens eight of
   them (`molecule_dictionary`, `compound_structures`, `compound_properties`,
@@ -308,6 +349,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Results are now ordered by `molregno`, so a truncated result is the `limit`
   lowest `molregno` values and is the same on every call and every copy of the
   database.
+
+- **ChEMBL's archive extracted straight onto the database it was replacing.**
+  `download_database(force=True)` renamed the extracted file onto `db_path`
+  and validated afterwards, so an extraction or validation failure destroyed
+  the release already on disk — and then deleted what was left. The archive now
+  extracts to `<db_path>.incoming`, answers a query there, and is moved into
+  position only once it has.
+
+- **Three downloads renamed the file into place before checking it.**
+  `CompToxID.download_database` moved the downloaded file onto the destination
+  and only then looked for the `chemicals` table; a failed check therefore left
+  the broken file where the working database had been. `ZeroPM` had the same
+  shape and deleted the database on failure, leaving nothing at all.
+
+  Every download now validates the `.part` file *before* the rename, which is
+  what `PubChemID` alone already did. A failed download cannot replace or
+  remove a working database.
 
 - **OPSIN threw away the reason for every failure it reported.** OPSIN answers a
   name it cannot parse with HTTP 404 and a complete JSON body —

@@ -441,7 +441,7 @@ Steps are independently committable and leave the suite green.
 |---:|---|---|---|
 | 1 | ~~**`CheMBL.compact()`: 30 GB → 2.6 GB from a full database already on disk**~~ **done, §11** | **9** | **S** |
 | 2 | ~~rewrite `search_by_name` as a `UNION`; add `ORDER BY` — 743 ms → 10 µs~~ **done, §12** | 9.5, 9.3 | S |
-| 3 | `datasets.py`: `download_file` with resume + checksum; migrate the 5 download sites | 4.2 | M |
+| 3 | ~~`datasets.py`: `download_file` with resume + checksum; migrate the 5 download sites~~ **done, §13** | 4.2 | M |
 | 4 | `datasets.status/plan/fetch/remove`; `Search(datasets="present")` as the default | 4.1 | M |
 | 5 | build the ChEMBL extract during download; `source=` on `CheMBL` | 9.7 | M |
 | 6 | `close()`, context managers and thread safety on the four SQLite clients | 4.3 | S |
@@ -1351,5 +1351,148 @@ writing it.
 ### 12.7 Still open
 
 - §4.13 — passing one client to `Search` disables the others — remains unfixed.
-- Steps 3 and 4 (`datasets.py`) are next, and every later step's first-run
-  story depends on them.
+- ~~Step 3~~ — **done, §13**. Step 4 (the dataset manager) is next.
+
+---
+
+## 13. Landed on 2026-09-20 — step 3, `datasets.py` (§4.2)
+
+§4.2 asked for one `download_file`: streamed, `Range`-resumed against a `.part`
+file, checksum-verified when the server publishes one, atomic rename on
+success, one progress bar, one logger — and five call sites collapsing to five
+one-line calls. That is what landed, with one addition §4.2 did not ask for and
+one it did not anticipate.
+
+### 13.1 What landed
+
+- `src/provesid/datasets.py`: `download_file`, `read_checksum`, `md5_of_file`,
+  `DownloadError`, and the `CHUNK_SIZE` / `PART_SUFFIX` constants.
+- All five download sites migrated: `pubchem.py`, `comptox.py`, `zeropm.py`,
+  `chembl.py`, `chebi.py`.
+- 26 tests in `tests/test_datasets.py`, an example in
+  `examples/datasets/resumable_download_demo.py`, and two `CHANGELOG.md`
+  entries.
+- `DownloadError`, `download_file`, `md5_of_file` and `read_checksum` exported
+  from `provesid`.
+
+`DownloadError` subclasses `ServiceError`, so the whole family stays catchable
+through one base. The separate class earns its place on recovery rather than on
+taxonomy: an API call that fails is retried or abandoned, while a download that
+fails has usually left a resumable `.part` file on disk.
+
+### 13.2 The addition: `verify`, and checking before the rename
+
+§4.2 listed retry, resume and checksum. Reading the five sites turned up a
+fourth defect it did not mention, and it is the one with teeth.
+
+Only `pubchem.py` validated the downloaded file *before* moving it into place.
+`comptox.py` renamed first and then looked for the `chemicals` table, so a
+failed check left the broken file exactly where the working database had been.
+`zeropm.py` had the same shape and then deleted the database, leaving nothing.
+
+So `download_file` takes a `verify` callback, handed the finished `.part` file,
+and the rename happens only after it returns. All five sites now behave the way
+the best of them did. A download can no longer destroy a working database, and
+the five inconsistent cleanup paths became one.
+
+### 13.3 What the tests found: a resumed download restarts at a chunk boundary
+
+The resumption tests were written asserting that a transfer cut at 40 000 bytes
+resumes at `bytes=40000-`. They failed, resuming at zero, and the reason is
+worth recording because it is a property of the module rather than a bug in it.
+
+`iter_content` yields whole chunks. A connection that breaks mid-chunk raises
+before that chunk is handed over, so those bytes never reach the disk and the
+next request asks from the last *complete* chunk. With the 1 MB default that
+costs at most a megabyte per interruption — nothing against 5.8 GB — but it
+means the resumed offset is a multiple of the chunk size, and a test that
+assumed otherwise was testing urllib3's buffering rather than this module.
+
+The tests now pin the real property (`resumed_from % chunk_size == 0`, and
+progress is monotonic across repeated interruptions) and say why in the
+docstring.
+
+A second finding from the same tests: a file rejected by `verify` or by its
+checksum must be **deleted**, not kept. It downloaded completely, so resuming
+it would finish instantly and fail the same check again — an endless loop over
+a 5.8 GB file. A transfer that merely stopped is kept, which is the whole
+point.
+
+### 13.3a A partial file has to say where it came from
+
+Resumption has a hole that §4.2 does not mention: a `.part` left over from a
+different release — or from a different dataset that happens to share a
+destination — would be resumed, splicing two files together into something
+that looks plausible and is not. A checksum catches it, but only PubChem's FTP
+mirror publishes one; the four Zenodo and EBI downloads have no backstop at
+all.
+
+So `download_file` writes the URL to a `<dest>.part.source` marker and resumes
+only a partial that came from the same URL. Anything else is discarded, with a
+line in the log saying so. The marker is removed when the file lands.
+
+### 13.4 The five sites
+
+| Module | Before | After |
+|---|---|---|
+| `pubchem.py` | 60 lines, verified before rename | one call + a `verify` |
+| `comptox.py` | 45 lines, verified *after* rename | one call + a `verify` |
+| `zeropm.py` | 45 lines, verified after rename, deleted on failure | one call + a `verify` |
+| `chembl.py` | 40 lines, then extraction inline | one call; extraction moved to `_extract_database` |
+| `chebi.py` | 50 lines, then gunzip inline | one call; gunzip kept, gzip's CRC still the truncation check |
+
+`chembl.py` and `chebi.py` keep their archives beside the destination rather
+than in a temporary directory, so an interrupted download's `.part` file is
+found and resumed next time. `chembl.py`'s inline extraction moved into
+`_extract_database`, which left `download_database` short enough to read.
+
+ChEMBL needed one more change to keep the same contract as the other four.
+`verify` covers a file that `download_file` puts in place, but ChEMBL's
+database is written by the *extraction*, which renamed straight onto
+`db_path` — so a `force=True` re-download that failed to extract destroyed the
+release already on disk. The archive now extracts to `<db_path>.incoming`,
+answers a query there, and is moved into position only then.
+
+`requests` and `tqdm` are no longer imported by `comptox.py` or `zeropm.py` at
+all.
+
+### 13.5 Verification
+
+- `tests/test_datasets.py` runs a real HTTP server on localhost rather than
+  stubbing `requests`, because the behaviour that matters is in the `Range`
+  request and the response status — the parts a stub would have to fake, and so
+  the parts a stub would let us get wrong. The server can be told to answer a
+  status, hang up after N bytes, ignore `Range`, or serve a corrupt body.
+- What is pinned: resumption from a leftover `.part`, resumption after a
+  dropped connection, convergence over three successive drops, a partial from
+  another URL or with no marker being discarded, a server that ignores
+  `Range`, HTTP 416, retry on 503/502, a finite budget, a fatal 404 that is not
+  retried, checksum match and mismatch, `read_checksum` against a
+  coreutils-format sidecar, and that no failure path ever writes to the
+  destination. 29 tests.
+- One existing test had to be rewritten:
+  `test_download_database_force_parameter` patched
+  `provesid.zeropm.requests.get`, which no longer exists. It was worth
+  rewriting on its own terms — it wrapped the call in `except Exception: pass`,
+  so it asserted nothing at all. It now patches `download_file`, checks the URL
+  and destination it is handed, and a companion test exercises the `verify`
+  callback against a file that is not SQLite.
+
+### 13.6 Validation
+
+- `pytest tests/` — **1098 passed, 34 skipped, 0 failed** (7m39s).
+- `examples/datasets/resumable_download_demo.py` run end to end: a dropped
+  connection resumed at a chunk boundary, a leftover `.part` resumed, a
+  `.part` from another URL discarded, a published checksum fetched and matched,
+  and a rejected file leaving the previous good one in place.
+
+### 13.7 Still open
+
+- The real datasets were not re-downloaded to test this end to end; that costs
+  ~9 GB and the local server exercises the same code paths. The first real
+  download will be the proof.
+- §8's `pubchem_ftp.py` builder (step 9) is written on top of this, and is
+  where `checksum_url` finally pays for itself: PubChem publishes an `.md5`
+  beside every FTP file, so every one of the seven source files is verified.
+- Step 4 — `datasets.status/plan/fetch/remove` and `Search(datasets="present")`
+  — is next, and is what stops a first run downloading 32 GB without asking.

@@ -3,12 +3,11 @@ import os
 from rdkit import Chem
 import logging
 from rapidfuzz import process, fuzz, utils
-import requests
-from tqdm import tqdm
 import pandas as pd
 from typing import Optional
 
 # Try relative import first, fall back to direct import for testing
+from .datasets import download_file
 from .utils import user_dataset_path
 
 
@@ -95,7 +94,12 @@ class ZeroPM:
     def download_database(self, url=None, force=False):
         """
         Download the ZeroPM SQLite database from a remote URL.
-        
+
+        The transfer is resumable: an interrupted download leaves a ``.part``
+        file beside the destination and the next call continues from it rather
+        than starting the 100 MB again. Nothing replaces an existing database
+        until the new file has downloaded in full and opened successfully.
+
         Parameters
         ----------
         url : str, optional
@@ -107,88 +111,54 @@ class ZeroPM:
         -------
         str
             Path to the downloaded database file
-            
+
         Raises
         ------
         FileExistsError
             If the database already exists and force=False
-        requests.exceptions.RequestException
-            If the download fails
+        provesid.datasets.DownloadError
+            If the download could not be completed, or the file that arrived is
+            not a readable SQLite database
             
         Example
         -------
-        >>> zpm = ZeroPM(auto_download=False)  # Don't auto-download
-        >>> zpm.download_database()  # Manually trigger download
+        >>> zpm = ZeroPM(auto_download=False)      # doctest: +SKIP
+        >>> zpm.download_database()                # doctest: +SKIP
         """
         download_url = url or self.db_url
-        
+
         # Check if database already exists
         if os.path.exists(self.db_path) and not force:
             raise FileExistsError(
                 f"Database already exists at: {self.db_path}\n"
                 f"Use force=True to overwrite"
             )
-        
-        # Create data directory if it doesn't exist
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
 
-        self.logger.info(f"Downloading ZeroPM database from: {download_url}")
-        self.logger.info(f"Destination: {self.db_path}")
+        def must_be_a_database(path):
+            """Reject a download that is not a readable SQLite file.
 
-        temp_path = self.db_path + '.tmp'
-
-        try:
-            # Stream the download with progress bar
-            response = requests.get(download_url, stream=True, timeout=30)
-            response.raise_for_status()
-            
-            # Get total file size
-            total_size = int(response.headers.get('content-length', 0))
-            
-            # Download with progress bar
-            with open(temp_path, 'wb') as f:
-                if total_size > 0:
-                    # Show progress bar
-                    with tqdm(total=total_size, unit='B', unit_scale=True, 
-                             desc="Downloading ZeroPM database") as pbar:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            if chunk:
-                                f.write(chunk)
-                                pbar.update(len(chunk))
-                else:
-                    # No content-length header, download without progress
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-            
-            # Move temp file to final location
-            if os.path.exists(self.db_path):
-                os.remove(self.db_path)
-            os.rename(temp_path, self.db_path)
-            
-            self.logger.info(f"✓ Database downloaded successfully to: {self.db_path}")
-            
-            # Verify the database is valid
+            Run on the ``.part`` file, before it is moved into place, so a
+            damaged download leaves any existing database untouched.
+            """
+            connection = sqlite3.connect(path)
             try:
-                test_conn = sqlite3.connect(self.db_path)
-                test_cursor = test_conn.cursor()
-                test_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1")
-                test_cursor.fetchone()
-                test_conn.close()
-                self.logger.info("✓ Database verified successfully")
-            except sqlite3.Error as e:
-                os.remove(self.db_path)
-                raise RuntimeError(f"Downloaded database is corrupted: {e}")
-            
-            return self.db_path
-            
-        except requests.exceptions.RequestException as e:
-            # Clean up temp file if it exists
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            self.logger.error(f"Failed to download database: {e}")
-            raise
-    
+                connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' LIMIT 1"
+                ).fetchone()
+            except sqlite3.Error as exc:
+                raise RuntimeError(f"Downloaded database is corrupted: {exc}") from exc
+            finally:
+                connection.close()
+
+        download_file(
+            download_url,
+            self.db_path,
+            verify=must_be_a_database,
+            description="ZeroPM database",
+            log=self.logger,
+        )
+        return self.db_path
+
     def _get_chemical_names_cache(self):
         """
         Lazy load and cache all chemical names for fuzzy matching.

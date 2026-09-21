@@ -30,7 +30,7 @@ import tempfile
 import pandas as pd
 
 from provesid import PubChemError, PubChemID
-from provesid.pubchem import PUBCHEM_DESCRIPTORS, RDKIT_DESCRIPTORS, rdkit_descriptors
+from provesid.pubchem_id import PUBCHEM_DESCRIPTORS, RDKIT_DESCRIPTORS, rdkit_descriptors
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(message)s")
 pd.set_option("display.width", 120)

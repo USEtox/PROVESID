@@ -1272,10 +1272,10 @@ def test_every_offline_source_initialises():
     """
     from platformdirs import user_data_dir
 
-    from provesid.chebi import ChebiSDF
+    from provesid.chebi_sdf import ChebiSDF
     from provesid.chembl import CheMBL
     from provesid.comptox import CompToxID
-    from provesid.pubchem import PubChemID
+    from provesid.pubchem_id import PubChemID
     from provesid.zeropm import ZeroPM
 
     data_dir = user_data_dir(appname="provesid", appauthor="USEtox")

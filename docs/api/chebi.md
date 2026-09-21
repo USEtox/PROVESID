@@ -353,6 +353,21 @@ df = pd.DataFrame(results)
 print(df)
 ```
 
+## Offline: the SDF release
+
+`ChebiSDF` answers the same kind of lookups from ChEBI's SDF release, with no
+network, once it has downloaded and indexed the file. It lives in
+`provesid.chebi_sdf` and is imported from `provesid`:
+
+```python
+from provesid import ChebiSDF
+
+chebi = ChebiSDF()
+water = chebi.get_compound_by_id("CHEBI:15377")
+```
+
+::: provesid.chebi_sdf
+
 ## Links
 
 - [ChEBI Database](https://www.ebi.ac.uk/chebi/)

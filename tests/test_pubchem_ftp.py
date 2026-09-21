@@ -33,7 +33,7 @@ import pytest
 
 from provesid import pubchem_ftp
 from provesid.datasets import DownloadError
-from provesid.pubchem import PubChemID
+from provesid.pubchem_id import PubChemID
 from provesid.pubchem_ftp import (
     build_pubchem_id_db,
     extras_url,

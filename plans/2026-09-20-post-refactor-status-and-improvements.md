@@ -374,7 +374,7 @@ replace it.
 
 ### 4.12 Smaller items, unchanged from the August plan
 
-- **Step 7**, the `pubchem.py` / `chebi.py` splits. `pubchem.py` is 3 301 lines
+- ~~**Step 7**, the `pubchem.py` / `chebi.py` splits.~~ **Done, §21.** `pubchem.py` is 3 301 lines
   holding two unrelated things: an online PUG-REST client and an offline SQLite
   database. §8 below makes the split more attractive, since the FTP builder
   belongs beside `PubChemID`, not beside `PubChemAPI`.
@@ -450,7 +450,7 @@ Steps are independently committable and leave the suite green.
 | 9 | ~~`pubchem_ftp.py`: the FTP identifier builder~~ **done, §18** | 8 | L |
 | 10 | ~~`PubChemID.descriptors()` — RDKit descriptors on demand~~ **done, §19** | 8.6 | M |
 | 11 | ~~`CheMBL(source="mysql")` — the streaming route, verified against step 5~~ **done, §20** | 9.7 | M |
-| 12 | split `pubchem.py` → `+ pubchem_id.py`; `chebi.py` → `+ chebi_sdf.py` | 4.12 | M |
+| 12 | ~~split `pubchem.py` → `+ pubchem_id.py`; `chebi.py` → `+ chebi_sdf.py`~~ **done, §21** | 4.12 | M |
 | 13 | `sources.py`; collapse the `Search` ladders | 4.5 | M |
 | 14 | `Search(online_fallback=...)` as a row in the source table | 4.4 | M |
 | 15 | `Search.PRESETS` | 4.6 | S |
@@ -2790,3 +2790,92 @@ the old registry it freed 0 of their 50 bytes.
   catch truncation, but not substitution.
 - **The peak is reasoned, not measured** (§20.2).
 
+
+---
+
+## 21. Landed on 2026-09-21 — step 12, the `pubchem.py` and `chebi.py` splits (§4.12)
+
+The August plan's B.3 and B.4, done as specified. `pubchem.py` was 3 730
+lines holding an online PUG-REST client and an offline SQLite database. It is
+now 2 029 lines of client, beside `pubchem_id.py` at 1 793. `chebi.py` was
+1 614 lines and is now 947 lines of REST client, beside `chebi_sdf.py` at 687.
+`from provesid import PubChemID, ChebiSDF` is unchanged. Imports that named a
+submodule are not, and per dev-principle §1 there is no shim.
+
+### 21.1 What landed
+
+- `src/provesid/pubchem_id.py`: `PubChemID`, plus the descriptor block that
+  §19 put in `pubchem.py`, which is `RDKIT_DESCRIPTORS`, `PUBCHEM_DESCRIPTORS`,
+  `rdkit_descriptors`, `_rdkit_descriptor_functions` and
+  `_check_descriptor_names`. It imports `PubChemAPI` and `PROPERTY_CHUNK_SIZE`
+  from `pubchem.py`. Nothing imports the other way, so there is no cycle.
+- `src/provesid/chebi_sdf.py`: `ChebiSDF`. `get_chebi_entity` and
+  `search_chebi` stay with the online client, as B.4 said.
+- A module docstring for each of the four files. `pubchem.py` had only a
+  two-line comment before.
+- Docstrings for the nine PUG-REST constant classes that B.3 asked for, from
+  `Domain` to `OutputFormat`. Four of them carry a doctest.
+- Callers updated: `__init__.py`, `search.py`, `datasets._CLIENTS`, eight test
+  files, `examples/pubchem/descriptors_demo.py`,
+  `examples/ChEBI/chebi_sdf_tutorial.md`, `docs/api/pubchem.md` (a new
+  `::: provesid.pubchem_id`) and `docs/api/chebi.md` (a new section on
+  `ChebiSDF` with `::: provesid.chebi_sdf`). `CHANGELOG.md` has an entry under
+  *Changed*, marked breaking.
+
+### 21.2 Verbatim, and checked to be
+
+B.3 said "verbatim", and a move is only safe if it really is. Every top-level
+function, class and assignment in HEAD's two files was compared, by AST span
+and source text, with its counterpart in the four new files. The comparison
+found no definition missing, none added, and none with a changed body. There
+is one exception, made afterwards and on purpose: `ChebiSDF.download_sdf`
+gained `-> str` (§21.4). The only other edits to the old files removed the 16
+imports that only the moved classes used. One of those was `from rdkit import
+Chem` in `chebi.py`, so `import provesid.chebi` no longer loads RDKit.
+
+### 21.3 A test guard that would have gone quiet
+
+`tests/test_dataset_manager.py::no_downloads` makes any bulk download fail the
+test. It does this by patching `download_file` in each module that downloads,
+using `raising=False`. After the split, `provesid.pubchem` and `provesid.chebi`
+no longer have a `download_file`. Leaving the list alone would therefore not
+have failed a single test. It would have patched two attributes that nothing
+reads and left the real call sites in `pubchem_id` and `chebi_sdf` unguarded.
+The list now names the new modules. This is the case where a move breaks
+nothing visibly and still removes a safety check, so it is worth recording.
+
+### 21.4 `ChebiSDF` is rendered for the first time
+
+`docs/api/chebi.md` had never had a `:::` directive, so no `ChebiSDF`
+docstring had ever been through griffe. Adding one made `mkdocs build
+--strict` fail on `download_sdf`, whose docstring promised a `str` without an
+annotation. The annotation is correct because the method returns
+`self.sdf_path`, and it is the only change to moved code.
+
+### 21.5 Validation
+
+- `pytest` on the affected files before the docstring edits, namely
+  `test_pubchem_descriptors`, `test_pubchem_properties`, `test_pubchem_id`,
+  `test_pubchem_id_quick`, `test_pubchem_ftp`, `test_chebi_sdf`,
+  `test_chebi`, `test_dataset_manager`, `test_search_new_methods` and
+  `test_sqlite_lifecycle`: **352 passed, 4 skipped**.
+- `pytest tests/`: **1372 passed, 36 skipped, 18 failed** (12m30s). This is
+  §20.6's result to the test. The 18 are the same live
+  `pubchem.ncbi.nlm.nih.gov` HTTP 503s in `test_pubchem.py` and
+  `test_pubchemview.py`. The run began before the constant-class docstrings
+  were added, so the offline PubChem, ChEBI SDF and HTTP files were run again
+  on the final code: 139 passed.
+- `mkdocs build --strict`: clean.
+- `pytest --doctest-modules` on the two new modules: 23 failures, and HEAD
+  has **the same 23** on the same docstrings in their old location. They are
+  step 17's problem. The examples call methods on a database the doctest never
+  opened, or ask PubChem, which answered 503 again today (§19.7). The four new
+  doctests on the constant classes pass.
+
+### 21.6 Still open
+
+- `docs/api/pubchem.md` and `chebi.md` are hand-written pages with a `:::`
+  block dropped into them. Step 18 rebuilds them from the docstrings.
+- The historical table in `datasets.py`'s module docstring still lists
+  `pubchem.py` and `chebi.py` as download sites. It records what was true when
+  §13 found the five copies, so it was left as history rather than rewritten.

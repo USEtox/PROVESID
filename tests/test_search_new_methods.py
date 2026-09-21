@@ -29,40 +29,40 @@ class TestPubChemIDMethods:
     """Verify PubChemID exposes the methods used by _resolve_inchikey / _resolve_inchi."""
 
     def test_get_by_inchikey_method_exists(self):
-        from provesid.pubchem import PubChemID
+        from provesid.pubchem_id import PubChemID
         assert hasattr(PubChemID, "get_by_inchikey"), (
             "PubChemID must have get_by_inchikey() for _resolve_inchikey"
         )
         assert callable(PubChemID.get_by_inchikey)
 
     def test_get_by_inchi_method_exists(self):
-        from provesid.pubchem import PubChemID
+        from provesid.pubchem_id import PubChemID
         assert hasattr(PubChemID, "get_by_inchi"), (
             "PubChemID must have get_by_inchi() for _resolve_inchi"
         )
         assert callable(PubChemID.get_by_inchi)
 
     def test_search_by_formula_method_exists(self):
-        from provesid.pubchem import PubChemID
+        from provesid.pubchem_id import PubChemID
         assert hasattr(PubChemID, "search_by_formula"), (
             "PubChemID must have search_by_formula() for _resolve_formula"
         )
         assert callable(PubChemID.search_by_formula)
 
     def test_get_by_smiles_method_exists(self):
-        from provesid.pubchem import PubChemID
+        from provesid.pubchem_id import PubChemID
         assert hasattr(PubChemID, "get_by_smiles"), (
             "PubChemID must have get_by_smiles() for _resolve_smiles"
         )
         assert callable(PubChemID.get_by_smiles)
 
     def test_search_by_name_method_exists(self):
-        from provesid.pubchem import PubChemID
+        from provesid.pubchem_id import PubChemID
         assert hasattr(PubChemID, "search_by_name")
         assert callable(PubChemID.search_by_name)
 
     def test_get_by_cas_method_exists(self):
-        from provesid.pubchem import PubChemID
+        from provesid.pubchem_id import PubChemID
         assert hasattr(PubChemID, "get_by_cas")
         assert callable(PubChemID.get_by_cas)
 
@@ -152,34 +152,34 @@ class TestChebiSDFMethods:
     """Verify ChebiSDF exposes the methods used by the Search resolvers."""
 
     def test_search_by_formula_method_exists(self):
-        from provesid.chebi import ChebiSDF
+        from provesid.chebi_sdf import ChebiSDF
         assert hasattr(ChebiSDF, "search_by_formula"), (
             "ChebiSDF must have search_by_formula() for _resolve_formula"
         )
         assert callable(ChebiSDF.search_by_formula)
 
     def test_search_by_inchikey_method_exists(self):
-        from provesid.chebi import ChebiSDF
+        from provesid.chebi_sdf import ChebiSDF
         assert hasattr(ChebiSDF, "search_by_inchikey")
         assert callable(ChebiSDF.search_by_inchikey)
 
     def test_search_by_inchi_method_exists(self):
-        from provesid.chebi import ChebiSDF
+        from provesid.chebi_sdf import ChebiSDF
         assert hasattr(ChebiSDF, "search_by_inchi")
         assert callable(ChebiSDF.search_by_inchi)
 
     def test_search_by_cas_method_exists(self):
-        from provesid.chebi import ChebiSDF
+        from provesid.chebi_sdf import ChebiSDF
         assert hasattr(ChebiSDF, "search_by_cas")
         assert callable(ChebiSDF.search_by_cas)
 
     def test_search_by_name_method_exists(self):
-        from provesid.chebi import ChebiSDF
+        from provesid.chebi_sdf import ChebiSDF
         assert hasattr(ChebiSDF, "search_by_name")
         assert callable(ChebiSDF.search_by_name)
 
     def test_search_by_synonym_method_exists(self):
-        from provesid.chebi import ChebiSDF
+        from provesid.chebi_sdf import ChebiSDF
         assert hasattr(ChebiSDF, "search_by_synonym")
         assert callable(ChebiSDF.search_by_synonym)
 
@@ -242,7 +242,7 @@ class TestPubChemIDReturnTypes:
 
     def _make_mock_pubchem(self, rows, columns):
         """Create a PubChemID over a mocked connection, without __init__."""
-        from provesid.pubchem import PubChemID
+        from provesid.pubchem_id import PubChemID
 
         mock_conn = MagicMock(spec=sqlite3.Connection)
         mock_cursor = MagicMock()
@@ -256,7 +256,7 @@ class TestPubChemIDReturnTypes:
         return obj
 
     def test_get_by_inchikey_returns_dict_or_none(self):
-        from provesid.pubchem import PubChemID
+        from provesid.pubchem_id import PubChemID
 
         cols = ["cid", "inchikey", "inchi", "smiles", "mf", "mw", "cmpdname", "iupacname",
                 "cas_numbers", "synonyms"]
@@ -269,7 +269,7 @@ class TestPubChemIDReturnTypes:
         assert result is None or isinstance(result, dict)
 
     def test_get_by_inchi_returns_dict_or_none(self):
-        from provesid.pubchem import PubChemID
+        from provesid.pubchem_id import PubChemID
 
         cols = ["cid", "inchi"]
         obj = self._make_mock_pubchem([], cols)
@@ -277,7 +277,7 @@ class TestPubChemIDReturnTypes:
         assert result is None or isinstance(result, dict)
 
     def test_search_by_formula_returns_list(self):
-        from provesid.pubchem import PubChemID
+        from provesid.pubchem_id import PubChemID
 
         cols = ["cid", "mf", "smiles"]
         obj = self._make_mock_pubchem([], cols)

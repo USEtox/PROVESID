@@ -766,6 +766,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PubChemAPI.get_cache_info`.
 
 ### Changed
+- **Breaking: `PubChemID` and `ChebiSDF` have modules of their own.** The
+  offline database clients were split off from the online clients they shared
+  a file with: `PubChemID`, `rdkit_descriptors`, `RDKIT_DESCRIPTORS` and
+  `PUBCHEM_DESCRIPTORS` moved from `provesid.pubchem` to `provesid.pubchem_id`,
+  and `ChebiSDF` from `provesid.chebi` to `provesid.chebi_sdf`. The code
+  moved unchanged. `from provesid import PubChemID, ChebiSDF` works as before,
+  while `from provesid.pubchem import PubChemID` must become
+  `from provesid.pubchem_id import PubChemID`. A side effect is that
+  `import provesid.chebi` no longer imports RDKit.
 - **Breaking: `PubChemID()` builds a missing database from PubChem's FTP site
   instead of downloading it from Zenodo.** That is 15.4 GB transferred and
   about 12 minutes of processing, against 2.2 GiB; pass `source="zenodo"` for the

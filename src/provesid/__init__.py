@@ -30,10 +30,10 @@ from .chebi import (
     ChEBIError,
     ChEBINotFoundError,
     ChEBITimeoutError,
-    ChebiSDF,
     get_chebi_entity,
     search_chebi,
 )
+from .chebi_sdf import ChebiSDF
 from .chembl import CheMBL, ChEMBLError
 from .classyfire import ClassyFireAPI
 from .opsin import OPSIN, OPSINError, OPSINNotFoundError, OPSINTimeoutError, PYOPSIN
@@ -45,8 +45,8 @@ from .pubchem import (
     PubChemServerError,
     PubChemTimeoutError,
     Domain,
-    PubChemID,
 )
+from .pubchem_id import PubChemID
 from .comptox import CompToxID
 from .sqlite_client import SQLiteClient, DatabaseClosedError
 from .pubchemview import (

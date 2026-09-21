@@ -1,6 +1,6 @@
 """
 Tests for computed descriptors on demand: ``PubChemID.descriptors`` and
-:func:`provesid.pubchem.rdkit_descriptors`.
+:func:`provesid.pubchem_id.rdkit_descriptors`.
 
 Everything here is offline. RDKit runs for real; the PUG-REST transport is
 stubbed with one that answers whatever properties a request names from a small
@@ -14,10 +14,10 @@ import sqlite3
 
 import pytest
 
-from provesid.pubchem import (
+from provesid.pubchem import PubChemAPI
+from provesid.pubchem_id import (
     PUBCHEM_DESCRIPTORS,
     RDKIT_DESCRIPTORS,
-    PubChemAPI,
     PubChemID,
     _rdkit_descriptor_functions,
     rdkit_descriptors,

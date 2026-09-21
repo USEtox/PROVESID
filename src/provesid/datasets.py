@@ -1087,9 +1087,9 @@ def plan(names: Optional[Union[str, Iterable[str]]] = None,
 #: The client modules import *this* one for :func:`download_file`, so the
 #: registry cannot import them back at module level.
 _CLIENTS: Dict[str, Tuple[str, str]] = {
-    "pubchem": (".pubchem", "PubChemID"),
+    "pubchem": (".pubchem_id", "PubChemID"),
     "comptox": (".comptox", "CompToxID"),
-    "chebi": (".chebi", "ChebiSDF"),
+    "chebi": (".chebi_sdf", "ChebiSDF"),
     "chembl": (".chembl", "CheMBL"),
     "zeropm": (".zeropm", "ZeroPM"),
 }

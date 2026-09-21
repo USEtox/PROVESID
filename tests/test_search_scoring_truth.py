@@ -3,7 +3,7 @@
 Two independent defects made ``Search("cas")`` return the wrong structure for
 18 of 65 pesticide CAS numbers (reported 2026-08-03):
 
-1. **ChEBI record offsets drifted** (``provesid.chebi.ChebiSDF``).  The SDF index
+1. **ChEBI record offsets drifted** (``provesid.chebi_sdf.ChebiSDF``).  The SDF index
    recorded *text-mode* byte offsets, so every CRLF line in the ChEBI SDF
    under-counted by one byte.  The drift grew to ~59 kB by the end of the file
    and ``get_compound_by_id`` seeked into a **neighbouring record**, so ChEBI
@@ -224,7 +224,7 @@ def comptox():
 @pytest.fixture(scope="module")
 def chebi():
     """Yield an offline ChebiSDF client, skipping if the SDF is absent."""
-    from provesid.chebi import ChebiSDF
+    from provesid.chebi_sdf import ChebiSDF
 
     try:
         return ChebiSDF(auto_download=False)

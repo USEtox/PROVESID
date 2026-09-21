@@ -17,10 +17,10 @@ from provesid.pubchem import (
     PROPERTY_CHUNK_SIZE,
     URL_IDENTIFIER_LIMIT,
     PubChemAPI,
-    PubChemID,
     PubChemNotFoundError,
     PubChemServerError,
 )
+from provesid.pubchem_id import PubChemID
 
 
 # --------------------------------------------------------------------------

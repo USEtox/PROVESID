@@ -395,7 +395,8 @@ def no_downloads(monkeypatch):
     def refuse(*args, **kwargs):
         raise AssertionError(f"download_file was called: {args[:1]}")
 
-    for module in ("pubchem", "comptox", "zeropm", "chembl", "chebi", "datasets"):
+    for module in ("pubchem_id", "comptox", "zeropm", "chembl", "chebi_sdf",
+                   "datasets"):
         monkeypatch.setattr(f"provesid.{module}.download_file", refuse,
                             raising=False)
 

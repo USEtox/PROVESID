@@ -167,6 +167,11 @@ db = PubChemID(source="zenodo")     # download a 2.2 GiB prebuilt copy instead
 `source` describes how a missing database is acquired; a database already on
 disk is opened whichever way it was made.
 
+`PubChemID` lives in `provesid.pubchem_id`, apart from the online client, and
+is imported from `provesid` like everything else.
+
+::: provesid.pubchem_id
+
 ### Building from PubChem's FTP site
 
 `provesid.pubchem_ftp.build_pubchem_id_db()` — what `PubChemID()` calls — builds
@@ -319,7 +324,7 @@ Use one source throughout an analysis. `descriptors_for_cids()` and
 counterparts. For a structure that is not in PubChem at all:
 
 ```python
-from provesid.pubchem import rdkit_descriptors
+from provesid.pubchem_id import rdkit_descriptors
 
 rdkit_descriptors("CCO", ["TPSA", "MolLogP"])
 # {'TPSA': 20.23, 'MolLogP': -0.0014}

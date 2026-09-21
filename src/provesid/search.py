@@ -63,12 +63,12 @@ from typing import Any, Dict, List, Optional, Tuple, Type, Union
 import pandas as pd
 from tqdm import tqdm
 
-from .chebi import ChebiSDF
+from .chebi_sdf import ChebiSDF
 from .chembl import CheMBL
 from .comptox import CompToxID
 from .datasets import DATASETS, fetch_command, human_bytes, require
 from .opsin import PYOPSIN
-from .pubchem import PubChemID
+from .pubchem_id import PubChemID
 from .sqlite_client import DatabaseClosedError
 from .zeropm import ZeroPM
 from .tools import (

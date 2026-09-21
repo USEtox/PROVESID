@@ -12,7 +12,7 @@ jupytext:
 On first initialization, an index will be built (takes ~15 seconds). Subsequent loads use the cached index.
 
 ```{code-cell} ipython3
-from provesid.chebi import ChebiSDF
+from provesid.chebi_sdf import ChebiSDF
 
 # Initialize (will use cached index if available)
 chebi_sdf = ChebiSDF()

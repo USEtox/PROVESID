@@ -448,7 +448,7 @@ Steps are independently committable and leave the suite green.
 | 7 | `classyfire.py` raises; rewrite its tests; drop it from the docs' service lists — **postponed, §17.0** | 4.8 | S |
 | 8 | ~~`cache.py`: persistent dir, parameterised service functions, key version~~ **done, §17** | 4.7 | S |
 | 9 | ~~`pubchem_ftp.py`: the FTP identifier builder~~ **done, §18** | 8 | L |
-| 10 | **`PubChemID.descriptors()` — RDKit descriptors on demand** | **8.6** | **M** |
+| 10 | ~~`PubChemID.descriptors()` — RDKit descriptors on demand~~ **done, §19** | 8.6 | M |
 | 11 | `CheMBL(source="mysql")` — the streaming route, verified against step 5 | 9.7 | M |
 | 12 | split `pubchem.py` → `+ pubchem_id.py`; `chebi.py` → `+ chebi_sdf.py` | 4.12 | M |
 | 13 | `sources.py`; collapse the `Search` ladders | 4.5 | M |
@@ -2498,3 +2498,150 @@ curated link from a synonym. The 172 408 compounds with
 - **Download and parse are sequential.** Fetching the next file while parsing
   the current one would roughly halve the wall-clock time, at the price of a
   second file on disk at the peak.
+
+---
+
+## 19. Landed on 2026-09-21 — step 10, `PubChemID.descriptors()` (§8.6)
+
+§8.6 asked for the other half of decision 1: the eight descriptors dropped
+from the database, computed with RDKit when asked, labelled as RDKit's, with
+PubChem's own values still available by name. That is what landed, with the
+one naming decision §8.6 left implicit (§19.2), and with the RDKit definitions
+chosen by measurement rather than by default (§19.3).
+
+### 19.1 What landed
+
+- `PubChemID.descriptors(cid, descriptors=None, source="rdkit",
+  use_online_fallback=True)`, with `descriptors_for_cids` and
+  `descriptors_table`, shaped exactly like `properties` /
+  `properties_for_cids` / `properties_table`. The row-per-CID reshaping they
+  share moved into `PubChemID._table`.
+- `source="rdkit"` reads the SMILES through `properties_for_cids(cids,
+  ["SMILES"])`, so it gets offline-first-then-online for free. A compound the
+  database holds costs no request, and one it does not hold has only its
+  SMILES fetched. The result says `Source='rdkit'` either way.
+- `source="pubchem"` is `properties_for_cids(cids, names)`, which goes straight
+  online for these names and labels the result `Source='online'`, as
+  `properties()` already did.
+- Module level in `pubchem.py`: `rdkit_descriptors(smiles, descriptors=None)`
+  for any structure, and `RDKIT_DESCRIPTORS` / `PUBCHEM_DESCRIPTORS`.
+- 36 tests in `tests/test_pubchem_descriptors.py`,
+  `examples/pubchem/descriptors_demo.py`, a "Descriptors on Demand" section in
+  `docs/api/pubchem.md`, `CHANGELOG.md`.
+
+### 19.2 `MolLogP`, not `XLogP`
+
+§8.6 said the values must be "labelled as RDKit's" and that `Source='rdkit'`
+does the labelling. For six of the seven that is enough: a TPSA is a TPSA and a
+donor count is a donor count, even when two programs count them differently.
+Keeping PubChem's names means a table can switch source without renaming its
+columns (tested).
+
+The logP is different. `XLogP` is not the name of a quantity but of a model,
+XLogP3, and RDKit's number comes from another model, Crippen's. Returning
+Crippen's value under the key `XLogP` would put a wrong claim in the column
+name, and `Source='rdkit'` would not undo it once the column is out of the
+table. So RDKit's logP is `MolLogP`, RDKit's own name. Asking RDKit for
+`XLogP` raises an error pointing to `MolLogP` and to `source="pubchem"`. Asking
+RDKit for `Complexity` gets the same kind of redirect, and so does asking PubChem
+for `MolLogP`.
+
+### 19.3 The definitions were measured against PubChem
+
+RDKit offers more than one definition of several of these descriptors.
+The shipped Zenodo copy still stores PubChem's values, so each candidate was
+compared against them on 20 000 random CAS-bearing compounds (4 of the SMILES
+did not parse):
+
+| descriptor | RDKit function | equal to PubChem |
+|---|---|---:|
+| `HeavyAtomCount` | `GetNumHeavyAtoms` | 100.00% |
+| `Charge` | `GetFormalCharge` | 99.31% → 100% (§19.4) |
+| `HBondDonorCount` | `CalcNumHBD` (= `Lipinski.NumHDonors`) | 93.52% |
+| | `CalcNumLipinskiHBD` | 81.57% |
+| `RotatableBondCount` | `CalcNumRotatableBonds`, default | 73.90% |
+| | `StrictLinkages` | 76.13% |
+| | `NonStrict` | 70.84% |
+| `TPSA` | `CalcTPSA(includeSandP=True)` | **69.80%** |
+| | `CalcTPSA()` default | 60.27% |
+| `HBondAcceptorCount` | `CalcNumHBA` (= `Lipinski.NumHAcceptors`) | 63.47% |
+| | `CalcNumLipinskiHBA` | 48.41% |
+| `MolLogP` vs `XLogP` | `Crippen.MolLogP` | 61.6% within 0.5; median gap 0.37, p90 1.21 |
+
+TPSA is the one where the choice matters: PubChem counts sulfur and phosphorus,
+Ertl's original definition and RDKit's default leave them out, and counting
+them gains ten points. Rotatable bonds stayed on RDKit's default. The
+`StrictLinkages` variant is two points closer, but it is not the usual
+definition and not the one a user would expect. The remaining gaps are Cactvs
+counting differently from RDKit, not a wrong choice. PubChem counts, for
+instance, the bond to a CF3 group as rotatable, and fluorine and halide
+counter-ions as acceptors. So the table is in `rdkit_descriptors`' docstring and in
+the docs, and "use one source throughout an analysis" is the advice.
+
+`MolLogP` and `TPSA` are rounded to four decimals. Both are sums of tabulated
+per-atom contributions with at most four decimals, so this drops the
+floating-point residue (aspirin's TPSA came out 63.60000000000001) and nothing
+else.
+
+### 19.4 One bug found in the Zenodo copy
+
+Every `Charge` "disagreement" in §19.3 was the Zenodo copy's fault, not
+RDKit's. The CSV build stored negative charges as unsigned 32-bit integers:
+**8 617 compounds carry `4294967295`-style charges, and not one row has a
+negative charge**. Until step 9, `properties(cid, ["Charge"])` served that
+column from disk, so every anion in the database got a charge of about four
+billion. Step 9 stopped serving descriptors from disk (§18.5), so nothing
+returns these values now. It is one more reason to replace the Zenodo copy with
+an FTP build (§18.10).
+
+### 19.5 Cost
+
+On the 1.59 M-compound Zenodo copy: **0.47 ms** for one compound, and
+**8.0 s for 10 000** random compounds (0.8 ms each), with no requests. Of the
+~0.5 ms RDKit spends per molecule, parsing is ~145 µs and Crippen's logP
+~245 µs; the other six descriptors together are ~115 µs. Asking only for the
+descriptors needed is the one real saving. The wrapper's overhead (validating
+names, blocking RDKit's log) is under 5 µs.
+
+### 19.6 Verification
+
+- `tests/test_pubchem_descriptors.py`, 36 tests. RDKit runs for real, and the
+  PUG-REST transport is replaced by a recorder that answers any requested
+  property from a small table. Pinned: every RDKit descriptor of aspirin
+  exactly; order, types, the S-and-P TPSA, net charge; unparsable and empty
+  SMILES; the three redirecting errors and an unknown name, all before any
+  request; that `source="rdkit"` makes no request for held compounds and one
+  `SMILES`-only request for the rest; strictly offline returning None; a
+  compound with an unreadable or no structure coming back as a record with no
+  values, not as unknown; that a Zenodo-shaped database's stored `xlogp` and
+  `hbondacc` are *not* what `source="rdkit"` returns; `source="pubchem"`'s
+  values, label and request; its refusal of `use_online_fallback=False`; the
+  table's `missing` rows and shared columns across sources.
+- `examples/pubchem/descriptors_demo.py` run end to end. Its PubChem section
+  took the skip path: PUG-REST answered 503, as in §18.9.
+
+### 19.7 Validation
+
+- `pytest tests/test_pubchem_descriptors.py tests/test_pubchem_properties.py
+  tests/test_pubchem_ftp.py`: **110 passed**.
+- `pytest tests/`: **1284 passed, 36 skipped, 19 failed** (12m20s). The
+  nineteen are exactly §18.9's: live calls to `pubchem.ncbi.nlm.nih.gov` in
+  `test_pubchem.py` (4) and `test_pubchemview.py` (15), all HTTP 503. PubChem
+  is still refusing this machine a day later.
+- `mkdocs build --strict`: clean.
+- `pytest --doctest-modules src/provesid/pubchem.py`: the new examples pass. The
+  25 failures there are the same 25 as before this change: older examples that
+  assume a default database or the network.
+
+### 19.8 Still open
+
+- **`Search` does not offer descriptors.** Its output could carry them as
+  optional columns, computed from the consensus SMILES, which would also cover
+  compounds PubChem does not hold. That belongs with step 15's presets.
+- **`properties()` still accepts `XLogP` and friends** and sends them online,
+  which is now the same as `descriptors(source="pubchem")`. Two routes to one
+  answer is tolerable while `properties()` is PubChem's property vocabulary. If
+  it ever narrows to what is data, those names should redirect to
+  `descriptors()`.
+- **The Zenodo copy's wrapped charges** (§19.4) are one more reason for the FTP
+  rebuild already listed in §18.10.

@@ -269,6 +269,62 @@ means PubChem computes no logP for that compound, not that the lookup fell
 short. Values are normalised to one type across both sources, since PUG-REST
 reports `MolecularWeight` as a string where the local database holds a float.
 
+## Descriptors on Demand
+
+The local database stores no computed descriptors: XLogP, TPSA and the atom
+and bond counts are the output of a model run over the structure, and there is
+more than one model. `descriptors()` runs one and names it:
+
+```python
+from provesid import PubChemID
+
+db = PubChemID()
+
+db.descriptors(2244)                        # RDKit, from the stored SMILES
+# {'CID': 2244, 'Source': 'rdkit', 'MolLogP': 1.3101, 'TPSA': 63.6,
+#  'HBondDonorCount': 1, 'HBondAcceptorCount': 3, 'RotatableBondCount': 2,
+#  'HeavyAtomCount': 13, 'Charge': 0}
+
+db.descriptors(2244, ["XLogP", "Complexity"], source="pubchem")
+# {'CID': 2244, 'Source': 'online', 'XLogP': 1.2, 'Complexity': 212.0}
+```
+
+- **`source="rdkit"`** (default) needs no network for a compound the database
+  holds, and costs about half a millisecond per compound. For one it does not
+  hold, only the SMILES is fetched from PubChem; `use_online_fallback=False`
+  prevents even that.
+- **`source="pubchem"`** is PubChem's own values over PUG-REST, the same path
+  as `properties()`. It is the only way to `XLogP` and `Complexity`.
+
+The names are PubChem's wherever the quantity is the same one, so a table can
+switch source without renaming its columns. The logP is the exception: RDKit's
+is Crippen's model, not XLogP3, so it is called `MolLogP`, and asking RDKit for
+`XLogP` raises an error that says so. `Complexity` has no RDKit counterpart.
+
+The numbers differ even where the names agree, because PubChem computes its
+descriptors with Cactvs. Against PubChem's values for 20 000 random compounds
+in the database:
+
+| descriptor | RDKit equals PubChem |
+|---|---:|
+| `HeavyAtomCount`, `Charge` | all |
+| `HBondDonorCount` | 94% |
+| `RotatableBondCount` | 74% |
+| `TPSA` | 70% |
+| `HBondAcceptorCount` | 63% |
+| `MolLogP` vs `XLogP` | 62% within 0.5 log units |
+
+Use one source throughout an analysis. `descriptors_for_cids()` and
+`descriptors_table()` are the bulk forms, shaped like their `properties_`
+counterparts. For a structure that is not in PubChem at all:
+
+```python
+from provesid.pubchem import rdkit_descriptors
+
+rdkit_descriptors("CCO", ["TPSA", "MolLogP"])
+# {'TPSA': 20.23, 'MolLogP': -0.0014}
+```
+
 ## Error Handling
 
 ```python

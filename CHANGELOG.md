@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Computed descriptors on demand: `PubChemID.descriptors()`.** The database
+  no longer stores XLogP, TPSA or the atom and bond counts; this computes them
+  when asked, and names the model that answered:
+
+  ```python
+  db = PubChemID()
+  db.descriptors(2244)                                  # RDKit, from the stored SMILES
+  # {'CID': 2244, 'Source': 'rdkit', 'MolLogP': 1.3101, 'TPSA': 63.6, ...}
+  db.descriptors(2244, ["XLogP"], source="pubchem")     # PubChem's, over PUG-REST
+  db.descriptors_table(cids)                            # a row per CID
+  rdkit_descriptors("CCO")                              # any structure, no database
+  ```
+
+  `source="rdkit"` (default) needs no network for a compound the database holds
+  and costs about 0.5 ms per compound; for one it does not hold, only the SMILES
+  is fetched. Names are PubChem's where the quantity is the same, except the
+  logP: RDKit's is Crippen's, not XLogP3, so it is `MolLogP`, and asking RDKit
+  for `XLogP` or `Complexity` raises an error saying where to get it. The
+  values are RDKit's, not PubChem's Cactvs values. Against 20 000 compounds,
+  heavy atoms and charge agree for all, donors for 94%, rotatable bonds 74%,
+  TPSA 70% (counted with S and P, as PubChem does), acceptors 63%.
+  `examples/pubchem/descriptors_demo.py`.
+
 - **`pubchem_id.db` is built from PubChem's FTP site, and says where it came
   from.** The new `provesid.pubchem_ftp` module builds the database
   `PubChemID` reads from a dated monthly snapshot of `Compound/Extras/`, and

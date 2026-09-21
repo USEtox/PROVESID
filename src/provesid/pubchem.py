@@ -53,6 +53,167 @@ RETRY_WAIT_BUDGET = 10.0
 #: when one request has to be retried.
 PROPERTY_CHUNK_SIZE = 200
 
+#: Descriptors :func:`rdkit_descriptors` computes, in the order it reports
+#: them. The names are PubChem's wherever the quantity is the same one ---
+#: a polar surface area, a count of donors --- so that a table can switch
+#: source without renaming its columns. The logP is the exception: PubChem's
+#: ``XLogP`` is the XLogP3 model and RDKit's is Crippen's, a different model
+#: with a different number, so it keeps RDKit's name, ``MolLogP``. PubChem's
+#: ``Complexity`` has no RDKit counterpart and is not here.
+RDKIT_DESCRIPTORS = (
+    'MolLogP',
+    'TPSA',
+    'HBondDonorCount',
+    'HBondAcceptorCount',
+    'RotatableBondCount',
+    'HeavyAtomCount',
+    'Charge',
+)
+
+#: The computed descriptors PubChem publishes, which ``pubchem_id.db`` no
+#: longer stores (see :meth:`PubChemID.descriptors`).
+PUBCHEM_DESCRIPTORS = (
+    'XLogP',
+    'TPSA',
+    'Complexity',
+    'HBondDonorCount',
+    'HBondAcceptorCount',
+    'RotatableBondCount',
+    'HeavyAtomCount',
+    'Charge',
+)
+
+
+def _rdkit_descriptor_functions() -> Dict[str, Any]:
+    """
+    Map each name in :data:`RDKIT_DESCRIPTORS` to the RDKit function computing it.
+
+    Built on call because RDKit is slow to import, and a session that never
+    asks for a descriptor should not pay for it.
+
+    ``TPSA`` counts sulfur and phosphorus. Ertl's original definition, and
+    RDKit's default, leave them out; PubChem puts them in, and counting them
+    agrees with PubChem's TPSA on 70% of compounds against 60% without.
+
+    Both floats are sums of tabulated per-atom contributions given to at most
+    four decimals, so rounding to four drops the floating-point residue
+    (aspirin's TPSA is 63.6, not 63.60000000000001) and nothing else.
+    """
+    from rdkit import Chem
+    from rdkit.Chem import Crippen, rdMolDescriptors
+
+    return {
+        'MolLogP': lambda mol: round(Crippen.MolLogP(mol), 4),
+        'TPSA': lambda mol: round(rdMolDescriptors.CalcTPSA(mol, includeSandP=True), 4),
+        'HBondDonorCount': rdMolDescriptors.CalcNumHBD,
+        'HBondAcceptorCount': rdMolDescriptors.CalcNumHBA,
+        'RotatableBondCount': rdMolDescriptors.CalcNumRotatableBonds,
+        'HeavyAtomCount': lambda mol: mol.GetNumHeavyAtoms(),
+        'Charge': Chem.GetFormalCharge,
+    }
+
+
+def rdkit_descriptors(smiles: str,
+                      descriptors: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
+    """
+    Compute molecular descriptors for a structure with RDKit.
+
+    This is what :meth:`PubChemID.descriptors` runs on each stored SMILES,
+    exposed for structures that are not in PubChem. No network; about half a
+    millisecond per molecule, half of it the logP.
+
+    The numbers are RDKit's, and they are not always PubChem's. PubChem
+    computes its descriptors with Cactvs, which counts differently. Against
+    PubChem's own values for 20 000 random CAS-bearing compounds, measured on
+    2026-09-21:
+
+    ========================  ==================================================
+    ``HeavyAtomCount``        identical for all
+    ``Charge``                identical for all
+    ``HBondDonorCount``       identical for 94%
+    ``RotatableBondCount``    identical for 74%: Cactvs counts, for instance,
+                              the bond to a CF3 group
+    ``TPSA``                  identical for 70%
+    ``HBondAcceptorCount``    identical for 63%: Cactvs counts, for instance,
+                              fluorine and halide counter-ions
+    ``MolLogP``               Crippen's model, not XLogP3: within 0.5 of
+                              PubChem's ``XLogP`` for 62%, median gap 0.37
+    ========================  ==================================================
+
+    Args:
+        smiles: The structure, as SMILES.
+        descriptors: Names from :data:`RDKIT_DESCRIPTORS` to compute. Defaults
+            to all of them.
+
+    Returns:
+        A dict from descriptor name to value, in the order requested, or None
+        when RDKit cannot parse ``smiles``. ``MolLogP`` and ``TPSA`` are
+        floats, the rest ints.
+
+    Raises:
+        ValueError: If a name is not in :data:`RDKIT_DESCRIPTORS`. The message
+            says where to get it instead, for PubChem's ``XLogP`` and
+            ``Complexity``.
+
+    Example:
+        >>> rdkit_descriptors("CC(=O)OC1=CC=CC=C1C(=O)O", ["TPSA", "HBondDonorCount"])
+        {'TPSA': 63.6, 'HBondDonorCount': 1}
+        >>> rdkit_descriptors("not a molecule") is None
+        True
+    """
+    from rdkit import Chem, rdBase
+
+    names = _check_descriptor_names(descriptors, 'rdkit')
+    with rdBase.BlockLogs():
+        mol = Chem.MolFromSmiles(smiles) if smiles else None
+    if mol is None:
+        return None
+    functions = _rdkit_descriptor_functions()
+    return {name: functions[name](mol) for name in names}
+
+
+def _check_descriptor_names(descriptors: Optional[List[str]], source: str) -> List[str]:
+    """
+    Validate descriptor names against what ``source`` can provide.
+
+    Args:
+        descriptors: The names asked for, or None for all of them.
+        source: ``'rdkit'`` or ``'pubchem'``.
+
+    Returns:
+        The names to compute, defaulting to every descriptor ``source`` has.
+
+    Raises:
+        ValueError: If ``source`` is neither, ``descriptors`` is an empty list,
+            or it names something ``source`` does not provide. A name the
+            *other* source provides gets a message saying so, since that is
+            the likely mistake.
+    """
+    if source not in ('rdkit', 'pubchem'):
+        raise ValueError(f"source must be 'rdkit' or 'pubchem', got {source!r}")
+    available = RDKIT_DESCRIPTORS if source == 'rdkit' else PUBCHEM_DESCRIPTORS
+    if descriptors is None:
+        return list(available)
+    if not descriptors:
+        raise ValueError("descriptors must name at least one descriptor, or be None")
+
+    redirects = {
+        ('rdkit', 'XLogP'): "XLogP is PubChem's XLogP3 model; RDKit's logP is "
+                            "Crippen's, named 'MolLogP'. For PubChem's value "
+                            "use source='pubchem'.",
+        ('rdkit', 'Complexity'): "Complexity has no RDKit equivalent (BertzCT is "
+                                 "a different number); use source='pubchem'.",
+        ('pubchem', 'MolLogP'): "MolLogP is RDKit's Crippen logP; PubChem's logP "
+                                "is 'XLogP'. For RDKit's value use source='rdkit'.",
+    }
+    for name in descriptors:
+        if (source, name) in redirects:
+            raise ValueError(redirects[(source, name)])
+        if name not in available:
+            raise ValueError(f"Unknown {source} descriptor {name!r}; "
+                             f"choose from {', '.join(available)}")
+    return list(descriptors)
+
 # create an enumerate class called domain
 # <domain> = substance | compound | assay | gene | protein | pathway | taxonomy | cell
 class Domain:
@@ -1993,9 +2154,10 @@ class PubChemID(SQLiteClient):
 
     Both hold the same tables, so every lookup works on either. They differ in
     the property columns: a database built from FTP has ``MonoisotopicMass``
-    and none of the eight computed descriptors (XLogP, TPSA and the like),
-    which :meth:`properties` fetches from PubChem instead. See
-    :attr:`offline_properties` for what the open database can answer.
+    and none of the eight computed descriptors (XLogP, TPSA and the like).
+    :meth:`descriptors` computes those with RDKit from the stored SMILES, or
+    fetches PubChem's own on request; :meth:`properties` fetches PubChem's.
+    See :attr:`offline_properties` for what the open database can answer.
     
     Connection handling comes from
     :class:`~provesid.sqlite_client.SQLiteClient`: use the class as a context
@@ -2047,7 +2209,8 @@ class PubChemID(SQLiteClient):
     #: The computed descriptors (``XLogP``, ``TPSA``, ``Complexity`` and the
     #: counts) are not served from disk even by a Zenodo database that still
     #: holds them: they are PubChem's model outputs, and a user who asks for
-    #: them gets PubChem's current values, labelled ``Source='online'``.
+    #: them gets PubChem's current values, labelled ``Source='online'``, or
+    #: RDKit's from :meth:`descriptors`, labelled ``Source='rdkit'``.
     #: Note that ``smiles`` holds the isomeric SMILES, which is what PubChem now
     #: calls ``SMILES``; the stereochemistry-free ``ConnectivitySMILES`` is not
     #: stored locally. ``MolecularWeight`` is computed from the formula when the
@@ -3134,15 +3297,198 @@ class PubChemID(SQLiteClient):
         rows = self.properties_for_cids(cids, requested_properties,
                                         use_online_fallback=use_online_fallback,
                                         chunk_size=chunk_size)
-        by_cid = {row['CID']: row for row in rows}
+        return self._table(cids, rows, requested_properties)
 
+    def descriptors(self, cid: Union[int, str],
+                    descriptors: Optional[List[str]] = None,
+                    source: str = 'rdkit',
+                    use_online_fallback: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        Computed molecular descriptors for one compound, from RDKit or PubChem.
+
+        The local database stores identifiers and structures, not descriptors:
+        XLogP, TPSA and the counts are the output of a model run over the
+        structure, and there is more than one model. This method runs one,
+        and says which:
+
+        * ``source="rdkit"`` (default) computes them with RDKit from the
+          compound's stored SMILES --- no network, milliseconds. The record
+          says ``Source='rdkit'``. RDKit and PubChem count some things
+          differently, and the logP is a different model altogether, named
+          ``MolLogP`` rather than ``XLogP``; :func:`rdkit_descriptors`
+          measures how far apart they are. ``Complexity`` is not available.
+        * ``source="pubchem"`` fetches PubChem's own values from PUG-REST,
+          through the same path as :meth:`properties`, labelled
+          ``Source='online'``. This is the only way to PubChem's ``XLogP``
+          and ``Complexity``.
+
+        Args:
+            cid: PubChem Compound ID.
+            descriptors: Names to compute. Defaults to every descriptor the
+                source has: :data:`RDKIT_DESCRIPTORS` or
+                :data:`PUBCHEM_DESCRIPTORS`.
+            source: ``'rdkit'`` or ``'pubchem'``.
+            use_online_fallback: For ``source="rdkit"``, whether a compound the
+                local database does not hold may have its SMILES fetched from
+                PubChem to compute from. When False, such a compound returns
+                None. ``source="pubchem"`` is online by definition and does not
+                accept False.
+
+        Returns:
+            A dict carrying ``CID``, ``Source`` and one key per descriptor that
+            has a value, or None when the compound is unknown. A compound whose
+            SMILES RDKit cannot parse --- a handful in a million --- or that
+            has no structure comes back with ``CID`` and ``Source`` only.
+
+        Raises:
+            ValueError: If ``cid`` is not an integer, ``source`` is unknown,
+                a name is not one ``source`` provides (asking RDKit for
+                ``XLogP`` says to ask for ``MolLogP``), or ``source="pubchem"``
+                is combined with ``use_online_fallback=False``.
+            PubChemError: If an online request could not be completed.
+
+        Example:
+            >>> db = PubChemID()                                   # doctest: +SKIP
+            >>> db.descriptors(2244, ['MolLogP', 'TPSA'])          # doctest: +SKIP
+            {'CID': 2244, 'Source': 'rdkit', 'MolLogP': 1.3101, 'TPSA': 63.6}
+            >>> db.descriptors(2244, ['XLogP'], source='pubchem')  # doctest: +SKIP
+            {'CID': 2244, 'Source': 'online', 'XLogP': 1.2}
+        """
+        rows = self.descriptors_for_cids([cid], descriptors, source=source,
+                                         use_online_fallback=use_online_fallback)
+        return rows[0] if rows else None
+
+    def descriptors_for_cids(self, cids: List[Union[int, str]],
+                             descriptors: Optional[List[str]] = None,
+                             source: str = 'rdkit',
+                             use_online_fallback: bool = True,
+                             chunk_size: int = PROPERTY_CHUNK_SIZE) -> List[Dict[str, Any]]:
+        """
+        Computed molecular descriptors for many compounds, from RDKit or PubChem.
+
+        The list form of :meth:`descriptors`. With ``source="rdkit"`` the
+        SMILES of every compound in the local database are read in a handful
+        of statements, and only those it lacks are fetched from PubChem, in
+        bulk; with ``source="pubchem"`` the whole list goes to PUG-REST a few
+        hundred compounds per request.
+
+        Args:
+            cids: PubChem Compound IDs. Duplicates are collapsed and the order
+                of first appearance is preserved.
+            descriptors: Names to compute; defaults to every descriptor the
+                source has.
+            source: ``'rdkit'`` or ``'pubchem'``.
+            use_online_fallback: For ``source="rdkit"``, whether SMILES missing
+                from the local database may be fetched from PubChem.
+            chunk_size: How many CIDs to put in one online request.
+
+        Returns:
+            One dict per CID that could be answered, in the order requested,
+            shaped as :meth:`descriptors` describes. CIDs no source knows are
+            omitted; :meth:`descriptors_table` gives a row for every CID.
+
+        Raises:
+            ValueError: As for :meth:`descriptors`, or if ``chunk_size`` is not
+                positive.
+            PubChemError: If an online request could not be completed.
+
+        Example:
+            >>> db = PubChemID()                                   # doctest: +SKIP
+            >>> for row in db.descriptors_for_cids([2244, 702], ['HeavyAtomCount']):
+            ...     print(row)                                     # doctest: +SKIP
+            {'CID': 2244, 'Source': 'rdkit', 'HeavyAtomCount': 13}
+            {'CID': 702, 'Source': 'rdkit', 'HeavyAtomCount': 3}
+        """
+        names = _check_descriptor_names(descriptors, source)
+
+        if source == 'pubchem':
+            if not use_online_fallback:
+                raise ValueError("source='pubchem' fetches PubChem's values online; "
+                                 "use_online_fallback=False contradicts it. For "
+                                 "descriptors without the network use source='rdkit'.")
+            return self.properties_for_cids(cids, names, chunk_size=chunk_size)
+
+        structures = self.properties_for_cids(cids, ['SMILES'],
+                                              use_online_fallback=use_online_fallback,
+                                              chunk_size=chunk_size)
+        rows = []
+        for structure in structures:
+            values = rdkit_descriptors(structure.get('SMILES'), names)
+            if values is None:
+                self.logger.debug("RDKit could not read the SMILES of CID %d: %r",
+                                  structure['CID'], structure.get('SMILES'))
+            rows.append({'CID': structure['CID'], 'Source': 'rdkit', **(values or {})})
+        return rows
+
+    def descriptors_table(self, cids: List[Union[int, str]],
+                          descriptors: Optional[List[str]] = None,
+                          source: str = 'rdkit',
+                          use_online_fallback: bool = True,
+                          chunk_size: int = PROPERTY_CHUNK_SIZE) -> 'pd.DataFrame':
+        """
+        Computed molecular descriptors for many compounds, as a DataFrame.
+
+        Same lookup as :meth:`descriptors_for_cids`, with a row for every CID
+        asked about, so the frame joins safely against the caller's own table.
+        Because the RDKit and PubChem columns share names wherever the quantity
+        is the same, two tables built with each source line up column for
+        column, apart from ``MolLogP`` / ``XLogP`` and ``Complexity``.
+
+        Args:
+            cids: PubChem Compound IDs. Duplicates are collapsed.
+            descriptors: Names to compute; defaults to every descriptor the
+                source has.
+            source: ``'rdkit'`` or ``'pubchem'``.
+            use_online_fallback: For ``source="rdkit"``, whether SMILES missing
+                from the local database may be fetched from PubChem.
+            chunk_size: How many CIDs to put in one online request.
+
+        Returns:
+            A DataFrame with one row per distinct CID in the order requested.
+            Columns are ``CID``, ``Source`` and the descriptors. ``Source``
+            reads ``'rdkit'``, ``'online'``, or ``'missing'`` for a CID no
+            source knows; a descriptor with no value is NaN/None.
+
+        Raises:
+            ValueError: As for :meth:`descriptors_for_cids`.
+            PubChemError: If an online request could not be completed.
+
+        Example:
+            >>> db = PubChemID()                                   # doctest: +SKIP
+            >>> db.descriptors_table([2244, 702], ['TPSA'])        # doctest: +SKIP
+                CID Source   TPSA
+            0  2244  rdkit  63.60
+            1   702  rdkit  20.23
+        """
+        names = _check_descriptor_names(descriptors, source)
+        rows = self.descriptors_for_cids(cids, names, source=source,
+                                         use_online_fallback=use_online_fallback,
+                                         chunk_size=chunk_size)
+        return self._table(cids, rows, names)
+
+    def _table(self, cids: List[Union[int, str]], rows: List[Dict[str, Any]],
+               names: List[str]) -> 'pd.DataFrame':
+        """
+        Reshape looked-up records into a frame with a row for every CID asked about.
+
+        Args:
+            cids: The CIDs as the caller gave them; duplicates are collapsed.
+            rows: Records carrying ``CID``, ``Source`` and values, as
+                :meth:`properties_for_cids` returns them.
+            names: The value columns, in order.
+
+        Returns:
+            A DataFrame with columns ``CID``, ``Source`` and ``names``, where a
+            CID with no record has ``Source='missing'``.
+        """
+        by_cid = {row['CID']: row for row in rows}
         records = []
         for cid in dict.fromkeys(self._coerce_cid(cid) for cid in cids):
             row = by_cid.get(cid, {'CID': cid, 'Source': 'missing'})
             records.append({'CID': cid, 'Source': row['Source'],
-                            **{name: row.get(name) for name in requested_properties}})
+                            **{name: row.get(name) for name in names}})
 
-        return pd.DataFrame(records, columns=['CID', 'Source'] + requested_properties)
+        return pd.DataFrame(records, columns=['CID', 'Source'] + names)
 
     @staticmethod
     def _coerce_cid(cid: Union[int, str]) -> int:

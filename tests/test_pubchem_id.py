@@ -1,8 +1,9 @@
 """
 Tests for PubChemID class - local SQLite database identifier lookup and conversion.
 
-These tests require the PubChem ID database to be built first using:
-    python scripts/build_pubchem_id_db.py
+These tests run against the real PubChem ID database, and are skipped when it
+is not installed. Build it with ``python scripts/build_pubchem_id_db.py`` or
+``provesid.datasets.fetch("pubchem")``.
 """
 
 import pytest
@@ -258,11 +259,10 @@ class TestPubChemIDBatchOperations:
         assert isinstance(df, pd.DataFrame)
         assert len(df) > 0
         
-        # Check all expected columns exist
-        expected_cols = ['cid', 'cas', 'inchi', 'inchikey', 'smiles', 'cmpdname', 
-                        'iupacname', 'mf', 'mw', 'polararea', 'complexity', 'xlogp',
-                        'heavycnt', 'hbonddonor', 'hbondacc', 'rotbonds', 'exactmass',
-                        'charge', 'cidcdate']
+        # The columns every copy has, whether built from FTP or from Zenodo;
+        # the rest depend on which (see get_by_cas_batch).
+        expected_cols = ['cid', 'cas', 'inchi', 'inchikey', 'smiles', 'cmpdname',
+                         'iupacname', 'mf', 'mw', 'exactmass', 'cidcdate']
         for col in expected_cols:
             assert col in df.columns
         

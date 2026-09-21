@@ -67,7 +67,25 @@ class TestRegistry:
         chembl = DATASETS["chembl"]
         assert chembl.peak_bytes > 10 * chembl.resident_bytes
         assert all(DATASETS[name].peak_bytes == DATASETS[name].resident_bytes
-                   for name in ("pubchem", "comptox", "zeropm"))
+                   for name in ("comptox", "zeropm"))
+
+    def test_pubchem_is_sized_as_the_ftp_build_the_default_route_runs(self):
+        """``fetch`` builds PubChem from FTP; the registry must say what that costs.
+
+        Eight files are downloaded and deleted one at a time, so the transfer
+        is several times what is kept, and the peak is the database plus the
+        largest file --- not the sum of the files.
+        """
+        from provesid import PubChemID
+        from provesid.pubchem_ftp import SOURCE_FILES
+
+        assert inspect.signature(PubChemID.__init__).parameters["source"].default == "ftp"
+        pubchem = DATASETS["pubchem"]
+        assert pubchem.download_bytes == sum(source.approx_bytes for source in SOURCE_FILES)
+        assert pubchem.download_bytes > 3 * pubchem.resident_bytes
+        assert pubchem.peak_bytes == (pubchem.resident_bytes
+                                      + max(source.approx_bytes for source in SOURCE_FILES))
+        assert pubchem.peak_bytes < pubchem.resident_bytes + pubchem.download_bytes
 
     def test_chembl_is_sized_as_the_extract_the_default_route_installs(self):
         """The registry must describe the route ``fetch`` actually takes.

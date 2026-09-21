@@ -1976,11 +1976,26 @@ class PubChemID(SQLiteClient):
     """
     Interface to PubChem ID SQLite database for fast identifier lookup and conversion.
     
-    This class provides access to a local SQLite database containing ~1.6M PubChem compounds
-    with their identifiers (CID, CAS, InChI, InChIKey, SMILES) and chemical properties
-    (molecular formula, molecular weight, LogP, complexity, etc.).
-    
-    The database is built from PubChem_CAS_202601.csv using the build_pubchem_id_db.py script.
+    This class provides access to a local SQLite database of the ~1.43 M PubChem
+    compounds that carry a CAS number, with their identifiers (CID, CAS, InChI,
+    InChIKey, SMILES), names, synonyms, formula and masses.
+
+    Where the database comes from is the ``source`` argument, and only matters
+    when there is none on disk yet:
+
+    * ``"ftp"`` (default) builds it from a dated monthly snapshot of PubChem's
+      FTP site with :func:`provesid.pubchem_ftp.build_pubchem_id_db`. The
+      result records its release and the MD5 of every source file (see
+      :meth:`provenance`), and carries cross-references to DSSTox, ChEBI,
+      ChEMBL, EC and UNII (see :meth:`xrefs`).
+    * ``"zenodo"`` downloads a prebuilt copy, refreshed by hand every few
+      months. Quicker to fetch, but it is whatever release it was built from.
+
+    Both hold the same tables, so every lookup works on either. They differ in
+    the property columns: a database built from FTP has ``MonoisotopicMass``
+    and none of the eight computed descriptors (XLogP, TPSA and the like),
+    which :meth:`properties` fetches from PubChem instead. See
+    :attr:`offline_properties` for what the open database can answer.
     
     Connection handling comes from
     :class:`~provesid.sqlite_client.SQLiteClient`: use the class as a context
@@ -1991,6 +2006,10 @@ class PubChemID(SQLiteClient):
     Attributes:
         db_path (str): Path to the SQLite database file
         conn (sqlite3.Connection): This thread's database connection
+        source (str): The acquisition route this instance was given.
+        offline_properties (dict): The part of :attr:`OFFLINE_PROPERTIES` the
+            open database has columns for --- what :meth:`properties` answers
+            without the network, and retrieves when no properties are named.
     
     Example:
         >>> from provesid import PubChemID
@@ -2017,15 +2036,23 @@ class PubChemID(SQLiteClient):
     DEFAULT_DB_NAME = "pubchem_id.db"
     DEFAULT_DB_URL = "https://zenodo.org/records/18173204/files/pubchem_id.db"
 
+    #: Where a missing database comes from. ``"ftp"`` builds it from PubChem's
+    #: FTP site (:mod:`provesid.pubchem_ftp`); ``"zenodo"`` downloads a
+    #: prebuilt copy.
+    SOURCES = ("ftp", "zenodo")
+
     #: PubChem property names the local database can answer, mapped to their
-    #: column in the ``compounds`` table. The database is built from PubChem's
-    #: CAS export, which carries the identifiers and the cheap computed
-    #: descriptors but not the full property set, so anything outside this
-    #: mapping — ``MonoisotopicMass``, ``ConnectivitySMILES``, the 3D
-    #: descriptors, the patent and literature counts — needs the online API.
+    #: column in the ``compounds`` table. These are the properties that are
+    #: *data* about a compound --- its identifiers, names, formula and masses.
+    #: The computed descriptors (``XLogP``, ``TPSA``, ``Complexity`` and the
+    #: counts) are not served from disk even by a Zenodo database that still
+    #: holds them: they are PubChem's model outputs, and a user who asks for
+    #: them gets PubChem's current values, labelled ``Source='online'``.
     #: Note that ``smiles`` holds the isomeric SMILES, which is what PubChem now
     #: calls ``SMILES``; the stereochemistry-free ``ConnectivitySMILES`` is not
-    #: stored locally.
+    #: stored locally. ``MolecularWeight`` is computed from the formula when the
+    #: database is built from FTP --- PubChem's files do not carry it --- and
+    #: agrees with PubChem's to the second decimal for most compounds.
     OFFLINE_PROPERTIES = {
         'MolecularFormula': 'mf',
         'MolecularWeight': 'mw',
@@ -2034,19 +2061,14 @@ class PubChemID(SQLiteClient):
         'InChIKey': 'inchikey',
         'IUPACName': 'iupacname',
         'Title': 'cmpdname',
-        'XLogP': 'xlogp',
-        'TPSA': 'polararea',
-        'Complexity': 'complexity',
-        'Charge': 'charge',
-        'HBondDonorCount': 'hbonddonor',
-        'HBondAcceptorCount': 'hbondacc',
-        'RotatableBondCount': 'rotbonds',
-        'HeavyAtomCount': 'heavycnt',
         'ExactMass': 'exactmass',
+        'MonoisotopicMass': 'monoisotopicmass',
     }
 
-    #: What :meth:`properties` retrieves when the caller names no properties:
-    #: everything available without touching the network.
+    #: What :meth:`properties` retrieves when the caller names no properties,
+    #: for a database that has every column. An open database uses
+    #: :attr:`offline_properties` instead, so that a Zenodo copy without
+    #: ``monoisotopicmass`` does not send every default lookup online.
     DEFAULT_PROPERTIES = tuple(OFFLINE_PROPERTIES)
 
     #: Type each property is normalised to, so that a table assembled from both
@@ -2078,6 +2100,7 @@ class PubChemID(SQLiteClient):
         db_url: Optional[str] = None,
         redownload: bool = False,
         api: Optional['PubChemAPI'] = None,
+        source: str = "ftp",
     ):
         """
         Initialize PubChemID database connection.
@@ -2085,24 +2108,36 @@ class PubChemID(SQLiteClient):
         Args:
             db_path (str, optional): Path to SQLite database. If None, uses default
                                     location in the persistent user dataset directory.
-            auto_download (bool): If True, automatically download database if not found.
-                                 Default is True.
+            auto_download (bool): If True, acquire the database from ``source``
+                when it is not on disk. Default is True.
             data_dir (str, optional): Directory to store the database when
                 ``db_path`` is not provided.
-            db_url (str, optional): Download URL for the database. If None,
-                uses the package default URL.
-            redownload (bool): If True, force re-download when
-                ``auto_download`` is enabled.
+            db_url (str, optional): Download URL for ``source="zenodo"``. If
+                None, uses the package default URL.
+            redownload (bool): If True, acquire the database again even though
+                one is on disk, when ``auto_download`` is enabled. With
+                ``source="ftp"`` that is a rebuild from the newest snapshot.
             api (PubChemAPI, optional): Online client used by
                 :meth:`properties` when the local database cannot answer a
                 request. One is created on first use if none is given, so
                 passing this is only needed to share a client or to configure
                 its pause time.
+            source (str): How a missing database is acquired, one of
+                :attr:`SOURCES`. ``"ftp"`` (default) builds it from the newest
+                monthly snapshot of PubChem's FTP site: 15.4 GB transferred,
+                a 2.5 GB database plus 7.4 GB of free disk at peak, and about
+                12 minutes of processing on top of the download time.
+                ``"zenodo"`` downloads a 2.2 GB
+                prebuilt copy. It describes an acquisition, not a file: a
+                database already on disk is opened whichever way it was made.
         
         Raises:
+            ValueError: If ``source`` is not one of :attr:`SOURCES`. Checked
+                before anything is fetched.
             FileNotFoundError: If database file doesn't exist and auto_download is False
         """
         self.logger = logging.getLogger(__name__)
+        self.source = self._validate_source(source)
         self.db_url = db_url or self.DEFAULT_DB_URL
         self._api = api
         
@@ -2122,22 +2157,65 @@ class PubChemID(SQLiteClient):
                     )
                 else:
                     self.logger.info("Database not found at %s", self.db_path)
-                self.logger.info("Attempting to download from configured source...")
-                self.download_database(
-                    db_path=self.db_path,
-                    zenodo_url=self.db_url,
-                    force=redownload,
-                )
+                self._acquire(force=redownload)
             else:
                 raise FileNotFoundError(
                     f"PubChem ID database not found at {self.db_path}. "
-                    "Set auto_download=True or run PubChemID.download_database()."
+                    "Set auto_download=True, run "
+                    "provesid.pubchem_ftp.build_pubchem_id_db(), or run "
+                    "PubChemID.download_database()."
                 )
         
         # One connection per thread, released by close() or by leaving a
         # ``with`` block --- see
         # :class:`~provesid.sqlite_client.SQLiteClient`.
         self._open_database(self.db_path)
+        self.offline_properties = self._available_offline_properties()
+
+    @classmethod
+    def _validate_source(cls, source: str) -> str:
+        """
+        Check an acquisition route name before anything is fetched.
+
+        Args:
+            source: The ``source`` argument as given.
+
+        Returns:
+            The same value, once it is known to be a route.
+
+        Raises:
+            ValueError: If it is not one of :attr:`SOURCES`.
+        """
+        if source in cls.SOURCES:
+            return source
+        options = ", ".join(repr(name) for name in cls.SOURCES)
+        raise ValueError(f"PubChemID(source={source!r}) is not a download route. "
+                         f"Use one of {options}.")
+
+    def _acquire(self, *, force: bool) -> None:
+        """Put a database at :attr:`db_path` by the route :attr:`source` names."""
+        if self.source == "ftp":
+            from .pubchem_ftp import build_pubchem_id_db
+
+            self.logger.info("Building the PubChem ID database from PubChem's FTP site")
+            build_pubchem_id_db(self.db_path, force=force)
+        else:
+            self.logger.info("Downloading the PubChem ID database from Zenodo")
+            self.download_database(db_path=self.db_path, zenodo_url=self.db_url,
+                                   force=force)
+
+    def _available_offline_properties(self) -> Dict[str, str]:
+        """
+        The part of :attr:`OFFLINE_PROPERTIES` this database has columns for.
+
+        A database built from FTP and one downloaded from Zenodo differ in one
+        column --- ``monoisotopicmass`` exists only in the first --- so which
+        properties can be answered from disk is a fact about the file, not the
+        class.
+        """
+        columns = {row[1] for row in self.conn.execute("PRAGMA table_info(compounds)")}
+        return {name: column for name, column in self.OFFLINE_PROPERTIES.items()
+                if column in columns}
 
     @staticmethod
     def download_database(
@@ -2146,7 +2224,10 @@ class PubChemID(SQLiteClient):
         force: bool = False,
     ) -> str:
         """
-        Download PubChem ID database from Zenodo.
+        Download PubChem ID database from Zenodo --- the ``source="zenodo"`` route.
+
+        To build it from PubChem's own files instead, which is the default
+        route, see :func:`provesid.pubchem_ftp.build_pubchem_id_db`.
 
         The transfer is resumable: an interrupted download leaves a ``.part``
         file beside the destination and the next call continues from it rather
@@ -2585,17 +2666,21 @@ class PubChemID(SQLiteClient):
         """
         Get complete compound information for multiple CAS numbers as a DataFrame.
         
-        This method returns all available data including identifiers, chemical properties,
-        and physical properties for each CAS number.
+        One row per CAS number found, carrying every column of the
+        ``compounds`` table. Which columns those are depends on how the
+        database was made: one built from PubChem's FTP site has
+        ``monoisotopicmass``, a Zenodo copy has the eight descriptor columns
+        instead (``xlogp``, ``polararea`` and the like).
         
         Args:
             cas_list (list): List of CAS Registry Numbers
         
         Returns:
-            pandas.DataFrame: DataFrame with columns for all compound properties including:
-                             cid, cas, inchi, inchikey, smiles, cmpdname, iupacname, mf, mw,
-                             polararea, complexity, xlogp, heavycnt, hbonddonor, hbondacc,
-                             rotbonds, exactmass, charge, cidcdate
+            pandas.DataFrame: ``cid``, ``cas`` and then the ``compounds``
+            columns --- ``cmpdname``, ``mf``, ``inchi``, ``smiles``,
+            ``inchikey``, ``iupacname``, ``mw``, ``exactmass``, ``cidcdate``
+            and whichever others the database has. Empty, with those columns,
+            when nothing is found.
         
         Example:
             >>> db = PubChemID()
@@ -2603,45 +2688,21 @@ class PubChemID(SQLiteClient):
             >>> df = db.get_by_cas_batch(cas_list)
             >>> print(df[['cas', 'cmpdname', 'mf', 'mw']])
         """
-        
         rows = []
         for cas in cas_list:
             result = self.get_by_cas(cas)
             if result:
-                # Create row with all properties
-                row = {
-                    'cid': result.get('cid'),
-                    'cas': cas,
-                    'inchi': result.get('inchi', ''),
-                    'inchikey': result.get('inchikey', ''),
-                    'smiles': result.get('smiles', ''),
-                    'cmpdname': result.get('cmpdname', ''),
-                    'iupacname': result.get('iupacname', ''),
-                    'mf': result.get('mf', ''),
-                    'mw': result.get('mw'),
-                    'polararea': result.get('polararea'),
-                    'complexity': result.get('complexity'),
-                    'xlogp': result.get('xlogp'),
-                    'heavycnt': result.get('heavycnt'),
-                    'hbonddonor': result.get('hbonddonor'),
-                    'hbondacc': result.get('hbondacc'),
-                    'rotbonds': result.get('rotbonds'),
-                    'exactmass': result.get('exactmass'),
-                    'charge': result.get('charge'),
-                    'cidcdate': result.get('cidcdate', '')
-                }
-                rows.append(row)
-        
-        if not rows:
-            # Return empty DataFrame with correct columns
-            return pd.DataFrame(columns=[
-                'cid', 'cas', 'inchi', 'inchikey', 'smiles', 'cmpdname', 'iupacname',
-                'mf', 'mw', 'polararea', 'complexity', 'xlogp', 'heavycnt',
-                'hbonddonor', 'hbondacc', 'rotbonds', 'exactmass', 'charge', 'cidcdate'
-            ])
-        
-        return pd.DataFrame(rows)
-    
+                rows.append({'cas': cas, **self._compound_columns(result)})
+        return pd.DataFrame(rows, columns=['cid', 'cas'] + self._compound_column_names()[1:])
+
+    def _compound_column_names(self) -> List[str]:
+        """The ``compounds`` table's columns, in table order, ``cid`` first."""
+        return [row[1] for row in self.conn.execute("PRAGMA table_info(compounds)")]
+
+    def _compound_columns(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        """A :meth:`get_by_cid` record without its list-valued extras."""
+        return {name: record.get(name) for name in self._compound_column_names()}
+
     def get_id_table_from_cas(self, cas: str) -> Optional['pd.DataFrame']:
         """
         Get identifier table for a CAS number (similar to ZeroPM format).
@@ -2712,17 +2773,16 @@ class PubChemID(SQLiteClient):
         """
         Get complete compound information for multiple SMILES strings as a DataFrame.
         
-        This method returns all available data including identifiers, chemical properties,
-        and physical properties for each SMILES string.
+        One row per SMILES found, carrying the compound's first CAS number and
+        every column of the ``compounds`` table; see :meth:`get_by_cas_batch`
+        for how those columns depend on where the database came from.
         
         Args:
             smiles_list (list): List of SMILES strings
         
         Returns:
-            pandas.DataFrame: DataFrame with columns for all compound properties including:
-                             cid, cas, inchi, inchikey, smiles, cmpdname, iupacname, mf, mw,
-                             polararea, complexity, xlogp, heavycnt, hbonddonor, hbondacc,
-                             rotbonds, exactmass, charge, cidcdate
+            pandas.DataFrame: ``cid``, ``cas`` and then the ``compounds``
+            columns. Empty, with those columns, when nothing is found.
         
         Example:
             >>> db = PubChemID()
@@ -2730,47 +2790,13 @@ class PubChemID(SQLiteClient):
             >>> df = db.get_by_smiles_batch(smiles_list)
             >>> print(df[['smiles', 'cmpdname', 'mf', 'mw']])
         """
-        import pandas as pd
-        
         rows = []
         for smiles in smiles_list:
             result = self.get_by_smiles(smiles)
             if result:
-                # Create row with all properties
-                row = {
-                    'cid': result.get('cid'),
-                    'cas': result.get('cas_numbers', [])[0] if result.get('cas_numbers') else None,
-                    'inchi': result.get('inchi', ''),
-                    'inchikey': result.get('inchikey', ''),
-                    'smiles': smiles,
-                    'cmpdname': result.get('cmpdname', ''),
-                    'iupacname': result.get('iupacname', ''),
-                    'mf': result.get('mf', ''),
-                    'mw': result.get('mw'),
-                    'polararea': result.get('polararea'),
-                    'complexity': result.get('complexity'),
-                    'xlogp': result.get('xlogp'),
-                    'heavycnt': result.get('heavycnt'),
-                    'hbonddonor': result.get('hbonddonor'),
-                    'hbondacc': result.get('hbondacc'),
-                    'rotbonds': result.get('rotbonds'),
-                    'exactmass': result.get('exactmass'),
-                    'charge': result.get('charge'),
-                    'cidcdate': result.get('cidcdate', '')
-                }
-                rows.append(row)
-        
-        if not rows:
-            # Return empty DataFrame with correct columns
-            return pd.DataFrame(columns=[
-                'cid', 'cas', 'inchi', 'inchikey', 'smiles', 'cmpdname', 'iupacname',
-                'mf', 'mw', 'polararea', 'complexity', 'xlogp', 'heavycnt',
-                'hbonddonor', 'hbondacc', 'rotbonds', 'exactmass', 'charge', 'cidcdate'
-            ])
-        
-        return pd.DataFrame(rows)
-    
-    # Additional CAS conversion methods
+                cas_numbers = result.get('cas_numbers') or [None]
+                rows.append({'cas': cas_numbers[0], **self._compound_columns(result)})
+        return pd.DataFrame(rows, columns=['cid', 'cas'] + self._compound_column_names()[1:])
     
     def smiles_to_cas(self, smiles: str) -> Optional[List[str]]:
         """
@@ -2947,13 +2973,13 @@ class PubChemID(SQLiteClient):
         The local database answers from disk in microseconds; the online API is
         consulted only when the local database cannot serve the request, either
         because it holds no row for this CID or because a requested property is
-        not one of the columns it carries (see :attr:`OFFLINE_PROPERTIES`).
+        not one of the columns it carries (see :attr:`offline_properties`).
 
         Args:
             cid: PubChem Compound ID.
             properties: Property names to retrieve, e.g.
                 ``['MolecularWeight', 'XLogP']``. Defaults to every property the
-                local database can answer, :attr:`DEFAULT_PROPERTIES`.
+                local database can answer, :attr:`offline_properties`.
             use_online_fallback: When True (default), fall back to PUG-REST for
                 anything the local database cannot answer. When False, the
                 lookup is strictly offline and an unavailable property is simply
@@ -2979,8 +3005,8 @@ class PubChemID(SQLiteClient):
             >>> db = PubChemID()
             >>> db.properties(2244, ['MolecularFormula', 'MolecularWeight'])
             {'CID': 2244, 'Source': 'offline', 'MolecularFormula': 'C9H8O4', 'MolecularWeight': 180.16}
-            >>> # MonoisotopicMass is not in the local database, so this one goes online
-            >>> db.properties(2244, ['MonoisotopicMass'])['Source']
+            >>> # XLogP is PubChem's model output, never served from disk
+            >>> db.properties(2244, ['XLogP'])['Source']
             'online'
         """
         rows = self.properties_for_cids([cid], properties,
@@ -3003,7 +3029,7 @@ class PubChemID(SQLiteClient):
             cids: PubChem Compound IDs. Duplicates are collapsed and the order
                 of first appearance is preserved.
             properties: Property names to retrieve. Defaults to
-                :attr:`DEFAULT_PROPERTIES`.
+                :attr:`offline_properties`.
             use_online_fallback: When True (default), CIDs the local database
                 does not cover are requested from PUG-REST.
             chunk_size: How many CIDs to put in one online request.
@@ -3022,7 +3048,7 @@ class PubChemID(SQLiteClient):
 
         Note:
             If *any* requested property lies outside
-            :attr:`OFFLINE_PROPERTIES`, the whole request goes online: the
+            :attr:`offline_properties`, the whole request goes online: the
             missing property would need a request per compound anyway, so
             splitting the property list between the two sources would cost the
             same traffic and return rows assembled from two different PubChem
@@ -3041,14 +3067,14 @@ class PubChemID(SQLiteClient):
         if chunk_size <= 0:
             raise ValueError(f"chunk_size must be positive, got {chunk_size}")
 
-        requested_properties = list(properties) if properties else list(self.DEFAULT_PROPERTIES)
+        requested_properties = list(properties) if properties else list(self.offline_properties)
         wanted_cids = [self._coerce_cid(cid) for cid in cids]
         wanted_cids = list(dict.fromkeys(wanted_cids))
         if not wanted_cids:
             return []
 
         online_only = [name for name in requested_properties
-                       if name not in self.OFFLINE_PROPERTIES]
+                       if name not in self.offline_properties]
 
         found: Dict[int, Dict[str, Any]] = {}
         if online_only:
@@ -3081,7 +3107,7 @@ class PubChemID(SQLiteClient):
         Args:
             cids: PubChem Compound IDs. Duplicates are collapsed.
             properties: Property names to retrieve. Defaults to
-                :attr:`DEFAULT_PROPERTIES`.
+                :attr:`offline_properties`.
             use_online_fallback: When True (default), consult PUG-REST for CIDs
                 the local database does not cover.
             chunk_size: How many CIDs to put in one online request.
@@ -3104,7 +3130,7 @@ class PubChemID(SQLiteClient):
             [{'CID': 2244, 'MolecularWeight': 180.16, 'Source': 'offline'},
              {'CID': 702, 'MolecularWeight': 46.07, 'Source': 'offline'}]
         """
-        requested_properties = list(properties) if properties else list(self.DEFAULT_PROPERTIES)
+        requested_properties = list(properties) if properties else list(self.offline_properties)
         rows = self.properties_for_cids(cids, requested_properties,
                                         use_online_fallback=use_online_fallback,
                                         chunk_size=chunk_size)
@@ -3148,7 +3174,7 @@ class PubChemID(SQLiteClient):
         Args:
             cids: CIDs to look up, already coerced to int.
             properties: Property names, all of which must be keys of
-                :attr:`OFFLINE_PROPERTIES`.
+                :attr:`offline_properties`.
 
         Returns:
             A dict keyed by CID, holding one record per CID present in the
@@ -3156,7 +3182,7 @@ class PubChemID(SQLiteClient):
             properties that have a value; a NULL column is left out, matching
             PubChem, which omits a property rather than reporting it as null.
         """
-        columns = [self.OFFLINE_PROPERTIES[name] for name in properties]
+        columns = [self.offline_properties[name] for name in properties]
         cursor = self.conn.cursor()
         found: Dict[int, Dict[str, Any]] = {}
 
@@ -3240,6 +3266,83 @@ class PubChemID(SQLiteClient):
         except (TypeError, ValueError):
             logging.debug("Could not cast %s=%r with %s", name, value, cast.__name__)
             return value
+
+    def provenance(self) -> Dict[str, Any]:
+        """
+        Where this database came from and how it was built.
+
+        A database built by :func:`provesid.pubchem_ftp.build_pubchem_id_db`
+        records its PubChem release, the snapshot's timestamp, the URL and MD5
+        of every source file, the row counts and the build time. That is what
+        makes a lookup against it citable: the release pins down exactly which
+        state of PubChem answered.
+
+        Returns:
+            A dict of the ``provenance`` table's entries, plus ``files``: one
+            dict per source file with ``file``, ``url``, ``md5``, ``bytes``,
+            ``lines_read`` and ``rows_kept``. Empty for a database made before
+            provenance was recorded --- every Zenodo copy so far.
+
+        Example:
+            >>> db = PubChemID()                                  # doctest: +SKIP
+            >>> db.provenance()["release"]                        # doctest: +SKIP
+            '2026-09-01'
+        """
+        tables = {row[0] for row in self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "provenance" not in tables:
+            return {}
+        record: Dict[str, Any] = dict(
+            self.conn.execute("SELECT key, value FROM provenance").fetchall())
+        record["files"] = [dict(row) for row in self.conn.execute(
+            "SELECT * FROM provenance_files ORDER BY rowid")]
+        return record
+
+    def xrefs(self, cid: Union[int, str]) -> Dict[str, List[str]]:
+        """
+        Identifiers other databases give this compound, as PubChem links them.
+
+        PubChem publishes these links itself, in the same file the CAS
+        numbers come from, so they cost nothing to keep: DSSTox substance IDs
+        (``dtxsid``), ChEBI IDs, ChEMBL IDs, EC numbers and UNIIs --- see
+        :data:`provesid.pubchem_ftp.XREF_TYPES`.
+
+        Args:
+            cid: PubChem Compound ID.
+
+        Returns:
+            A dict from source (``"dtxsid"``, ``"chebi"``, ``"chembl"``,
+            ``"ec"``, ``"unii"``) to that source's identifiers for the
+            compound, sorted. Sources with none are left out, so a compound
+            with no links returns ``{}``.
+
+        Raises:
+            ValueError: If ``cid`` is not an integer.
+            RuntimeError: If the database has no ``xrefs`` table --- a Zenodo
+                copy. The message says how to build one that does.
+
+        Example:
+            >>> db = PubChemID()                                  # doctest: +SKIP
+            >>> db.xrefs(2244)                                    # doctest: +SKIP
+            {'chebi': ['CHEBI:15365'], 'chembl': ['CHEMBL25'],
+             'dtxsid': ['DTXSID5020108'], 'ec': ['200-064-1'],
+             'unii': ['R16CO5Y76E']}
+        """
+        cid = self._coerce_cid(cid)
+        tables = {row[0] for row in self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "xrefs" not in tables:
+            raise RuntimeError(
+                f"{self.db_path} has no cross-references. They exist only in a "
+                "database built from PubChem's FTP site: "
+                "provesid.pubchem_ftp.build_pubchem_id_db(force=True)."
+            )
+        found: Dict[str, List[str]] = {}
+        for source, identifier in self.conn.execute(
+                "SELECT source, identifier FROM xrefs WHERE cid = ? "
+                "ORDER BY source, identifier", (cid,)):
+            found.setdefault(source, []).append(identifier)
+        return found
 
     def get_stats(self) -> Dict[str, int]:
         """

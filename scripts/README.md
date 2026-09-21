@@ -6,54 +6,30 @@ This directory contains scripts for building local databases used by PROVESID.
 
 ### build_pubchem_id_db.py
 
-Builds a SQLite database from PubChem CAS CSV file for fast local identifier lookup.
-
-**Input:** `src/provesid/data/PubChem_CAS_202601.csv` (~2 GB, 1.6M compounds)
-
-**Output:** `src/provesid/data/pubchem_id.db` (SQLite database)
-
-**What it does:**
-1. Extracts CAS numbers, InChI, and InChIKey from the `cmpdsynonym` column
-2. Creates separate tables for compounds, CAS numbers, and synonyms
-3. Includes chemical properties: molecular formula, molecular weight, LogP, complexity, etc.
-4. Builds indexes for fast lookups by CAS, InChIKey, InChI, formula, and synonym
+Builds `pubchem_id.db` from a monthly snapshot of PubChem's FTP site. A thin
+command-line wrapper over `provesid.pubchem_ftp.build_pubchem_id_db`, which is
+also what `PubChemID()` runs when the database is missing; the script exists
+for refreshing the copy on Zenodo that `PubChemID(source="zenodo")` downloads.
 
 **Usage:**
 ```bash
-cd c:\projects\git\PROVESID
-python scripts/build_pubchem_id_db.py
+python scripts/build_pubchem_id_db.py --list                  # available releases
+python scripts/build_pubchem_id_db.py                         # newest snapshot
+python scripts/build_pubchem_id_db.py --release 2026-09-01 --out ./pubchem_id.db
 ```
 
-**Processing time:** ~10-15 minutes (depends on system)
+**Options:** `--no-inchi` (skip the 7.4 GB InChI file and compute InChI with
+RDKit), `--no-synonyms`, `--keep-downloads`, `--force`.
 
-**Database structure:**
-- `compounds` table: Main compound data with identifiers and properties
-- `cas_numbers` table: CAS Registry Numbers (one-to-many relationship)
-- `synonyms` table: Chemical synonyms (one-to-many relationship)
+**Cost:** 15.4 GB transferred, one file at a time; a 2.5 GB database, plus
+7.4 GB free at the worst moment; about 12 minutes of processing on top of the
+download. See `docs/api/pubchem.md#the-local-database` for what
+goes in and how, and `PubChemID(db_path=...).provenance()` for what a finished
+database records about itself.
 
-**Indexes created:**
-- CAS number lookup
-- InChIKey lookup
-- InChI lookup
-- Molecular formula lookup
-- Synonym search
-
-**Expected output:**
-```
-Processing: c:\projects\git\PROVESID\src\provesid\data\PubChem_CAS_202601.csv
-Output database: c:\projects\git\PROVESID\src\provesid\data\pubchem_id.db
-Reading CSV file...
-Counting rows...
-Processing 1,589,912 compounds...
-Processing compounds: 100%|████████████| 1589912/1589912
-Creating indexes...
-
-✓ Database created successfully!
-  - 1,589,912 compounds
-  - XXX,XXX CAS numbers
-  - XXX,XXX synonyms
-  - Database size: X.XX GB
-```
+**Refreshing Zenodo:** build, check `provenance()["release"]`, upload the file
+to a new version of the Zenodo record, and point `PubChemID.DEFAULT_DB_URL` at
+it.
 
 ## chebifier backend installer
 
@@ -106,32 +82,12 @@ bash scripts/install_chebifier.sh
 
 ## Using the Database
 
-After building the database, use the `PubChemID` class:
-
 ```python
 from provesid import PubChemID
 
-# Initialize
-db = PubChemID()
-
-# Lookup by CAS
-result = db.get_by_cas("50-78-2")  # Aspirin
-print(result['inchi'])
-
-# Convert identifiers
-cid = db.cas_to_cid("50-78-2")
-inchikey = db.cas_to_inchikey("50-78-2")
-
-# Batch operations
-results = db.batch_cas_to_cid(["50-78-2", "50-00-0"])
-
-# Get identifier table
-df = db.get_id_table_from_cas("50-78-2")
+db = PubChemID()                     # builds from FTP if pubchem_id.db is missing
+db.cas_to_cid("50-78-2")             # 2244
+db.get_by_cas_batch(["50-78-2", "50-00-0"])
+db.provenance()["release"]           # which PubChem snapshot answered
+db.xrefs(2244)                       # DSSTox, ChEBI, ChEMBL, EC and UNII links
 ```
-
-## Notes
-
-- The CSV file and SQLite database are excluded from git (see `.gitignore`)
-- The database is ~1-2 GB depending on content
-- First-time build required before using `PubChemID` class
-- Database includes only identifiers and chemical properties (not annotations or bioassay data)

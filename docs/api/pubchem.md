@@ -149,24 +149,90 @@ outgrows `URL_IDENTIFIER_LIMIT`, which is how PubChem asks for long lists to be
 sent. Neither includes synonyms: those need one request per compound, which
 would defeat the batching. Use `get_compound_synonyms()` where they are needed.
 
+## The Local Database
+
+`PubChemID` reads `pubchem_id.db`, a SQLite file holding the ~1.43 M PubChem
+compounds that carry a CAS number: their CAS numbers, title, IUPAC name,
+formula, molecular weight, exact and monoisotopic mass, isomeric SMILES, InChI,
+InChIKey, creation date and synonyms. When the file is missing, `source` decides
+where it comes from:
+
+```python
+from provesid import PubChemID
+
+db = PubChemID()                    # source="ftp": build it from PubChem's FTP site
+db = PubChemID(source="zenodo")     # download a 2.2 GiB prebuilt copy instead
+```
+
+`source` describes how a missing database is acquired; a database already on
+disk is opened whichever way it was made.
+
+### Building from PubChem's FTP site
+
+`provesid.pubchem_ftp.build_pubchem_id_db()` — what `PubChemID()` calls — builds
+the database from a dated monthly snapshot of `Compound/Extras/`:
+
+```python
+from provesid.pubchem_ftp import build_pubchem_id_db, list_releases
+
+list_releases()
+# ['2026-09-01', '2026-08-01', '2026-07-01', '2026-06-01', 'current']
+
+build_pubchem_id_db(release="2026-09-01")      # or "latest" (default), "current"
+```
+
+- **The compounds** are those PubChem's own identifier file,
+  `CID-Identifiers.tsv.gz`, maps to a CAS number, each checked against the CAS
+  check digit. The old Zenodo database found its CAS numbers by running a
+  regular expression over free-text synonyms, and 1.25% of them are not valid
+  CAS numbers; this route rejects about 120 rows in 1.46 M.
+- **Every file** is downloaded resumably and checked against the MD5 PubChem
+  publishes beside it, read once to keep the compounds in scope, and deleted —
+  so the free disk needed is the 2.5 GB database plus the largest file
+  (7.4 GB), not the 15.4 GB total. `keep_downloads=True` keeps them for a later
+  rebuild. Processing takes about 12 minutes; the rest is download time.
+- **`include_inchi=False`** skips the 7.4 GB InChI file and computes InChI and
+  InChIKey from the SMILES with RDKit: less to download, a longer build, and
+  RDKit's InChI rather than PubChem's.
+- **The molecular weight** is not in any FTP file, so it is computed from the
+  formula (and from the SMILES for isotopically labelled compounds). It agrees
+  with PubChem's own value to the second decimal for most compounds; PubChem
+  rounds some weights more coarsely, and where it does this is the more precise
+  number.
+
+The database records where it came from, and carries the cross-references
+PubChem publishes in the same identifier file:
+
+```python
+db = PubChemID()
+db.provenance()["release"]          # '2026-09-01', plus every file's URL and MD5
+db.xrefs(2244)
+# {'chebi': ['CHEBI:15365'], 'chembl': ['CHEMBL25'], 'dtxsid': ['DTXSID5020108'],
+#  'ec': ['200-064-1'], 'unii': ['R16CO5Y76E']}
+```
+
+For a shell, `python scripts/build_pubchem_id_db.py --help`.
+
+::: provesid.pubchem_ftp
+
 ## Properties Without the Network
 
-`PubChemID` — the local SQLite database of ~1.6M compounds — carries the
-identifiers and the cheap computed descriptors, so most property lookups need no
-request at all. `properties()` reads it first and consults PUG-REST only for
-what it cannot answer:
+`PubChemID` answers the properties that are *data* about a compound — its
+identifiers, names, formula and masses — from disk, so most property lookups
+need no request at all. `properties()` reads it first and consults PUG-REST only
+for what it cannot answer:
 
 ```python
 from provesid import PubChemID
 
 db = PubChemID()
 
-db.properties(2244, ["MolecularFormula", "MolecularWeight"])
+db.properties(2244, ["MolecularFormula", "MonoisotopicMass"])
 # {'CID': 2244, 'Source': 'offline', 'MolecularFormula': 'C9H8O4',
-#  'MolecularWeight': 180.16}
+#  'MonoisotopicMass': 180.04225873}
 
-db.properties(2244, ["MonoisotopicMass"])
-# {'CID': 2244, 'Source': 'online', 'MonoisotopicMass': 180.04225873}
+db.properties(2244, ["XLogP"])
+# {'CID': 2244, 'Source': 'online', 'XLogP': 1.2}
 ```
 
 The `Source` key records which one answered. Two rules decide it:
@@ -176,11 +242,13 @@ The `Source` key records which one answered. Two rules decide it:
   property would need a request anyway and a row assembled from two PubChem
   snapshots is worse than a row from one.
 
-`PubChemID.OFFLINE_PROPERTIES` lists what can be served locally: the formula,
-weight, exact mass, isomeric SMILES, InChI, InChIKey, IUPAC name, title, XLogP,
-TPSA, complexity, charge and the H-bond, rotatable-bond and heavy-atom counts.
-Everything else — `MonoisotopicMass`, `ConnectivitySMILES`, the 3D descriptors,
-the patent and literature counts — is online-only.
+`db.offline_properties` lists what the open database can serve: the formula,
+molecular weight, exact and monoisotopic mass, isomeric SMILES, InChI,
+InChIKey, IUPAC name and title (a Zenodo copy lacks the monoisotopic mass).
+Everything else is online-only — including the computed descriptors `XLogP`,
+`TPSA`, `Complexity`, `Charge` and the atom and bond counts, which are
+PubChem's model outputs rather than data about the compound, and are served
+from PubChem even by a Zenodo copy that still stores them.
 
 Bulk lookups split themselves between the two sources automatically, and the
 online remainder is fetched in one batched request:

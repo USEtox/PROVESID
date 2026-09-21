@@ -9,6 +9,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`pubchem_id.db` is built from PubChem's FTP site, and says where it came
+  from.** The new `provesid.pubchem_ftp` module builds the database
+  `PubChemID` reads from a dated monthly snapshot of `Compound/Extras/`, and
+  `PubChemID(source=...)` chooses between that and the Zenodo download:
+
+  ```python
+  from provesid import PubChemID
+  from provesid.pubchem_ftp import build_pubchem_id_db, list_releases
+
+  db = PubChemID()                    # source="ftp" (default): build if missing
+  db = PubChemID(source="zenodo")     # download the 2.2 GiB prebuilt copy
+  list_releases()                     # ['2026-09-01', ..., 'current']
+  build_pubchem_id_db(release="2026-09-01", keep_downloads=True)
+
+  db.provenance()["release"]          # '2026-09-01', and every file's MD5
+  db.xrefs(2244)                      # {'chebi': [...], 'dtxsid': [...], ...}
+  ```
+
+  *Which compounds.* Those PubChem's own identifier file maps to a CAS number,
+  each checked against the check digit: 1 430 379 in the 2026-09-01 snapshot,
+  with 123 CAS rows rejected. The Zenodo database found its CAS numbers by
+  running `\d{2,7}-\d{2}-\d` over free-text synonyms, and 17 379 of them
+  (1.25%) are not valid CAS numbers.
+
+  *How.* Eight files, each downloaded resumably, checked against the MD5
+  PubChem publishes beside it, streamed once to keep the compounds in scope and
+  deleted, so the free disk needed is the database plus the largest file
+  (7.4 GB), not the 15.4 GB total. The database is built beside its destination
+  and moved into place only when complete. `include_inchi=False` skips the
+  InChI file and computes InChI with RDKit; `include_synonyms=False` leaves out
+  the synonyms; `keep_downloads=True` keeps the files, and a later build reuses
+  any whose MD5 still matches.
+
+  *What it records.* A `provenance` table (release, snapshot timestamp, build
+  time, row counts, builder version) and a `provenance_files` table (URL, MD5,
+  bytes, lines read and kept, per file). `PubChemID.provenance()` returns both.
+
+  *What it adds.* `monoisotopicmass`, and an `xrefs` table of DSSTox, ChEBI,
+  ChEMBL, EC and UNII identifiers from the same file, which `PubChemID.xrefs()`
+  reads.
+
+  *Molecular weight* is in none of the FTP files, so it is computed from the
+  formula (`provesid.pubchem_ftp.molecular_weight`) with
+  `provesid.pubchem_ftp.ATOMIC_WEIGHTS` --- IUPAC 2005 with twelve elements
+  fitted to PubChem's own weights --- and from the SMILES for isotopically
+  labelled compounds, whose formula PubChem writes unlabelled. PubChem's
+  weights cannot be reproduced exactly: it rounds them to between zero and
+  three decimals by a rule no function of the formula fits. This agrees with
+  PubChem to the second decimal for most compounds and is the more precise
+  number where PubChem rounds harder.
+
+  `scripts/build_pubchem_id_db.py` is now a command-line wrapper over the
+  builder, for refreshing the Zenodo copy; the CSV-and-regex version it
+  replaces, and its duplicate in `src/provesid/data/`, are **removed**.
+  `examples/pubchem/ftp_build_demo.py` builds a miniature release served on
+  localhost.
+
 - **The cache is in a cache directory now, one per service, with a version in
   every key.** Three changes to `provesid.cache`:
 
@@ -660,6 +717,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PubChemAPI.get_cache_info`.
 
 ### Changed
+- **Breaking: `PubChemID()` builds a missing database from PubChem's FTP site
+  instead of downloading it from Zenodo.** That is 15.4 GB transferred and
+  about 12 minutes of processing, against 2.2 GiB; pass `source="zenodo"` for the
+  download. A database already on disk is opened as before, whichever way it
+  was made, and `datasets.plan("pubchem")` now reports the FTP route's cost.
+- **Breaking: `PubChemID.properties()` no longer serves the eight computed
+  descriptors from disk.** `XLogP`, `TPSA`, `Complexity`, `Charge`,
+  `HBondDonorCount`, `HBondAcceptorCount`, `RotatableBondCount` and
+  `HeavyAtomCount` are PubChem's model outputs, not data about a compound; they
+  now always come from PUG-REST, labelled `Source='online'`, even from a Zenodo
+  copy that still stores them. Before, the same property came from a months-old
+  snapshot for local compounds and from live PubChem for the rest, with no way
+  to tell which. `MonoisotopicMass` moves the other way, and is served from
+  disk by a database built from FTP. Which properties an open database can
+  answer is `db.offline_properties`, and is also the default property list.
+- **`PubChemID.get_by_cas_batch()` and `get_by_smiles_batch()` return the
+  database's own columns** rather than a fixed list that named the descriptor
+  columns, so a database built from FTP yields `monoisotopicmass` and no
+  columns of `None`.
 - **Breaking: `Search` no longer downloads missing datasets by default.** Pass
   `datasets="auto"` for the old behaviour. `redownload=True` now requires
   `datasets="auto"` and raises otherwise, rather than being silently ignored

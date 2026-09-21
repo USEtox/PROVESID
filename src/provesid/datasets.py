@@ -557,13 +557,21 @@ class Dataset:
                                max(self.download_bytes, self.resident_bytes))
 
 
+#: The PubChem identifier database as :mod:`provesid.pubchem_ftp` builds it,
+#: measured on the first real build (2026-09-01 snapshot): the eight source
+#: files, the finished database, and the largest file, ``CID-InChI-Key.gz``,
+#: which is the only one on disk beside the database at the worst moment.
+PUBCHEM_FTP_DOWNLOAD = 15_374_591_318
+PUBCHEM_FTP_RESIDENT = 2_484_281_344
+PUBCHEM_FTP_LARGEST_FILE = 7_361_682_757
+
 #: The five datasets, in the order :class:`~provesid.Search` benefits from them:
 #: the three primary sources first, then ChEMBL, which only enriches a structure
 #: the others already found, then ZeroPM, which is off by default.
 #:
 #: Sizes were measured on 2026-09-20 from the copies on a machine that had all
 #: five: ChEBI SDF 879.7 MiB plus a 74.5 MiB index, CompTox 816.6 MiB, PubChem
-#: 2.16 GiB, ChEMBL 36 2.42 GiB as the extract an install now keeps (27.7 GiB
+#: as the FTP build leaves it (see ``PUBCHEM_FTP_RESIDENT``), ChEMBL 36 2.42 GiB as the extract an install now keeps (27.7 GiB
 #: as the full release it is built from, out of a 5.8 GB archive), ZeroPM
 #: 438.7 MiB. They
 #: are advisory --- a later release is a little larger --- and are used to tell
@@ -574,10 +582,22 @@ DATASETS: Dict[str, Dataset] = {
         title="PubChem identifiers",
         role="CAS, name, InChIKey and formula lookups; the broadest source",
         patterns=("pubchem_id.db",),
-        extras=("pubchem_id.db.part", "pubchem_id.db.part.source"),
-        download_bytes=2322595840,
-        resident_bytes=2322595840,
-        source="Zenodo record 18173204",
+        # ``pubchem_ftp/<release>/`` holds the source files of a build: while
+        # it runs, after an interrupted one, or for good with
+        # ``keep_downloads=True``. The ``.part`` pair is the Zenodo route's.
+        extras=("pubchem_id.db.tmp", "pubchem_ftp/*/*",
+                "pubchem_id.db.part", "pubchem_id.db.part.source"),
+        # Sized for the route ``fetch`` takes, ``PubChemID(source="ftp")``:
+        # eight files from the newest monthly snapshot, read one at a time and
+        # deleted, so the peak is the finished database plus the largest file.
+        download_bytes=PUBCHEM_FTP_DOWNLOAD,
+        resident_bytes=PUBCHEM_FTP_RESIDENT,
+        peak_bytes=PUBCHEM_FTP_RESIDENT + PUBCHEM_FTP_LARGEST_FILE,
+        source="PubChem FTP (Compound/Monthly/<newest>/Extras)",
+        note="built from eight PubChem FTP files, one at a time: about 12 "
+             "minutes of processing on top of a 15.4 GB download; "
+             "PubChemID(source='zenodo') downloads a 2.2 GiB prebuilt copy "
+             "instead",
     ),
     "comptox": Dataset(
         name="comptox",
@@ -1101,7 +1121,7 @@ def fetch(names: Union[str, Iterable[str]], data_dir: Optional[str] = None,
 
     Args:
         names: Dataset name or names. There is no "all" default: fetching
-            everything transfers ~9 GiB and needs ~37 GiB free while ChEMBL is
+            everything transfers ~21 GiB and needs ~37 GiB free while ChEMBL is
             unpacked, which is a decision that has to be spelled out.
         data_dir: Directory to install into; None for the per-user default.
         force: Re-download datasets that are already installed. For ChEMBL this

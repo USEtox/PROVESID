@@ -447,8 +447,8 @@ Steps are independently committable and leave the suite green.
 | 6 | ~~`close()`, context managers and thread safety on the four SQLite clients~~ **done, §16** | 4.3 | S |
 | 7 | `classyfire.py` raises; rewrite its tests; drop it from the docs' service lists — **postponed, §17.0** | 4.8 | S |
 | 8 | ~~`cache.py`: persistent dir, parameterised service functions, key version~~ **done, §17** | 4.7 | S |
-| 9 | **`pubchem_ftp.py`: the FTP identifier builder** | **8** | **L** |
-| 10 | `PubChemID.descriptors()` — RDKit descriptors on demand | 8.6 | M |
+| 9 | ~~`pubchem_ftp.py`: the FTP identifier builder~~ **done, §18** | 8 | L |
+| 10 | **`PubChemID.descriptors()` — RDKit descriptors on demand** | **8.6** | **M** |
 | 11 | `CheMBL(source="mysql")` — the streaming route, verified against step 5 | 9.7 | M |
 | 12 | split `pubchem.py` → `+ pubchem_id.py`; `chebi.py` → `+ chebi_sdf.py` | 4.12 | M |
 | 13 | `sources.py`; collapse the `Search` ladders | 4.5 | M |
@@ -2200,3 +2200,301 @@ Fixed, with a test that round-trips a cached `None`.
   100k structures holds every result in RAM as well as on disk.
 - Nothing in this step touched `is_empty_result` / `skip_if`, which remain the
   per-function way to say "absence is not an answer".
+
+---
+
+## 18. Landed on 2026-09-21 — step 9, `pubchem_ftp.py` (§8)
+
+§8.4 asked for one function that builds `pubchem_id.db` from a dated monthly
+snapshot of PubChem's FTP site, and for `PubChemID(source="ftp")` as the
+default route to it. That is what landed, with four departures, each argued
+below: the molecular weight is *not* PubChem's (§18.3), the scope is a
+trade and not a strict gain (§18.4), the descriptors stop being served from
+disk even by an old Zenodo copy (§18.5), and there is no `scope=` or
+`source="local"` (§18.6).
+
+### 18.1 What landed
+
+- `src/provesid/pubchem_ftp.py`: `build_pubchem_id_db`, `list_releases`,
+  `resolve_release`, `extras_url`, `selected_files`, `molecular_weight`, and
+  the data they run on --- `SOURCE_FILES`, `XREF_TYPES`, `ATOMIC_WEIGHTS`.
+  `release="latest"` (default) resolves to the newest `Monthly/YYYY-MM-01/`
+  by reading the directory listing; `"current"` is the rolling `Extras/`; a
+  date names a snapshot and costs no request.
+- `PubChemID(source=...)`, `SOURCES = ("ftp", "zenodo")`, `"ftp"` the default,
+  checked before anything is fetched. Like `CheMBL(source=...)` (§15.4) it
+  describes an acquisition, not a file: whatever is on disk is opened.
+- `PubChemID.offline_properties`, per instance, from the columns the open
+  database actually has; `provenance()`; `xrefs(cid)`.
+- `get_by_cas_batch` / `get_by_smiles_batch` return the database's own
+  columns instead of a hard-coded list naming the eight descriptors.
+- `datasets.DATASETS["pubchem"]` sized for the FTP route, with the download
+  directory and the `.tmp` among its `extras`, so `status` counts and `remove`
+  deletes a kept or interrupted build.
+- `scripts/build_pubchem_id_db.py` rewritten as an `argparse` wrapper for the
+  Zenodo refresh; the CSV-and-regex original and its stale duplicate in
+  `src/provesid/data/` deleted.
+- 46 tests in `tests/test_pubchem_ftp.py`, `examples/pubchem/ftp_build_demo.py`,
+  `docs/api/pubchem.md` (a new "The Local Database" section and the module's
+  API), `CHANGELOG.md`, `scripts/README.md`, `src/provesid/data/README_PUBCHEM.md`.
+
+**The schema** is §8.4's: `compounds` / `cas_numbers` / `synonyms` as before
+minus the eight descriptor columns, plus `monoisotopicmass`, plus `xrefs`,
+`provenance` and `provenance_files`. Two things §8.4 did not list:
+`cidcdate` is kept, from `CID-Date.gz` (315 MB), because the column existed
+and the file is small; it is ISO `YYYY-MM-DD` where the CSV had `YYYYMMDD`.
+And `synonyms` now holds PubChem's *filtered* list verbatim, CAS-shaped
+strings included --- the old builder moved anything matching the regex into
+`cas_numbers`, which is how the 17 379 invalid CAS numbers got there.
+
+### 18.2 How the build is shaped
+
+One pass per file, one file at a time, as §8.4 said. Three details decided
+the shape:
+
+- **Scope is a Python `set`, not §8.4's sorted `array('l')`.** 1.43 M ints are
+  about 75 MB as a set against 11 MB as an array, and a set lookup is one hash
+  where bisection is twenty comparisons, on each of ~150 M lines per large
+  file. Readability and speed both favour the set, and 75 MB is not a laptop
+  problem.
+- **Rows go straight to SQLite and are deduplicated there.** Collecting the
+  1.46 M `(cid, cas)` pairs in a dict first cost ~250 MB; `INSERT` as read and
+  one `DELETE ... WHERE rowid NOT IN (SELECT MIN(rowid) ... GROUP BY ...)`
+  costs nothing. The identifier file is read twice --- scope first, then the
+  cross-references filtered by it --- because nothing guarantees it is sorted,
+  and 98 MB twice is seconds.
+- **Columns are filled by `UPDATE ... WHERE cid = ?`**, one file at a time, on
+  the `INTEGER PRIMARY KEY`. Lines are handled as bytes and decoded only when
+  they survive the scope filter: ~1% of a large file does.
+
+A failed build deletes its `.tmp` and leaves any existing database untouched;
+a successful one renames it into place and removes the emptied download
+directory. `keep_downloads=True` keeps the files, and a later build reuses a
+kept file after checking it against the published MD5 --- a damaged one is
+fetched again (tested). Two bugs the tests found before any real data did: the
+database's own directory was never created (it only existed because the
+default download directory is inside it), and the empty-directory cleanup
+would have climbed out of a `download_dir` placed outside the data directory.
+
+### 18.3 The molecular weight cannot be PubChem's
+
+§8.4 step 3 said "PubChem's own molecular weight is exactly this" --- the sum
+of standard atomic weights over the formula. Tested against the 1.58 M
+weights in the shipped database, it is not, for two separate reasons.
+
+**The atomic weights.** RDKit's table (IUPAC 2013-ish, `C 12.011`,
+`H 1.008`) reproduces PubChem at any precision for 74% of compounds. IUPAC
+2005 (`C 12.0107`, `H 1.00794`) does better for C, H, N, O and P. Per
+element, choosing whichever of the two reproduces more PubChem weights, and
+trying the obvious alternatives for the rest, settles on IUPAC 2005 with twelve
+elements moved: S 32.067, Se 78.971, Ge 72.630, Mo 95.95, B 10.812,
+Yb 173.045, Hg 200.592, Hf 178.486, Cd 112.414, Cl 35.45, Si 28.085,
+I 126.904. That is `ATOMIC_WEIGHTS`, and its comment says it was fitted.
+
+**The rounding.** PubChem reports weights to between zero and three decimals
+--- aspirin 180.16, C₂₀H₃₂O₄ 336.5, tetramethyllead 267 --- and no rule tried
+(summed uncertainties, root-sum-square, largest single term) separates the
+cases. 7% of weights match *no* rounding of the computed value under any one
+table. PubChem itself is not consistent: chloroform is 119.37, which needs
+Cl 35.45, and chloroform-*d* is 120.38, which needs Cl 35.453.
+
+So `mw` is computed with the fitted table and rounded half-up to two decimals.
+Against the shipped weights: on the 1 401 407 compounds the two
+databases share, 62.0% are identical, 74.3% within 0.01, 97.1% within 0.05,
+and 337 differ by more than 0.5 --- almost all compounds of lead, which PubChem
+rounds to a whole number (tetrabutyllead: 435 against 435.66), and
+technetium, which PubChem weighs as ⁹⁷Tc and RDKit's fallback as 98. Rounding
+by magnitude instead (three decimals below 50, five significant figures) was
+tried and moves the exact-match rate by less than half a point either way, so
+the simple rule stayed. Where the two differ, PubChem
+has usually rounded harder, and this is the more precise number. The
+docstrings, the docs and `provenance["mw_source"]` say it is computed.
+
+Isotopically labelled compounds need the SMILES: PubChem writes chloroform-*d*
+as `CHCl3`, so the formula weighs it 119.37. After all columns are in, rows
+whose SMILES carries an isotope label are recomputed atom by atom, the label's
+isotope mass for labelled atoms and `ATOMIC_WEIGHTS` for the rest
+(8 534 compounds).
+
+### 18.4 The scope is a trade, not the 8% gain §8.1 described
+
+§8.1 compared CIDs *carrying a CAS number* and found the FTP mapping ahead by
+108 333. Measured against the whole shipped database, 2026-09-01 snapshot:
+
+| | shipped (regex) | FTP (curated) |
+|---|---:|---:|
+| compounds | 1 589 910 | 1 430 379 |
+| compounds with a CAS number | 1 323 167 | 1 430 379 |
+| CAS rows failing the check digit | 17 379 | 0 (123 rejected) |
+| distinct valid CAS numbers | 1 352 757 | 1 371 578 |
+
+and the difference, both ways:
+
+- **188 503 compounds leave.** 172 408 never had a CAS row: they were in the
+  CSV because PubChem's classification browser files them under "CAS", most
+  likely through a *substance* that carries one --- which is §8.5's deferred
+  substance layer. The other 16 095 had only regex-found CAS numbers PubChem's
+  mapping does not give them.
+- **28 972 compounds arrive** that the shipped database never had, and
+  123 307 more compounds carry a CAS number than did.
+- **34 611 valid CAS numbers stop resolving.** They came from synonyms and are
+  not in PubChem's mapping; 33 094 of them are in PubChem's own *filtered*
+synonym list (names PubChem keeps because they are consistent with the
+structure), 25 734 on a compound already in scope. **53 432 resolve that did not.**
+- **10 039 CAS numbers resolve to a different first CID** than the shipped
+  database's `get_by_cas` returns.
+
+That is fewer compounds and more CAS numbers, every one of them valid, and
+every one of them a link PubChem vouches for. For `Search`, which also asks
+CompTox and ChEBI for a CAS number, the lost 2.6% is partly covered. It is the
+trade decision 2 of §8.2 implied, but it should be a decision rather than a
+side effect; §18.9 lists the option.
+
+### 18.5 Descriptors are online-only, whatever is on disk
+
+§8.4 dropped the eight descriptors from `OFFLINE_PROPERTIES`. The question that
+raised is what a Zenodo copy --- which still has the columns --- should do. It
+could serve them: the columns are there. It does not, for §8.6's reason: before
+this change `properties(cid, ["XLogP"])` returned a months-old snapshot for
+compounds in the file and live PubChem for the rest, with no way to ask for
+either. Now a descriptor has one source, PUG-REST, labelled `online`, until
+step 10 adds RDKit's as a named third.
+
+`offline_properties` is per instance because the two kinds of database differ
+in the other direction too: `MonoisotopicMass` is offline only in an FTP
+build, and making it part of a Zenodo copy's *default* property list would
+send every default lookup online for it.
+
+### 18.6 What was left out of §8.4's sketch
+
+- **`scope="cas"`.** One value, and §8.5 keeps the second (`"cas+sid"`) out of
+  this version; a parameter that accepts one string is noise. When the
+  substance layer lands it can arrive with its parameter.
+- **`PubChemID(source="local")`.** `auto_download=False` already means "use what
+  is on disk, or raise", and has since before this plan.
+- **A release argument on `PubChemID`.** The constructor builds from the newest
+  snapshot; a user who wants another calls `build_pubchem_id_db(release=...)`,
+  which is one line and says what it does.
+
+### 18.7 The real build
+
+Built once, end to end, against the real 2026-09-01 snapshot
+(`TIMESTAMP` 2026/08/31 18:38:04), with `keep_downloads=True` so it could be
+repeated without the network.
+
+| file | compressed | lines read | kept | download | read + write |
+|---|---:|---:|---:|---:|---:|
+| `CID-Identifiers.tsv.gz` | 98 MB | 12 745 309 | 3 238 798 | 2m05s | 22s |
+| `CID-Date.gz` | 330 MB | 124 599 998 | 1 430 378 | 6m48s | 67s |
+| `CID-Mass.gz` | 1.39 GB | 124 599 998 | 1 430 378 | 32m57s | 83s |
+| `CID-SMILES.gz` | 1.49 GB | 124 599 998 | 1 430 378 | 42m16s | 81s |
+| `CID-Title.gz` | 1.89 GB | 124 599 721 | 1 430 378 | 54m49s | 87s |
+| `CID-IUPAC.gz` | 1.85 GB | 123 699 553 | 1 416 370 | 30m59s | 87s |
+| `CID-InChI-Key.gz` | 7.36 GB | 124 599 995 | 1 430 378 | 1h51m30s | 166s |
+| `CID-Synonym-filtered.gz` | 0.97 GB | 117 897 265 | 15 770 496 | 17m31s | 97s |
+| indexes | | | | | 21s |
+| **total** | **15.37 GB** | | | **4h59m** | **11.9 min** |
+
+PubChem served 0.85 MB/s all afternoon --- a fourteenth of the 12.2 MB/s §8.3
+measured the day before, and a bare `curl` alongside got the same --- so the
+build took **310.8 minutes, 96% of it waiting for bytes**. At §8.3's rate the
+download is 21 minutes and the whole build about half an hour, which is what
+§8.4 projected; the documentation therefore quotes the processing time and the
+transfer size, not a wall-clock time that the network decides. A second build
+from the kept files took **11.7 minutes** including re-verifying all 15 GB of
+MD5s, and produced an identical `compounds` table. Peak RSS **299 MB**.
+
+The database is **2.48 GB** (2 484 281 344 bytes): 1 430 379 compounds,
+1 461 053 CAS rows, 15 770 496 synonyms, 1 777 745 cross-references
+(DTXSID 1 129 293, EC 335 218, ChEMBL 145 712, UNII 120 113, ChEBI 47 409).
+Synonyms and their text index are half of it (1.27 GB); `compounds` is
+0.56 GB, `xrefs` with its indexes 0.12 GB. §8.4's estimate of 1.5–2.5 GB
+held. §8.3's "5 M rows" of cross-references was for every CID; restricted to
+the scope it is 1.78 M. One CID with a CAS number is in no structure file
+(`compounds_without_smiles = 1`); 14 009 have no computed IUPAC name, as in
+PubChem.
+
+`datasets.DATASETS["pubchem"]` now carries these numbers: 15 374 591 318 bytes
+to download, 2 484 281 344 resident, and a peak of the database plus the
+7 361 682 757-byte InChI file. For the four default sources `datasets.plan()`
+reports 21.0 GiB to download, 6.5 GiB installed, 37.4 GiB at peak --- the peak
+still ChEMBL's.
+
+### 18.8 Verification
+
+- `tests/test_pubchem_ftp.py`, 46 tests. Nothing between the builder and the
+  network is stubbed: a miniature release --- the real directory layout, the
+  real line formats, gzipped, an `.md5` beside every file, a `TIMESTAMP` --- is
+  served by `http.server` on localhost, and the builder lists, resolves,
+  downloads, verifies, streams, filters and writes against it. The release is
+  built to exercise the decisions: a duplicated CAS row, a Wikidata row that
+  must not reach `xrefs`, files in different CID orders, chloroform-*d*, a CID
+  whose only CAS fails the check digit and one with no CAS at all, both
+  present in every file and required to appear in no table.
+- What is pinned: the scope; deduplication; every `compounds` column of
+  aspirin exactly; the isotope correction; PubChem's synonym order; the stored
+  cross-reference types; the indexes; provenance keys, and that every
+  recorded MD5 is the published one; that nothing is left beside the database;
+  reuse of kept downloads, and re-fetching of a damaged one; `FileExistsError`
+  before any request; that a checksum failure leaves the existing database
+  byte-identical and no `.tmp`; that `include_inchi=False` and
+  `include_synonyms=False` never request their file; the rolling dump's paths;
+  seven PubChem weights computed from their formulas, charge suffixes and bad
+  formulas; `PubChemID` building by default, serving `MonoisotopicMass`
+  offline and not `XLogP`, `provenance()` and `xrefs()`, the batch tables'
+  columns, the Zenodo route, a bad `source` raising before anything is written,
+  and an existing database opened unchanged by either route; and that
+  `datasets.status` counts and `datasets.remove` deletes kept downloads.
+- `tests/test_pubchem_properties.py`: three tests rewritten for descriptors
+  going online, one added (`XLogP` goes online although the column exists).
+  `tests/test_dataset_manager.py`: PubChem's registry row pinned to the FTP
+  route and to `PubChemID.__init__`'s default, as §15.5 did for ChEMBL.
+- `examples/pubchem/ftp_build_demo.py` run end to end.
+
+### 18.9 Validation
+
+- `pytest tests/` — **1249 passed, 35 skipped, 19 failed** (8m20s). The
+  nineteen are exactly §17.8's: live calls to `pubchem.ncbi.nlm.nih.gov` that
+  returned HTTP 503, four in `test_pubchem.py` and fifteen in
+  `test_pubchemview.py`, and a bare `curl` of PUG-REST returned 503 at the same
+  moment. Re-running with those two files excluded: **1237 passed,
+  33 skipped, 0 failed** (6m56s).
+- `mkdocs build --strict` — clean, after one docstring example was reworded
+  because autorefs read its list output as a cross-reference.
+- `pytest --doctest-modules src/provesid/pubchem_ftp.py` — 5 passed, 1 skipped.
+- Against the shipped database, on the 1 401 407 CIDs both have: formula and
+  InChIKey identical for all, SMILES for all but 55, exact mass within 0.001
+  for all, title for 94.8% (PubChem retitles compounds between releases).
+  Molecular weight as in §18.3.
+- `PubChemID(db_path=<new>)`: `get_by_cas` for formaldehyde, ethanol,
+  aspirin, water and benzene returns the same CIDs and names as the shipped
+  database; `search_by_name("aspirin", exact=True)` returns 2244; `cas_to_cid`
+  runs in 57 µs against 59 µs; `properties(2244)` offline carries
+  `MonoisotopicMass`; `xrefs(712)` returns formaldehyde's ChEBI, ChEMBL,
+  DTXSID, EC and UNII. Formaldehyde shows the rounding difference: 30.03
+  against PubChem's 30.026.
+
+### 18.10 Still open
+
+- **The lost CAS numbers of §18.4.** A `cas_from_synonyms=True` option --- CAS-shaped
+filtered synonyms that pass the check digit, added to `cas_numbers` for
+compounds already in scope --- would win back 25 734 of the 34 611 at no extra
+download, since the synonym file is read anyway. It is a precision/recall
+choice PubChem has already made one way, so it is the user's call rather than
+a default; if taken, the rows should carry their origin so a lookup can tell a
+curated link from a synonym. The 172 408 compounds with
+  no compound-level CAS are §8.5's substance layer (`SID-Map.gz`, 3.58 GB).
+- **The Zenodo copy is still the CSV build.** It should be replaced by an FTP
+  build (`scripts/build_pubchem_id_db.py`), which also gives Zenodo users
+  provenance and cross-references; `DEFAULT_DB_URL` then moves.
+- **Step 10**, `PubChemID.descriptors()`, is what makes §18.5 whole: until it
+  lands, a user wanting XLogP without the network has no route at all.
+- **`Search` does not use `xrefs` yet.** DTXSID and ChEBI links from PubChem
+  are exactly what `Search` infers by structure matching today; wiring them in
+  belongs with step 13's source table.
+- **A failed build starts over.** The database is rebuilt from nothing on
+  rerun, though downloads resume and kept files are reused. Resuming at the
+  file level would need the `.tmp` to record which files it has absorbed.
+- **Download and parse are sequential.** Fetching the next file while parsing
+  the current one would roughly halve the wall-clock time, at the price of a
+  second file on disk at the peak.

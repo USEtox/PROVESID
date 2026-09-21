@@ -153,6 +153,8 @@ print(todo[["dataset", "action", "download", "installed"]].to_string(index=False
 print("transfer:", datasets.human_bytes(todo.attrs["total_download_bytes"]))
 # attrs["peak_bytes"] is the free disk needed at the worst moment, which for
 # ChEMBL is far more than it installs: 33.4 GiB to leave 2.4 GiB behind.
+# PubChem is built from 14.3 GiB of PubChem FTP files, read and deleted one at a
+# time; PubChemID(source="zenodo") downloads a 2.2 GiB prebuilt copy instead.
 
 # datasets.fetch(["pubchem", "chebi"])   # resumable, verified, skips what is present
 # datasets.remove("chembl")              # reclaim the space, by name

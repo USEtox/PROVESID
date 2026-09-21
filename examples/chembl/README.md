@@ -11,7 +11,7 @@ ChEMBL is a manually curated database of bioactive molecules with drug-like prop
 - `chembl_tutorial.md` - Comprehensive tutorial covering all ChEMBL functionality
 - `compact_demo.py` - Shrink a ChEMBL release already on disk, ~27.7 GiB to ~2.4 GiB
 - `download_source_demo.py` - `CheMBL(source=...)`: install as the 2.4 GiB
-  extract, or keep the full release
+  extract from the SQLite release or from the MySQL dump, or keep the full release
 - `name_search_demo.py` - Name and synonym lookup, exact and substring
 - `demo_implementation.py` - Minimal end-to-end usage
 
@@ -45,6 +45,8 @@ print(f"LogP: {props['alogp']}")
 - **Free disk needed to install**: ~33.4 GiB. The archive and the full release
   both exist on the way in, even though only 2.4 GiB is left behind;
   `provesid.datasets.plan("chembl")` reports it as `peak_bytes`.
+  `CheMBL(source="mysql")` builds the same extract from the 2.1 GB MySQL dump
+  and needs ~4.5 GiB — see `download_source_demo.py`.
 - **Source**: https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/
 - **Auto-download**: Yes (on first use)
 

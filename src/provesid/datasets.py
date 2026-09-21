@@ -629,9 +629,14 @@ DATASETS: Dict[str, Dataset] = {
         title="ChEMBL",
         role="enrichment only --- adds ChEMBL IDs to structures already found",
         patterns=("chembl_*.db",),
-        extras=("chembl_*_sqlite.tar.gz", "chembl_*_sqlite.tar.gz.part",
-                "chembl_*_sqlite.tar.gz.part.source", "chembl_*.db.incoming",
-                "chembl_*.db.tmp"),
+        # The ``sqlite`` route saves its archive as ``chembl_NN.db.tar.gz``;
+        # the ``mysql`` route keeps the dump's own name. Either can be left
+        # half-downloaded as a ``.part`` pair.
+        extras=("chembl_*.db.tar.gz", "chembl_*.db.tar.gz.part",
+                "chembl_*.db.tar.gz.part.source",
+                "chembl_*_mysql.tar.gz", "chembl_*_mysql.tar.gz.part",
+                "chembl_*_mysql.tar.gz.part.source",
+                "chembl_*.db.incoming", "chembl_*.db.tmp"),
         download_bytes=5800 * _MB,
         # What is left when the install finishes: the extract, not the release.
         # ``CheMBL(source="sqlite")`` -- the default -- compacts the 27.7 GiB
@@ -643,8 +648,9 @@ DATASETS: Dict[str, Dataset] = {
         source="EBI FTP (chembl_NN_sqlite.tar.gz)",
         note="installs as a 2.4 GiB extract, but the 5.8 GB archive and the "
              "27.7 GiB release it is built from both exist on the way in --- "
-             "33.4 GiB has to be free. CheMBL(source='full') keeps the "
-             "release",
+             "33.4 GiB has to be free. CheMBL(source='mysql') builds the "
+             "same extract from the 2.1 GB MySQL dump and needs ~4.5 GiB; "
+             "CheMBL(source='full') keeps the release",
     ),
     "zeropm": Dataset(
         name="zeropm",

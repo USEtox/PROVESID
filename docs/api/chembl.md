@@ -39,8 +39,11 @@ The ChEMBL module provides access to the ChEMBL SQLite database, a manually cura
 - **Installed size**: ~2.4 GiB. `CheMBL(source="sqlite")`, the default, compacts
   the release into the eight tables PROVESID reads and deletes the rest;
   `CheMBL(source="full")` keeps all 74 tables at ~27.7 GiB.
-- **Free disk needed**: ~33.4 GiB during installation, whichever route you take —
+- **Free disk needed**: ~33.4 GiB during installation by either of those routes —
   the archive and the full release both exist before either is removed.
+  `CheMBL(source="mysql")` needs ~4.5 GiB instead: it downloads ChEMBL's
+  2.1 GB MySQL dump and builds the same extract from it directly, so the full
+  release is never written (see [Installing from the MySQL dump](#installing-from-the-mysql-dump)).
 
 ## Key Features
 
@@ -245,6 +248,45 @@ tar -xzf chembl_37_sqlite.tar.gz
 find chembl_37 -name 'chembl_37.db' -exec mv {} . \;
 rm -r chembl_37
 ```
+
+## Installing from the MySQL dump
+
+ChEMBL also publishes each release as a plain-text MySQL dump,
+`chembl_NN_mysql.tar.gz` (2.1 GB). `CheMBL(source="mysql")` downloads that
+instead of the SQLite archive and reads the eight tables PROVESID uses straight
+out of it as it is decompressed; the other 66 tables stream past unparsed. No
+MySQL server is involved.
+
+```python
+from provesid import CheMBL
+
+chembl = CheMBL(source="mysql")        # 2.1 GB down, ~4.5 GiB free needed
+chembl.provenance["source_format"]     # 'mysql'
+
+# ...or from a dump you downloaded yourself
+path = CheMBL.build_from_mysql_dump("chembl_37_mysql.tar.gz", remove_source=True)
+```
+
+| route | download | free disk at peak | installed |
+|---|---:|---:|---:|
+| `source="sqlite"` (default) | 5.8 GB | 33.4 GiB | 2.4 GiB |
+| `source="mysql"` | 2.1 GB | ~4.5 GiB | 2.4 GiB |
+| `source="full"` | 5.8 GB | 33.4 GiB | 27.7 GiB |
+
+The result is the same extract as the `sqlite` route: same tables, columns,
+column types and indexes. `CheMBL.extract_digest()` fingerprints each table
+(row count plus a content hash that includes each value's SQLite type), which
+is how the two routes are compared:
+
+```python
+a = CheMBL.extract_digest("chembl_37_provesid.db")      # built from the SQLite release
+b = CheMBL.extract_digest("from_mysql/chembl_37_provesid.db")
+assert a == b
+```
+
+The reader understands exactly what `mysqldump` writes and refuses anything
+else, naming the table and position, rather than guessing a value. If a future
+ChEMBL dump changes shape, the error says so and `source="sqlite"` still works.
 
 ## Release Handling
 

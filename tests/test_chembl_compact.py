@@ -437,12 +437,6 @@ class TestSourceValidation:
             CheMBL(data_dir=str(tmp_path), source="ftp")
         assert "'sqlite'" in str(exc_info.value)
 
-    def test_the_mysql_route_says_it_is_not_implemented(self, tmp_path):
-        """'mysql' is a planned route, so it must not read as a typo."""
-        with pytest.raises(ValueError) as exc_info:
-            CheMBL(data_dir=str(tmp_path), source="mysql")
-        assert "not implemented" in str(exc_info.value)
-
     def test_the_check_happens_before_any_download(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
             "provesid.chembl.download_file",

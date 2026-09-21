@@ -23,8 +23,11 @@ never opens, so :meth:`CheMBL.compact` builds an extract holding only the eight
 
 A first download builds that extract on the way in and keeps only it
 (``CheMBL(source="sqlite")``, the default), so a machine that has never had
-ChEMBL installs 2.4 GiB rather than 27.7 GiB.  ``CheMBL(source="full")`` keeps
-the whole release instead, for anyone who wants the other 66 tables.
+ChEMBL installs 2.4 GiB rather than 27.7 GiB.  ``CheMBL(source="mysql")``
+builds the same extract from ChEMBL's 2.1 GB MySQL dump instead, read as a
+stream, so the 27.7 GiB release is never written and ~4.5 GiB of free disk is
+enough.  ``CheMBL(source="full")`` keeps the whole release, for anyone who
+wants the other 66 tables.
 
 For detailed table schema information, see src/provesid/data/schema_documentation.txt
 """
@@ -32,8 +35,11 @@ For detailed table schema information, see src/provesid/data/schema_documentatio
 import os
 import re
 import glob
+import gzip
+import zlib
 import random
 import sqlite3
+import hashlib
 import tarfile
 import logging
 import datetime
@@ -42,6 +48,7 @@ from urllib.parse import urlsplit
 import requests
 from tqdm import tqdm
 from .datasets import DownloadError, download_file
+from .mysqldump import CreateTable, DumpFormatError, read_statements, sqlite_affinity
 from .sqlite_client import SQLiteClient
 from .utils import user_dataset_path
 
@@ -49,6 +56,25 @@ from .utils import user_dataset_path
 class ChEMBLError(Exception):
     """Custom exception for ChEMBL database errors"""
     pass
+
+
+class _CountingReader:
+    """
+    A binary file wrapper that reports how many bytes have been read.
+
+    ``tarfile``'s streaming mode only ever calls ``read``, so this is all it
+    takes to drive a progress bar over the compressed bytes of an archive
+    that is being decompressed on the fly.
+    """
+
+    def __init__(self, handle, on_read):
+        self._handle = handle
+        self._on_read = on_read
+
+    def read(self, size: int = -1) -> bytes:
+        data = self._handle.read(size)
+        self._on_read(len(data))
+        return data
 
 
 class CheMBL(SQLiteClient):
@@ -71,12 +97,14 @@ class CheMBL(SQLiteClient):
     db_url : str, optional
         Custom URL for database download.  By default the URL is resolved from
         the EBI ``latest/`` directory listing at download time.
-    source : {'sqlite', 'full'}, optional
+    source : {'sqlite', 'mysql', 'full'}, optional
         How a database that is not yet on disk is acquired (default:
         ``'sqlite'``).  ``'sqlite'`` downloads the release archive, builds the
         PROVESID extract from it and keeps only that -- 2.4 GiB installed.
-        ``'full'`` keeps the whole 27.7 GiB release.  Ignored when a database
-        is already present: neither route touches what is on disk.
+        ``'mysql'`` builds the same extract from the 2.1 GB MySQL dump without
+        ever writing the full release.  ``'full'`` keeps the whole 27.7 GiB
+        release.  Ignored when a database is already present: no route
+        touches what is on disk.
 
     Attributes
     ----------
@@ -125,6 +153,7 @@ class CheMBL(SQLiteClient):
     download builds it on the way in::
 
         CheMBL()                             # downloads 5.8 GB, installs 2.4 GiB
+        CheMBL(source="mysql")               # downloads 2.1 GB, installs 2.4 GiB
         CheMBL(source="full")                # ...or keeps the whole 27.7 GiB
         CheMBL.compact(remove_source=True)   # shrink a release already on disk
 
@@ -152,9 +181,6 @@ class CheMBL(SQLiteClient):
 
     DEFAULT_DB_URL = f"{LATEST_DIR_URL}chembl_{FALLBACK_RELEASE}_sqlite.tar.gz"
 
-    #: Matches the SQLite archives advertised in the ``latest/`` listing.
-    _ARCHIVE_RE = re.compile(r"chembl_(\d+)_sqlite\.tar\.gz")
-
     # ── Acquisition ───────────────────────────────────────────────────────────
 
     #: How a missing database is acquired, and what is kept afterwards.
@@ -164,16 +190,17 @@ class CheMBL(SQLiteClient):
     #: stops after the extraction and keeps all 74 tables.  Both transfer the
     #: same bytes -- the choice is what stays on disk, not what is fetched.
     #:
-    #: Streaming ChEMBL's 2.1 GB MySQL dump instead, which would halve the
-    #: transfer and never write the 27.7 GiB file at all, is a separate route
-    #: that is not implemented; :data:`_UNIMPLEMENTED_SOURCES` gives it an
-    #: error message that says so rather than "unknown source".
-    SOURCES: Tuple[str, ...] = ("sqlite", "full")
+    #: ``mysql`` downloads ChEMBL's 2.1 GB MySQL dump instead and reads the
+    #: extract's eight tables straight out of it (:meth:`build_from_mysql_dump`),
+    #: so the 27.7 GiB release is never written at all.  It ends with the same
+    #: extract as ``sqlite``, for less than half the transfer and a seventh of
+    #: the free disk.
+    SOURCES: Tuple[str, ...] = ("sqlite", "mysql", "full")
 
-    #: Route names that are planned but do not exist yet, with the reason.
-    _UNIMPLEMENTED_SOURCES: Dict[str, str] = {
-        "mysql": "streaming ChEMBL's MySQL dump (2.1 GB, no 27.7 GiB "
-                 "intermediate) is not implemented yet",
+    #: Which of ChEMBL's archives each route downloads: the ``NN`` in
+    #: ``chembl_NN_<format>.tar.gz``.
+    _ARCHIVE_FORMATS: Dict[str, str] = {
+        "sqlite": "sqlite", "full": "sqlite", "mysql": "mysql",
     }
 
     #: A full release smaller than this is not worth suggesting :meth:`compact`
@@ -289,12 +316,16 @@ class CheMBL(SQLiteClient):
             Full path to a database file. Overrides ``db_name``/``data_dir``.
         redownload : bool, optional
             If True, force re-download when ``auto_download`` is enabled.
-        source : {'sqlite', 'full'}, optional
-            What a download leaves on disk (default: ``'sqlite'``).  With
-            ``'sqlite'`` the release is compacted into the PROVESID extract as
-            the last step of the download and the 27.7 GiB original is deleted,
-            so installing ChEMBL costs 2.4 GiB; with ``'full'`` the whole
-            release is kept.  Only consulted when a download actually happens.
+        source : {'sqlite', 'mysql', 'full'}, optional
+            How a download is made, and what it leaves on disk (default:
+            ``'sqlite'``).  With ``'sqlite'`` the release is compacted into the
+            PROVESID extract as the last step of the download and the 27.7 GiB
+            original is deleted, so installing ChEMBL costs 2.4 GiB but needs
+            33.4 GiB free on the way.  ``'mysql'`` downloads the 2.1 GB MySQL
+            dump and builds the same extract from it directly
+            (:meth:`build_from_mysql_dump`), needing ~4.5 GiB free.  With
+            ``'full'`` the whole release is kept.  Only consulted when a
+            download actually happens.
 
         Raises
         ------
@@ -334,7 +365,9 @@ class CheMBL(SQLiteClient):
 
         if needs_download:
             if auto_download:
-                self.db_url = self.db_url or self.resolve_latest_db_url()
+                self.db_url = self.db_url or self.resolve_latest_db_url(
+                    archive=self._ARCHIVE_FORMATS[self.source]
+                )
                 if self.db_path is None:
                     self.db_path = os.path.join(
                         self.path, self._db_name_from_url(self.db_url)
@@ -408,18 +441,11 @@ class CheMBL(SQLiteClient):
         Raises
         ------
         ValueError
-            If the name is not in :data:`SOURCES`.  A route that is planned
-            but unwritten (:data:`_UNIMPLEMENTED_SOURCES`) is named as such,
-            because "unknown source: 'mysql'" would read as a typo.
+            If the name is not in :data:`SOURCES`.
         """
         if source in cls.SOURCES:
             return source
         options = ", ".join(repr(name) for name in cls.SOURCES)
-        if source in cls._UNIMPLEMENTED_SOURCES:
-            raise ValueError(
-                f"CheMBL(source={source!r}): "
-                f"{cls._UNIMPLEMENTED_SOURCES[source]}. Use one of {options}."
-            )
         raise ValueError(
             f"CheMBL(source={source!r}) is not a download route. "
             f"Use one of {options}."
@@ -481,9 +507,9 @@ class CheMBL(SQLiteClient):
             )
 
     @classmethod
-    def resolve_latest_db_url(cls, timeout: float = 30) -> str:
+    def resolve_latest_db_url(cls, timeout: float = 30, archive: str = "sqlite") -> str:
         """
-        Resolve the download URL of the current ChEMBL SQLite archive.
+        Resolve the download URL of the current ChEMBL archive.
 
         ``latest/`` only ever holds the newest release, so its archive name
         (``chembl_NN_sqlite.tar.gz``) changes with every ChEMBL release.  This
@@ -493,45 +519,51 @@ class CheMBL(SQLiteClient):
         ----------
         timeout : float, optional
             Timeout in seconds for the listing request (default: 30)
+        archive : {'sqlite', 'mysql'}, optional
+            Which archive to resolve (default: ``'sqlite'``): the SQLite
+            release, or the MySQL dump ``source="mysql"`` reads.
 
         Returns
         -------
         str
-            URL of the newest archive, or :data:`DEFAULT_DB_URL` (the pinned
-            fallback release) when the listing cannot be read or names no
-            archive.  Never raises — a stale pin is better than a hard failure.
+            URL of the newest archive, or the same archive of
+            :data:`FALLBACK_RELEASE` when the listing cannot be read or names
+            no archive.  Never raises — a stale pin is better than a hard
+            failure.
 
         Examples
         --------
-        >>> CheMBL.resolve_latest_db_url()
+        >>> CheMBL.resolve_latest_db_url()                      # doctest: +SKIP
         'https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/chembl_37_sqlite.tar.gz'
+        >>> CheMBL.resolve_latest_db_url(archive="mysql")       # doctest: +SKIP
+        'https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/chembl_37_mysql.tar.gz'
         """
         logger = logging.getLogger(__name__)
+        pattern = re.compile(rf"chembl_(\d+)_{re.escape(archive)}\.tar\.gz")
+        fallback = f"{cls.LATEST_DIR_URL}chembl_{cls.FALLBACK_RELEASE}_{archive}.tar.gz"
         try:
             response = requests.get(cls.LATEST_DIR_URL, timeout=timeout)
             response.raise_for_status()
-            releases = {
-                int(m.group(1)) for m in cls._ARCHIVE_RE.finditer(response.text)
-            }
+            releases = {int(m.group(1)) for m in pattern.finditer(response.text)}
         except requests.RequestException as exc:
             logger.warning(
                 "Could not read the ChEMBL release listing at %s (%s); "
                 "falling back to the pinned release chembl_%d",
                 cls.LATEST_DIR_URL, exc, cls.FALLBACK_RELEASE,
             )
-            return cls.DEFAULT_DB_URL
+            return fallback
 
         if not releases:
             logger.warning(
-                "No chembl_NN_sqlite.tar.gz found in the listing at %s; "
+                "No chembl_NN_%s.tar.gz found in the listing at %s; "
                 "falling back to the pinned release chembl_%d",
-                cls.LATEST_DIR_URL, cls.FALLBACK_RELEASE,
+                archive, cls.LATEST_DIR_URL, cls.FALLBACK_RELEASE,
             )
-            return cls.DEFAULT_DB_URL
+            return fallback
 
         release = max(releases)
         logger.info("Resolved current ChEMBL release: chembl_%d", release)
-        return f"{cls.LATEST_DIR_URL}chembl_{release}_sqlite.tar.gz"
+        return f"{cls.LATEST_DIR_URL}chembl_{release}_{archive}.tar.gz"
 
     @staticmethod
     def _db_name_from_url(url: str) -> str:
@@ -1014,23 +1046,45 @@ class CheMBL(SQLiteClient):
                 row_counts[name] = count
                 logger.info("  copied %s: %s rows", name, f"{count:,}")
 
-            kept_columns = tables["compound_structures"]["columns"]
-            for index_name, target in cls.COMPACT_INDEXES:
-                if "standard_inchi)" in target and "standard_inchi" not in kept_columns:
-                    continue
-                conn.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON {target}")
-            logger.info("  built %d indexes", len(cls.COMPACT_INDEXES))
-
             cls._write_provenance(conn, source_path, tables, row_counts, keep_inchi)
-
             conn.commit()
             conn.execute("DETACH DATABASE source")
-            conn.execute("ANALYZE main")
-            conn.commit()
-            conn.execute("VACUUM")
+            cls._index_and_seal(conn, tables)
         finally:
             conn.close()
         return row_counts
+
+    @classmethod
+    def _index_and_seal(
+        cls, conn: sqlite3.Connection, tables: Dict[str, Dict[str, Any]]
+    ) -> None:
+        """
+        Finish an extract whose tables are filled: indexes, statistics, VACUUM.
+
+        Shared by both ways of building an extract -- from a SQLite release
+        (:meth:`compact`) and from a MySQL dump (:meth:`build_from_mysql_dump`)
+        -- so that the two cannot drift apart in anything a query would notice.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Open connection to the extract, with every table loaded and no
+            other database attached.
+        tables : dict
+            Table specification actually applied; decides whether the
+            ``standard_inchi`` index has a column to be built on.
+        """
+        logger = logging.getLogger(__name__)
+        kept_columns = tables["compound_structures"]["columns"]
+        for index_name, target in cls.COMPACT_INDEXES:
+            if "standard_inchi)" in target and "standard_inchi" not in kept_columns:
+                continue
+            conn.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON {target}")
+        logger.info("  built %d indexes", len(cls.COMPACT_INDEXES))
+        conn.commit()
+        conn.execute("ANALYZE main")
+        conn.commit()
+        conn.execute("VACUUM")
 
     @classmethod
     def _write_provenance(
@@ -1040,6 +1094,7 @@ class CheMBL(SQLiteClient):
         tables: Dict[str, Dict[str, Any]],
         row_counts: Dict[str, int],
         keep_inchi: bool,
+        source_format: str = "sqlite",
     ) -> None:
         """
         Record what this extract was built from, and by what.
@@ -1062,6 +1117,9 @@ class CheMBL(SQLiteClient):
             Rows copied per table.
         keep_inchi : bool
             Whether ``standard_inchi`` was kept.
+        source_format : {'sqlite', 'mysql'}, optional
+            What ``source_path`` is: a ChEMBL SQLite release (default), or the
+            MySQL dump archive :meth:`build_from_mysql_dump` read.
         """
         from . import __version__
 
@@ -1074,6 +1132,7 @@ class CheMBL(SQLiteClient):
             ),
             "release": release_match.group(1) if release_match else "",
             "source_database": os.path.basename(source_path),
+            "source_format": source_format,
             "source_bytes": str(os.path.getsize(source_path)),
             "keep_inchi": "1" if keep_inchi else "0",
             "tables": ",".join(sorted(tables)),
@@ -1219,6 +1278,417 @@ class CheMBL(SQLiteClient):
             source.close()
             dest.close()
 
+    # ── Building the extract from the MySQL dump (source="mysql") ─────────────
+
+    @classmethod
+    def build_from_mysql_dump(
+        cls,
+        dump_path: str,
+        dest_path: Optional[str] = None,
+        *,
+        keep_inchi: bool = True,
+        remove_source: bool = False,
+        force: bool = False,
+    ) -> str:
+        """
+        Build the PROVESID extract straight from ChEMBL's MySQL dump.
+
+        The same extract as :meth:`compact` -- the eight tables in
+        :data:`COMPACT_TABLES`, the same columns, the same indexes -- read out
+        of ``chembl_NN_mysql.tar.gz`` as it is decompressed, rather than out of
+        a 27.7 GiB SQLite release that first has to be written to disk.  The
+        other 66 tables stream past unparsed.
+
+        ================  ================  =====================
+        route             download          free disk at peak
+        ================  ================  =====================
+        ``sqlite``        5.8 GB            33.4 GiB
+        ``mysql``         2.1 GB            ~4.5 GiB
+        ================  ================  =====================
+
+        Column types are taken from the dump's ``CREATE TABLE`` statements and
+        mapped to the affinity SQLite would give them
+        (:func:`provesid.mysqldump.sqlite_affinity`), so every value is stored
+        the way :meth:`compact` stores it: a ``max_phase`` of ``4.0`` becomes
+        the integer 4 in both.
+
+        Parameters
+        ----------
+        dump_path : str
+            The ``chembl_NN_mysql.tar.gz`` archive, as downloaded.  It is read
+            as a stream and never extracted.
+        dest_path : str, optional
+            Where to write the extract.  Defaults to
+            ``chembl_NN_provesid.db`` beside the archive, the name
+            :meth:`compact` would give the same release.
+        keep_inchi : bool, optional
+            Keep the ``standard_inchi`` column and its index (default: True).
+            See :meth:`compact`.
+        remove_source : bool, optional
+            Delete the archive as soon as it has been read (default: False).
+            That is before the indexes are built and the file is vacuumed,
+            which is what keeps the peak at roughly the archive plus the
+            extract, rather than the archive plus two copies of it.
+        force : bool, optional
+            Overwrite an existing extract (default: False).
+
+        Returns
+        -------
+        str
+            Path to the extract.
+
+        Raises
+        ------
+        FileNotFoundError
+            If ``dump_path`` does not exist.
+        FileExistsError
+            If the destination exists and ``force`` is False.
+        ChEMBLError
+            If the archive holds no ``.dmp`` or ``.sql`` file, if it cannot be
+            decompressed, if a table or column the extract needs is missing, if
+            one of the eight tables has no rows, or if a line of a needed table
+            cannot be parsed (:class:`provesid.mysqldump.DumpFormatError`).  A
+            failed build removes the partial extract.
+
+        Examples
+        --------
+        With a dump downloaded by hand::
+
+            from provesid import CheMBL
+
+            path = CheMBL.build_from_mysql_dump("chembl_37_mysql.tar.gz",
+                                                remove_source=True)
+            chembl = CheMBL(db_path=path)
+
+        ``CheMBL(source="mysql")`` downloads the dump and calls this.
+
+        Notes
+        -----
+        There is no source database to check the result against, so the
+        verification :meth:`compact` performs is replaced by SQLite's
+        ``quick_check``, the row counts, and the requirement that all eight
+        tables were found and none is empty.  Equivalence with the ``sqlite``
+        route is a property of the parser and was measured once, on real data,
+        with :meth:`extract_digest`.
+        """
+        logger = logging.getLogger(__name__)
+
+        dump_path = os.path.abspath(os.path.expanduser(dump_path))
+        if not os.path.exists(dump_path):
+            raise FileNotFoundError(f"No ChEMBL MySQL dump at {dump_path}")
+        if dest_path is None:
+            dest_path = cls.compact_path_for(
+                os.path.join(os.path.dirname(dump_path),
+                             cls._db_name_from_url(dump_path))
+            )
+        dest_path = os.path.abspath(os.path.expanduser(dest_path))
+        if os.path.exists(dest_path) and not force:
+            raise FileExistsError(
+                f"ChEMBL extract already exists at {dest_path}. "
+                "Pass force=True to rebuild it."
+            )
+
+        tables = cls._compact_table_spec(keep_inchi)
+        temp_path = f"{dest_path}.tmp"
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+        dump_bytes = os.path.getsize(dump_path)
+        logger.info(
+            "Building the ChEMBL extract %s from the MySQL dump %s (%.2f GB)",
+            dest_path, dump_path, dump_bytes / 1e9,
+        )
+
+        try:
+            conn = sqlite3.connect(temp_path)
+            try:
+                conn.execute("PRAGMA journal_mode = OFF")
+                conn.execute("PRAGMA synchronous = OFF")
+                row_counts = cls._load_mysql_dump(conn, dump_path, tables)
+                cls._write_provenance(conn, dump_path, tables, row_counts,
+                                      keep_inchi, source_format="mysql")
+                conn.commit()
+                if remove_source:
+                    os.remove(dump_path)
+                    logger.info("  removed the dump %s (%.2f GB)",
+                                dump_path, dump_bytes / 1e9)
+                cls._index_and_seal(conn, tables)
+            finally:
+                conn.close()
+            cls._verify_dump_extract(temp_path, tables, row_counts)
+        except Exception:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise
+
+        os.replace(temp_path, dest_path)
+        logger.info("ChEMBL extract written: %.2f GB.",
+                    os.path.getsize(dest_path) / 1e9)
+        return dest_path
+
+    @classmethod
+    def _load_mysql_dump(
+        cls,
+        conn: sqlite3.Connection,
+        dump_path: str,
+        tables: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, int]:
+        """
+        Stream the wanted tables out of a dump archive into ``conn``.
+
+        The archive is opened in ``tarfile``'s streaming mode (``r|gz``), so it
+        is decompressed once, front to back, and nothing is written but the
+        rows kept.  Each wanted ``CREATE TABLE`` creates its table
+        (:meth:`_create_table_from_dump`); each ``INSERT`` is projected and
+        filtered by the statement that call returns.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            The extract being built.
+        dump_path : str
+            ``chembl_NN_mysql.tar.gz``.
+        tables : dict
+            Table specification from :meth:`_compact_table_spec`.
+
+        Returns
+        -------
+        dict
+            Rows kept per table -- after the ``where`` filter, so
+            ``chembl_id_lookup`` counts compounds only.
+
+        Raises
+        ------
+        ChEMBLError
+            If the archive is unreadable or holds no dump, or a table is
+            missing, lacks a column, or is empty.
+        """
+        wanted = set(tables)
+        dump_columns: Dict[str, Tuple[str, ...]] = {}
+        insert_sql: Dict[str, str] = {}
+        row_counts = {name: 0 for name in tables}
+        dumps_read = 0
+
+        try:
+            with open(dump_path, "rb") as raw, tqdm(
+                total=os.path.getsize(dump_path), unit="B", unit_scale=True,
+                desc="Reading ChEMBL MySQL dump",
+            ) as bar, tarfile.open(fileobj=_CountingReader(raw, bar.update),
+                                   mode="r|gz") as tar:
+                for member in tar:
+                    if not (member.isfile()
+                            and member.name.endswith((".dmp", ".sql"))):
+                        continue
+                    dumps_read += 1
+                    for statement in read_statements(tar.extractfile(member), wanted):
+                        name = statement.table
+                        if isinstance(statement, CreateTable):
+                            dump_columns[name] = tuple(c.name for c in statement.columns)
+                            insert_sql[name] = cls._create_table_from_dump(
+                                conn, statement, tables[name], dump_path
+                            )
+                            continue
+                        rows = statement.rows
+                        if (statement.columns is not None
+                                and statement.columns != dump_columns[name]):
+                            order = [statement.columns.index(c)
+                                     for c in dump_columns[name]]
+                            rows = [tuple(row[i] for i in order) for row in rows]
+                        row_counts[name] += conn.executemany(
+                            insert_sql[name], rows
+                        ).rowcount
+        except (DumpFormatError, tarfile.TarError, EOFError, zlib.error,
+                gzip.BadGzipFile, UnicodeDecodeError) as exc:
+            raise ChEMBLError(f"Could not read the MySQL dump {dump_path}: {exc}") from exc
+
+        if not dumps_read:
+            raise ChEMBLError(
+                f"{dump_path} holds no .dmp or .sql file; is it ChEMBL's "
+                "chembl_NN_mysql.tar.gz?"
+            )
+        missing = sorted(name for name in tables if name not in dump_columns)
+        if missing:
+            raise ChEMBLError(
+                f"The MySQL dump {dump_path} has no CREATE TABLE for "
+                f"{', '.join(missing)}."
+            )
+        # A table that exists but received nothing most likely means its INSERT
+        # lines were written in a shape the reader did not recognise, and so
+        # were skipped as another table's would be.  Every one of the eight is
+        # populated in every ChEMBL release.
+        empty = sorted(name for name, count in row_counts.items() if count == 0)
+        if empty:
+            raise ChEMBLError(
+                f"The MySQL dump {dump_path} yielded no rows for "
+                f"{', '.join(empty)}."
+            )
+        for name, count in row_counts.items():
+            logging.getLogger(__name__).info("  loaded %s: %s rows", name, f"{count:,}")
+        return row_counts
+
+    @staticmethod
+    def _create_table_from_dump(
+        conn: sqlite3.Connection,
+        statement: CreateTable,
+        spec: Dict[str, Any],
+        dump_path: str,
+    ) -> str:
+        """
+        Create one extract table from its ``CREATE TABLE`` in the dump.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            The extract being built.
+        statement : CreateTable
+            The table's definition as the dump gives it.
+        spec : dict
+            This table's entry in the table specification: which columns to
+            keep (None for all) and which rows (``where``).
+        dump_path : str
+            Used in the error message only.
+
+        Returns
+        -------
+        str
+            The ``INSERT`` statement that takes one dump row, in the dump's
+            column order, and stores the kept columns of it if it passes the
+            filter.  Projection and filter are left to SQLite, which reuses the
+            same ``where`` text :meth:`compact` applies to a release.
+
+        Raises
+        ------
+        ChEMBLError
+            If a column the extract keeps is not in the dump.
+        """
+        name = statement.table
+        available = tuple(column.name for column in statement.columns)
+        kept = spec["columns"] or available
+        absent = [column for column in kept if column not in available]
+        if absent:
+            raise ChEMBLError(
+                f"Table {name} in {dump_path} is missing column(s) "
+                f"{', '.join(absent)}."
+            )
+        affinity = {column.name: sqlite_affinity(column.type)
+                    for column in statement.columns}
+        definitions = ", ".join(f'"{column}" {affinity[column]}'.rstrip()
+                                for column in kept)
+        conn.execute(f"CREATE TABLE {name} ({definitions})")
+
+        if kept == available and not spec["where"]:
+            return f"INSERT INTO {name} VALUES ({', '.join('?' * len(kept))})"
+        selected = ", ".join(f'"{column}"' for column in kept)
+        bound = ", ".join(f'? AS "{column}"' for column in available)
+        where = f" WHERE {spec['where']}" if spec["where"] else ""
+        return (f"INSERT INTO {name} ({selected}) "
+                f"SELECT {selected} FROM (SELECT {bound}){where}")
+
+    @staticmethod
+    def _verify_dump_extract(
+        dest_path: str,
+        tables: Dict[str, Dict[str, Any]],
+        row_counts: Dict[str, int],
+    ) -> None:
+        """
+        Check an extract built from a dump before it is moved into place.
+
+        Parameters
+        ----------
+        dest_path : str
+            The extract just built.
+        tables : dict
+            Table specification actually applied.
+        row_counts : dict
+            Rows the load reported keeping.
+
+        Raises
+        ------
+        ChEMBLError
+            If SQLite's ``quick_check`` fails, or a table holds a different
+            number of rows than were loaded into it.
+        """
+        dest = sqlite3.connect(f"file:{dest_path}?mode=ro", uri=True)
+        try:
+            structural = dest.execute("PRAGMA quick_check").fetchone()[0]
+            if structural != "ok":
+                raise ChEMBLError(f"Extract failed SQLite's quick_check: {structural}")
+            for name in tables:
+                actual = dest.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
+                if actual != row_counts[name]:
+                    raise ChEMBLError(
+                        f"Row count mismatch in {name}: loaded "
+                        f"{row_counts[name]:,}, extract has {actual:,}."
+                    )
+        finally:
+            dest.close()
+
+    @classmethod
+    def extract_digest(cls, db_path: str) -> Dict[str, Tuple[int, str]]:
+        """
+        Fingerprint each extract table: its row count and a content hash.
+
+        Two extracts with equal digests hold the same rows, with the same
+        values of the same SQLite types, whatever order the rows are stored
+        in -- which is how the ``mysql`` route was checked against the
+        ``sqlite`` route, and how anyone can repeat that check.  Columns are
+        compared by name, so column order does not matter either.
+
+        Parameters
+        ----------
+        db_path : str
+            A database holding the tables of :data:`COMPACT_TABLES` -- an
+            extract, or a full release.
+
+        Returns
+        -------
+        dict
+            ``{table: (row_count, hex_digest)}`` for each table in
+            :data:`COMPACT_TABLES` present in the file.
+
+        Examples
+        --------
+        >>> a = CheMBL.extract_digest("chembl_36_provesid.db")        # doctest: +SKIP
+        >>> b = CheMBL.extract_digest("chembl_36_from_mysql.db")      # doctest: +SKIP
+        >>> {t for t in a if a[t] != b[t]}                            # doctest: +SKIP
+        set()
+
+        Notes
+        -----
+        Reads every row of every table: about a minute on a real extract.
+        The hash of each row is summed modulo 2**128, which is what makes the
+        result independent of row order.  ``typeof`` is part of what is hashed,
+        so an integer 180 and a real 180.0 do not collide.
+        """
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            present = {
+                row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            digests: Dict[str, Tuple[int, str]] = {}
+            for name, spec in cls.COMPACT_TABLES.items():
+                if name not in present:
+                    continue
+                available = [
+                    row[1] for row in conn.execute(f"PRAGMA table_info({name})")
+                ]
+                columns = sorted(column for column in spec["columns"] or available
+                                 if column in available)
+                where = f" WHERE {spec['where']}" if spec["where"] else ""
+                selection = ", ".join(f'typeof("{c}"), "{c}"' for c in columns)
+                total, count = 0, 0
+                for row in conn.execute(f"SELECT {selection} FROM {name}{where}"):
+                    total += int.from_bytes(
+                        hashlib.md5(repr(row).encode("utf-8")).digest(), "big"
+                    )
+                    count += 1
+                digests[name] = (count, f"{total % 2 ** 128:032x}")
+            return digests
+        finally:
+            conn.close()
+
     def download_database(self, url: Optional[str] = None, force: bool = False):
         """
         Download and extract ChEMBL SQLite database from EMBL-EBI FTP.
@@ -1227,12 +1697,16 @@ class CheMBL(SQLiteClient):
         the SQLite database (~27.7 GiB), and validates its integrity by querying
         the molecule_dictionary table.
 
-        Unless this instance was constructed with ``source="full"``, the
-        release is then compacted into the PROVESID extract (:meth:`compact`)
-        and the full database is deleted, leaving ~2.4 GiB on disk and moving
-        ``db_path`` onto the extract.  The two together never need more room
-        than the extraction already did: the archive is deleted before the
-        extract is built.
+        With ``source="sqlite"`` (the default) the release is then compacted
+        into the PROVESID extract (:meth:`compact`) and the full database is
+        deleted, leaving ~2.4 GiB on disk and moving ``db_path`` onto the
+        extract.  The two together never need more room than the extraction
+        already did: the archive is deleted before the extract is built.
+
+        With ``source="mysql"`` none of that happens: the 2.1 GB MySQL dump is
+        downloaded instead and the same extract is read straight out of it
+        (:meth:`build_from_mysql_dump`), so there is no release to extract,
+        validate or delete.
 
         The download is resumable. An interrupted transfer leaves a ``.part``
         file beside the archive and the next call continues from it, which
@@ -1270,12 +1744,19 @@ class CheMBL(SQLiteClient):
         fetch ~5.8 GB into whatever ``db_path`` happens to be -- including over a
         compacted extract.
         """
-        url = url or self.db_url or self.resolve_latest_db_url()
+        url = url or self.db_url or self.resolve_latest_db_url(
+            archive=self._ARCHIVE_FORMATS[self.source]
+        )
         self.db_url = url
 
         # Check if already exists
         if os.path.exists(self.db_path) and not force:
             self.logger.info(f"Database already exists at {self.db_path}")
+            return
+
+        if self.source == "mysql":
+            self._install_from_mysql_dump(url)
+            self.logger.info("ChEMBL database download and setup complete")
             return
 
         # The archive is kept beside the database rather than in a temporary
@@ -1337,6 +1818,60 @@ class CheMBL(SQLiteClient):
             if isinstance(e, ChEMBLError):
                 raise
             raise ChEMBLError(f"Database setup failed: {str(e)}") from e
+
+    def _install_from_mysql_dump(self, url: str) -> None:
+        """
+        Download ChEMBL's MySQL dump and build the extract from it.
+
+        The whole of ``source="mysql"``.  The dump is downloaded to disk rather
+        than parsed straight off the socket, because :func:`download_file` can
+        resume it: an interruption at 90% of 2.1 GB should cost the last 10%,
+        not the whole transfer again.  That costs 2.1 GB of transient disk,
+        against the 33.4 GiB the ``sqlite`` route needs.
+
+        The archive is deleted as soon as it has been read, and on any failure
+        to build from it.  On success ``db_path`` moves onto the extract.
+
+        Parameters
+        ----------
+        url : str
+            URL of ``chembl_NN_mysql.tar.gz``.
+
+        Raises
+        ------
+        ChEMBLError
+            If the download fails -- leaving a ``.part`` file the next call
+            resumes -- or the extract cannot be built, in which case the
+            message names ``source="sqlite"`` as the route that does not
+            depend on the dump's format.
+        """
+        archive_name = os.path.basename(urlsplit(url).path) or "chembl_mysql.tar.gz"
+        archive_path = os.path.join(self.path, archive_name)
+        extract_path = self.compact_path_for(self.db_path)
+
+        try:
+            download_file(
+                url,
+                archive_path,
+                description=f"ChEMBL MySQL dump ({archive_name})",
+                log=self.logger,
+            )
+        except DownloadError as e:
+            raise ChEMBLError(f"Download failed: {str(e)}") from e
+
+        try:
+            self.build_from_mysql_dump(
+                archive_path, extract_path, remove_source=True, force=True
+            )
+        except Exception as e:
+            if os.path.exists(archive_path):
+                os.remove(archive_path)
+            raise ChEMBLError(
+                f"Building the ChEMBL extract from the MySQL dump failed: {e}. "
+                "CheMBL(source='sqlite') builds the same extract from the "
+                "SQLite release instead."
+            ) from e
+        self.db_path = extract_path
 
     def _compact_after_download(self) -> None:
         """

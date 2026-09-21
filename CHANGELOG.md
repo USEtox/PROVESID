@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **ChEMBL from its MySQL dump: `CheMBL(source="mysql")`.** Builds the same
+  2.4 GiB extract as the default route from ChEMBL's 2.1 GB MySQL dump, read
+  as a stream, so the 27.7 GiB release never exists on disk:
+
+  ```python
+  CheMBL(source="mysql")                                  # 2.1 GB down, ~4.5 GiB free
+  CheMBL.build_from_mysql_dump("chembl_37_mysql.tar.gz")  # from a dump you already have
+  CheMBL.extract_digest(path)                             # {table: (rows, hash)}
+  ```
+
+  The new `provesid.mysqldump` module reads exactly what `mysqldump` writes
+  and raises `DumpFormatError` on anything else rather than guess a value.
+  Column types come from the dump's `CREATE TABLE` and map to the affinity
+  SQLite gives them, so values are stored the way the `sqlite` route stores
+  them: `decimal` 4.00 becomes the integer 4 in both. `extract_digest`
+  fingerprints each table with a row count and an order-independent content
+  hash that includes each value's type, and is how the routes were compared.
+  On the real ChEMBL 36, written out as a mysqldump, all eight tables
+  (14.6 M rows) digest identically to the `sqlite` route's extract. The build
+  took 6 min and 185 MB of memory. Provenance now records `source_format`.
+  The default stays `source="sqlite"` until the same comparison has been run on
+  EBI's own dump. `examples/chembl/download_source_demo.py` shows all three
+  routes.
+
 - **Computed descriptors on demand: `PubChemID.descriptors()`.** The database
   no longer stores XLogP, TPSA or the atom and bond counts; this computes them
   when asked, and names the model that answered:
@@ -215,10 +239,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The release is in place by then and answers every query, so the failure
   costs disk rather than function, and throwing away a 5.8 GB download over a
   step that can be repeated with one call would be the worse trade.
-  `CheMBL(source="mysql")` — streaming ChEMBL's 2.1 GB MySQL dump, which would
-  halve the transfer and never write the 27.7 GiB file at all — raises a
-  `ValueError` saying it is not implemented rather than one that reads like a
-  typo.
 
 - **`datasets.plan()` now tells the truth about ChEMBL.** Its registry entry
   said 27.7 GiB installed; it is 2.4 GiB, from a 5.8 GB download, with a peak
@@ -560,6 +580,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- **`datasets.status()` and `remove("chembl")` could not see an interrupted
+  ChEMBL download.** The registry looked for `chembl_NN_sqlite.tar.gz`, but the
+  download is saved as `chembl_NN.db.tar.gz`. A half-finished 5.8 GB `.part`
+  was therefore neither counted nor removed. Both routes' real archive names
+  are now listed.
+
 - **`CheMBL.search_by_name` scanned all 2.9 M compounds on every call, and its
   truncated results were not reproducible.** The method asked one question of
   two tables:

@@ -13,13 +13,18 @@ the extract and deleting the release it came from.  ``CheMBL(source="full")``
 keeps the whole release, for anyone who wants the other 66 tables.  Both
 transfer exactly the same bytes: the choice is what stays on disk.
 
-The transient cost is real and is worth knowing before you start: the archive
-and the unpacked release both exist on the way in, so installing ChEMBL still
-needs about 33.4 GiB free even though it leaves 2.4 GiB behind.
+The transient cost of those two is real and is worth knowing before you start:
+the archive and the unpacked release both exist on the way in, so installing
+ChEMBL that way needs about 33.4 GiB free even though it leaves 2.4 GiB behind.
 ``datasets.plan()`` reports that as ``peak_bytes``.
 
-This script demonstrates the whole path -- download, extract, compact, delete
--- against a miniature release it builds and serves itself, so it needs no
+``CheMBL(source="mysql")`` avoids it.  It downloads ChEMBL's 2.1 GB MySQL dump
+instead and reads the extract's eight tables straight out of it, so the 27.7 GiB
+release never exists and about 4.5 GiB free is enough.  It builds the same
+extract, which this script checks with ``CheMBL.extract_digest``.
+
+This script demonstrates all three routes against a miniature release it builds
+and serves itself -- as a SQLite archive and as a MySQL dump -- so it needs no
 network and downloads nothing large.
 
 Run with::
@@ -114,6 +119,55 @@ def build_archive(directory, n_compounds=200):
     with tarfile.open(archive, "w:gz") as tar:
         tar.add(db_path, arcname=f"chembl_{RELEASE}/chembl_{RELEASE}_sqlite/"
                                  f"chembl_{RELEASE}.db")
+    return archive, db_path
+
+
+def build_mysql_dump(db_path, directory):
+    """Write the same release as ``chembl_NN_mysql.tar.gz``, as mysqldump would.
+
+    One ``CREATE TABLE`` per table, then its rows as multi-row ``INSERT``
+    statements, one per line, with MySQL's backslash escaping.
+    """
+    mysql_types = {"INTEGER": "bigint", "TEXT": "varchar(4000)",
+                   "REAL": "double", "NUMERIC": "decimal(9,2)"}
+
+    def literal(value, mysql_type):
+        if value is None:
+            return "NULL"
+        if isinstance(value, str):
+            for raw, escaped in (("\\", "\\\\"), ("'", "\\'"), ("\n", "\\n")):
+                value = value.replace(raw, escaped)
+            return f"'{value}'"
+        if mysql_type.startswith("decimal"):
+            return f"{float(value):.2f}"
+        return repr(value)
+
+    dump_path = os.path.join(directory, f"chembl_{RELEASE}_mysql.dmp")
+    conn = sqlite3.connect(db_path)
+    with open(dump_path, "w", encoding="utf-8") as out:
+        out.write("-- MySQL dump 10.13\n/*!40101 SET NAMES utf8mb4 */;\n")
+        tables = [row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")]
+        for table in tables:
+            columns = [(row[1], mysql_types[row[2]])
+                       for row in conn.execute(f"PRAGMA table_info({table})")]
+            out.write(f"CREATE TABLE `{table}` (\n")
+            out.writelines(f"  `{name}` {kind} DEFAULT NULL,\n" for name, kind in columns)
+            out.write(f"  PRIMARY KEY (`{columns[0][0]}`)\n) ENGINE=InnoDB;\n")
+            rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+            for start in range(0, len(rows), 50):
+                values = ",".join(
+                    "(" + ",".join(literal(value, kind)
+                                   for value, (_, kind) in zip(row, columns)) + ")"
+                    for row in rows[start:start + 50])
+                out.write(f"INSERT INTO `{table}` VALUES {values};\n")
+    conn.close()
+
+    archive = os.path.join(directory, f"chembl_{RELEASE}_mysql.tar.gz")
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(dump_path, arcname=f"chembl_{RELEASE}/chembl_{RELEASE}_mysql/"
+                                   f"chembl_{RELEASE}_mysql.dmp")
+    os.remove(dump_path)
     return archive
 
 
@@ -146,10 +200,13 @@ def main():
     os.makedirs(served)
 
     print("\nBuilding a miniature ChEMBL release and serving it locally...")
-    archive = build_archive(served)
+    archive, db_path = build_archive(served)
+    dump = build_mysql_dump(db_path, served)
     httpd, base_url = serve(served)
     url = base_url + os.path.basename(archive)
-    print(f"    archive: {os.path.getsize(archive) / 1e6:.2f} MB at {url}")
+    dump_url = base_url + os.path.basename(dump)
+    print(f"    SQLite archive: {os.path.getsize(archive) / 1e6:.2f} MB at {url}")
+    print(f"    MySQL dump    : {os.path.getsize(dump) / 1e6:.2f} MB at {dump_url}")
 
     try:
         # ── 1. The default: download, compact, keep only the extract ─────────
@@ -186,16 +243,34 @@ def main():
               f"smaller, and answers the same questions:")
         print(f"    CHEMBL42 -> {full.search_by_chembl_id('CHEMBL42')['pref_name']}")
 
-        # ── 3. A route name that does not exist ──────────────────────────────
-        print("\n3. Routes that are not there say so:")
-        for bad in ("mysql", "ftp"):
-            try:
-                CheMBL(data_dir=full_dir, source=bad)
-            except ValueError as exc:
-                print(f"    source={bad!r}: {exc}")
+        # ── 3. The MySQL dump: the same extract, no release on the way ───────
+        print("\n3. CheMBL(source='mysql') -- build the extract from the dump:")
+        mysql_dir = os.path.join(work, "mysql")
+        from_dump = CheMBL(data_dir=mysql_dir, db_url=dump_url, source="mysql")
 
-        # ── 4. What this costs on the real thing ─────────────────────────────
-        print("\n4. The real release, before you start it:")
+        print(f"\n    open database : {os.path.basename(from_dump.db_path)}")
+        print(f"    built from    : {from_dump.provenance['source_database']} "
+              f"({from_dump.provenance['source_format']})")
+        print("    what is left on disk:")
+        print(listing(mysql_dir))
+
+        # Row counts and a content hash per table, typeof included: the two
+        # routes have to agree on every value, not just on the answers.
+        by_sqlite = CheMBL.extract_digest(chembl.db_path)
+        by_mysql = CheMBL.extract_digest(from_dump.db_path)
+        differing = sorted(t for t in by_sqlite if by_sqlite[t] != by_mysql.get(t))
+        print(f"\n    tables compared: {len(by_sqlite)}, differing: {differing or 'none'}")
+        print(f"    CHEMBL42 -> {from_dump.search_by_chembl_id('CHEMBL42')['pref_name']}")
+
+        # ── 4. A route name that does not exist ──────────────────────────────
+        print("\n4. A route that is not there says so:")
+        try:
+            CheMBL(data_dir=full_dir, source="ftp")
+        except ValueError as exc:
+            print(f"    source='ftp': {exc}")
+
+        # ── 5. What this costs on the real thing ─────────────────────────────
+        print("\n5. The real release, before you start it:")
         todo = datasets.plan("chembl", data_dir=full_dir, force=True)
         row = todo.iloc[0]
         print(f"    download  : {row['download']}")
@@ -208,6 +283,7 @@ def main():
 
     datasets.plan("chembl")      # 5.7 GiB down, 2.4 GiB installed, 33.4 GiB peak
     CheMBL()                     # ...and this installs it, as the extract
+    CheMBL(source="mysql")       # the same extract from 2.1 GB, ~4.5 GiB peak
     CheMBL(source="full")        # ...or keeps all 74 tables, 27.7 GiB
 """)
     finally:

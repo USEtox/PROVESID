@@ -449,7 +449,7 @@ Steps are independently committable and leave the suite green.
 | 8 | ~~`cache.py`: persistent dir, parameterised service functions, key version~~ **done, §17** | 4.7 | S |
 | 9 | ~~`pubchem_ftp.py`: the FTP identifier builder~~ **done, §18** | 8 | L |
 | 10 | ~~`PubChemID.descriptors()` — RDKit descriptors on demand~~ **done, §19** | 8.6 | M |
-| 11 | `CheMBL(source="mysql")` — the streaming route, verified against step 5 | 9.7 | M |
+| 11 | ~~`CheMBL(source="mysql")` — the streaming route, verified against step 5~~ **done, §20** | 9.7 | M |
 | 12 | split `pubchem.py` → `+ pubchem_id.py`; `chebi.py` → `+ chebi_sdf.py` | 4.12 | M |
 | 13 | `sources.py`; collapse the `Search` ladders | 4.5 | M |
 | 14 | `Search(online_fallback=...)` as a row in the source table | 4.4 | M |
@@ -1822,7 +1822,7 @@ moves back, the number that made them agree to it would be a lie.
 
 ### 15.8 Still open
 
-- **Route 3 (step 11), `source="mysql"`.** 2.1 GB transferred instead of
+- ~~**Route 3 (step 11), `source="mysql"`.**~~ **done, §20.** 2.1 GB transferred instead of
   5.7 GiB and no 27.7 GiB intermediate at all, which is the version of this
   that a laptop with 20 GB free can actually run. §9.7 wants it verified
   against route 2 table by table; route 2 is now the thing to verify against.
@@ -2645,3 +2645,148 @@ names, blocking RDKit's log) is under 5 µs.
   `descriptors()`.
 - **The Zenodo copy's wrapped charges** (§19.4) are one more reason for the FTP
   rebuild already listed in §18.10.
+
+---
+
+## 20. Landed on 2026-09-21 — step 11, `CheMBL(source="mysql")` (§9.7 route 3)
+
+§9.7 described route 3 as "2.10 GB downloaded, decompressed on the fly, with a
+parser that recognises `INSERT INTO` for the eight tables and ignores everything
+else", and said it should not ship without being compared with route 2 "table
+by table". The parser landed, and so did the comparison. It was run on real
+data, but not on EBI's own dump, because `ftp.ebi.ac.uk` refused connections
+from this machine all day (§20.6). There is one departure from §9.7: the dump
+is downloaded to disk before it is read (§20.2).
+
+### 20.1 What landed
+
+- `src/provesid/mysqldump.py`: `read_statements`, `parse_values`, `unescape`,
+  `sqlite_affinity`, and `DumpFormatError`. It has no ChEMBL knowledge: it reads
+  `CREATE TABLE` and `INSERT` statements for the tables it is asked about and
+  skips the lines of every other table.
+- `CheMBL.build_from_mysql_dump(dump_path, dest_path=None, *, keep_inchi,
+  remove_source, force)`, with the same signature and contract as `compact`:
+  it builds into `<dest>.tmp`, checks the result, then `os.replace`s it into place.
+- `CheMBL(source="mysql")`: `SOURCES` is now `("sqlite", "mysql", "full")`,
+  and `_UNIMPLEMENTED_SOURCES` is gone. `resolve_latest_db_url(archive=...)`
+  finds either archive in the `latest/` listing.
+- `CheMBL.extract_digest(db_path)`: a row count and a content hash per table,
+  independent of row order and sensitive to each value's SQLite type.
+- `_index_and_seal`, split out of `_build_compact`, so the two routes build the
+  same indexes and run the same `ANALYZE` and `VACUUM`. The provenance record
+  gains `source_format`.
+- 54 tests in `tests/test_mysqldump.py`, 33 in `tests/test_chembl_mysql.py`
+  (one `slow`), and one in `tests/test_dataset_manager.py`. The third route is
+  in `examples/chembl/download_source_demo.py`. Also updated:
+  `docs/api/chembl.md` (new section "Installing from the MySQL dump"),
+  `examples/chembl/README.md` and `CHANGELOG.md`.
+
+### 20.2 The dump is downloaded, then read; not read off the socket
+
+§9.7 promised a "peak transient disk ≈ 0 beyond the 2.6 GB result". That
+would mean parsing the HTTP response directly, which loses the most useful
+property of `download_file`: resumption (§13). A dropped connection at 90% of
+2.1 GB would then cost the whole transfer again. So the archive is saved with
+`download_file`, and `tarfile` then streams it (`r|gz`) without extracting
+it. The price is 2.1 GB of transient disk.
+
+The archive is deleted as soon as it has been read, **before** indexing and
+`VACUUM` (`remove_source=True`, which is what the constructor passes). `VACUUM`
+writes a second copy of the database, so deleting the archive afterwards would
+put three large files on disk at once. The peak is therefore about the archive
+plus the unindexed extract, or two copies of the extract during `VACUUM`,
+whichever is larger: **~4.5 GiB against route 2's 33.4 GiB**. This figure is
+reasoned from the file sizes, not measured on EBI's archive.
+
+### 20.3 Types come from the dump, through SQLite's own rule
+
+Route 2's extract gets its column types from `CREATE TABLE … AS SELECT`, which
+writes the *affinity* of each source column (`INT`, `TEXT`, `NUM`, `REAL`), and
+that affinity decides how each value is stored. A `NUMERIC(2,1)` `max_phase`
+of 4.0 is stored as the integer 4. 9 992 `mw_freebase` values are integers,
+and the rest are reals. To match that, the mysql route must use the same
+affinities. `sqlite_affinity` applies SQLite's documented rule (§3.1 of its
+datatype page) to the MySQL type name. `bigint` gives `INT`, `varchar(20)`
+gives `TEXT`, `decimal(9,2)` gives `NUM`. The dump's `4.00` is parsed as a
+`float` and stored as 4 by the column, which is what happens in route 2. A
+test pins `typeof(max_phase)` for an integer, a half and a NULL, and
+`extract_digest` hashes `typeof` alongside each value, so an integer-vs-real
+mismatch anywhere would fail the comparison.
+
+Projection and filtering happen in SQLite as well. Each table gets an
+`INSERT … SELECT <kept> FROM (SELECT ? AS c1, …) WHERE <where>`, built from
+the same `COMPACT_TABLES` entry `compact` uses. `molfile` is bound and
+dropped, and only `COMPOUND` rows of `chembl_id_lookup` are kept, with the
+same `where` text in both routes.
+
+### 20.4 Refusing, not guessing
+
+The parser handles exactly what `mysqldump` emits: quoted strings with
+MySQL's escapes, `NULL`, and unquoted numbers, all on one line per `INSERT`.
+Anything else inside a *wanted* table raises `DumpFormatError` with the table
+name and offset. That includes a hex literal (`--hex-blob`), a `_binary`
+introducer, a missing `;`, and an unterminated string. Lines of unwanted
+tables are rejected on their first bytes and never decoded, so a blob in
+`activities` costs nothing. `build_from_mysql_dump` also refuses a dump with no
+`.dmp`/`.sql` member, a missing table or column, or a wanted table with **zero
+rows**. An empty table is the likeliest symptom of `INSERT` lines the reader
+failed to recognise, so it is treated as an error rather than accepted. In the
+constructor, any failure deletes the archive and names `source="sqlite"` as
+the route that does not depend on the dump's format.
+
+The string pattern uses possessive quantifiers (`[^'\\]++`, `*+`, available
+since Python 3.11). The ordinary `(?:[^'\\]+|\\.)*` backtracks
+exponentially on an unterminated string, which is exactly what a truncated line
+contains. A test feeds it 150 000 characters with no closing quote and requires
+the refusal to arrive within a second.
+
+### 20.5 One adjacent bug: the registry could not see a ChEMBL `.part`
+
+`datasets.DATASETS["chembl"].extras` listed `chembl_*_sqlite.tar.gz`, but
+route 2 saves its archive as `db_path + ".tar.gz"`, which is
+`chembl_36.db.tar.gz`. An interrupted 5.8 GB download was therefore invisible
+to `status()` and survived `remove("chembl")`. The globs now name the files
+both routes actually write. A test creates both routes' `.part` files; against
+the old registry it freed 0 of their 50 bytes.
+
+### 20.6 Validation
+
+- **The §9.7 comparison, on real data.** EBI's FTP server refused every
+  connection (HTTP and HTTPS, `Connection refused`) from this machine for the
+  whole session, while other hosts answered. So the 2.1 GB dump could not be
+  fetched. As a stand-in, the eight tables of the local ChEMBL 36 release
+  (`chembl_36.db`, molfile included) were written out in mysqldump's layout and
+  escaping. Rows were in primary-key order, as `mysqldump` writes them, and an
+  unwanted table with a hex literal was added at the front. The result was a
+  9.60 GB dump, 1.84 GB gzipped. `build_from_mysql_dump` read it in **359 s at
+  185 MB peak RSS**, 5.66 MB/s of compressed input, and wrote 2.60 GB. Against
+  the `chembl_36_provesid.db` that route 1 built on 2026-09-20,
+  **`extract_digest` agrees on all eight tables: 14 550 749 rows with
+  identical counts and content hashes.**
+- What this does *not* prove: that EBI's dump has the layout this parser
+  expects (one statement per line, backticked names, `ENGINE=` closing lines,
+  no `--hex-blob`), or how long the 66 unwanted tables take to decompress and
+  skip. Those are properties of EBI's file and need EBI's file.
+- `pytest tests/`: **1372 passed, 36 skipped, 18 failed** (13m03s). The 18 are
+  the live `pubchem.ncbi.nlm.nih.gov` HTTP 503s of §19.7 in `test_pubchem.py`
+  and `test_pubchemview.py`, one fewer than yesterday.
+- `mkdocs build --strict`: clean. `pytest --doctest-modules
+  src/provesid/mysqldump.py`: 4 passed.
+- `examples/chembl/download_source_demo.py` ran end to end over a local HTTP
+  server with all three routes. The `sqlite` and `mysql` extracts
+  digest identically.
+
+### 20.7 Still open
+
+- **Run the comparison on EBI's own dump.** When `ftp.ebi.ac.uk` answers,
+  download `releases/chembl_36/chembl_36_mysql.tar.gz`, put it in
+  `PROVESID_DATA_DIR` beside `chembl_36_provesid.db`, and run
+  `pytest -m slow tests/test_chembl_mysql.py`. Only then should
+  `CheMBL.__init__`'s default move from `"sqlite"` to `"mysql"`, together with
+  the registry's `download_bytes` and `peak_bytes` and the test that pins them
+  to the default (§15.5).
+- **No checksum.** EBI publishes `checksums.txt` (SHA-256) per release, while
+  `download_file` only verifies MD5. The byte-count check, and the tar stream failing on a short read,
+  catch truncation, but not substitution.
+- **The peak is reasoned, not measured** (§20.2).
+

@@ -345,6 +345,22 @@ class TestRemove:
         assert frame.attrs["freed_bytes"] == 110
         assert os.listdir(tmp_path) == []
 
+    def test_interrupted_chembl_downloads_of_either_route_are_removed(self, tmp_path):
+        """The names the two routes actually write, not the archives' URL names.
+
+        The ``sqlite`` route saves ``chembl_NN.db.tar.gz``; the ``mysql`` route
+        keeps ``chembl_NN_mysql.tar.gz``. A half-finished 5.8 GB or 2.1 GB
+        ``.part`` that ``remove`` could not see would be the largest file in
+        the directory and the only one left behind.
+        """
+        for name in ("chembl_36.db.tar.gz.part", "chembl_36.db.tar.gz.part.source",
+                     "chembl_37_mysql.tar.gz.part", "chembl_37_mysql.tar.gz.part.source",
+                     "chembl_37_mysql.tar.gz"):
+            touch(tmp_path, name, 10)
+        frame = datasets.remove("chembl", data_dir=tmp_path)
+        assert frame.attrs["freed_bytes"] == 50
+        assert os.listdir(tmp_path) == []
+
     def test_removing_what_is_not_there_is_not_an_error(self, tmp_path):
         frame = datasets.remove("chembl", data_dir=tmp_path)
         assert len(frame) == 0

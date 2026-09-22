@@ -814,6 +814,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     separate returned value.
   - `mkdocs build --strict` now also fails on a link to a missing page or
     heading.
+  - Docstrings cross-reference with Markdown, `` [`Search`][provesid.search.Search] ``,
+    in place of the Sphinx roles (`:class:`, `:meth:` …) that the site showed
+    literally; 591 of them are links now, and `--strict` fails on one whose
+    target is gone. Constants documented with `#:` comments, which
+    mkdocstrings does not read, carry attribute docstrings instead, so
+    `DATASETS`, `Search.PRESETS`, `LOOKUPS`, `OUTPUT_COLUMNS` and 74 others
+    now appear in the API reference. A typed return reads `(dict): …`, which
+    renders the type in the Type column, not as a name; bulleted lists inside
+    a section render as lists.
 - **`Search` asks its sources through one table, `provesid.sources.LOOKUPS`.**
   The 47 hand-written `if client: try: ... except: log` blocks in nine
   methods of `search.py` became one row per (lookup kind, source) and a single

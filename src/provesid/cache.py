@@ -4,12 +4,15 @@ Advanced cache management for PROVESID package.
 This module provides persistent, unlimited caching with size monitoring,
 import/export capabilities, and automatic cache management.
 
-Entries live under :func:`provesid.utils.user_cache_path` --- a real per-user
-cache directory, not the system temp directory --- so a cache written today is
-still there tomorrow. Set ``PROVESID_CACHE_DIR`` to put it somewhere else.
+Entries live under
+[`provesid.utils.user_cache_path`][provesid.utils.user_cache_path] --- a real
+per-user cache directory, not the system temp directory --- so a cache written
+today is still there tomorrow. Set ``PROVESID_CACHE_DIR`` to put it somewhere
+else.
 
 Three version numbers guard against serving an entry whose *shape* no longer
-matches what the caller expects; see :data:`CACHE_KEY_VERSION`.
+matches what the caller expects; see
+[`CACHE_KEY_VERSION`][provesid.cache.CACHE_KEY_VERSION].
 """
 
 import json
@@ -24,26 +27,24 @@ from datetime import datetime
 from .utils import user_cache_path
 
 
-#: Key component bumped when something changes globally about what is stored or
-#: how keys are derived, making *every* existing entry unreachable at once.
-#: Two finer-grained versions sit beneath it, and the right one to bump is the
-#: narrowest that covers the change:
-#:
-#: * a client's ``CACHE_SCHEMA_VERSION``, returned from its ``__cache_key__``,
-#:   retires the entries of that one client (see
-#:   :attr:`provesid.PubChemView.CACHE_SCHEMA_VERSION`);
-#: * ``@cached(version=N)`` retires the entries of one function.
-#:
-#: A schema change is not something the cache can detect by itself: pickle
-#: stores an instance's ``__dict__``, so an entry written before a dataclass
-#: gained a field restores as an object missing that attribute, and every
-#: caller reading it raises on a machine where only the package version
-#: changed. Bumping a version is what makes those entries unreachable instead.
 CACHE_KEY_VERSION = 1
+"""Key component bumped when something changes globally about what is stored or
+how keys are derived, making *every* existing entry unreachable at once.
+Two finer-grained versions sit beneath it, and the right one to bump is the
+narrowest that covers the change:
 
-#: The services with their own cache directory. This list is data: the
-#: module-level cache functions all take ``service=`` rather than each service
-#: owning a hand-written pair of functions.
+* a client's ``CACHE_SCHEMA_VERSION``, returned from its ``__cache_key__``,
+  retires the entries of that one client (see
+  [`provesid.PubChemView.CACHE_SCHEMA_VERSION`][provesid.pubchemview.PubChemView.CACHE_SCHEMA_VERSION]);
+* ``@cached(version=N)`` retires the entries of one function.
+
+A schema change is not something the cache can detect by itself: pickle
+stores an instance's ``__dict__``, so an entry written before a dataclass
+gained a field restores as an object missing that attribute, and every
+caller reading it raises on a machine where only the package version
+changed. Bumping a version is what makes those entries unreachable instead.
+"""
+
 CACHE_SERVICES = (
     'pubchem',
     'cas',
@@ -53,6 +54,10 @@ CACHE_SERVICES = (
     'opsin',
     'chebifier',
 )
+"""The services with their own cache directory. This list is data: the
+module-level cache functions all take ``service=`` rather than each service
+owning a hand-written pair of functions.
+"""
 
 
 class _Miss:
@@ -82,7 +87,7 @@ def stable_key_part(obj: Any) -> Any:
 
     Returns:
         A structure built only from strings, numbers, booleans, ``None``, lists
-        and dicts, safe to pass to :func:`json.dumps` without ``default=str``.
+        and dicts, safe to pass to `json.dumps` without ``default=str``.
 
     Note:
         Class-name reduction is right for a client instance, whose identity is
@@ -120,8 +125,8 @@ def is_failure_result(result: Any) -> bool:
     Several PROVESID clients signal an error by returning a dict with
     ``success: False`` and an ``error`` message rather than by raising. Storing
     one of those would turn a transient network failure into a permanent
-    "no data" answer, so :func:`cached` never writes a value this function
-    accepts.
+    "no data" answer, so [`cached`][provesid.cache.cached] never writes a value
+    this function accepts.
 
     Args:
         result: The value returned by a cached function.
@@ -146,8 +151,9 @@ def is_empty_result(result: Any) -> bool:
     momentary refusal the same way often enough that the two cannot be told
     apart with confidence, and a wrongly cached "no data" is permanent whereas
     re-fetching a genuinely empty result costs one cheap request. Pass this to
-    :func:`cached` as ``skip_if`` for any method that reports absence with an
-    empty list, dict or DataFrame rather than by raising.
+    [`cached`][provesid.cache.cached] as ``skip_if`` for any method that
+    reports absence with an empty list, dict or DataFrame rather than by
+    raising.
 
     Args:
         result: The value returned by a cached function.
@@ -178,6 +184,7 @@ class CacheManager:
     Advanced cache manager with persistent storage, size monitoring, and import/export.
 
     Features:
+
     - Unlimited cache by default
     - Persistent storage across sessions, in a real cache directory rather than
       the system temp directory
@@ -204,13 +211,14 @@ class CacheManager:
 
         Args:
             cache_dir: Directory to store cache files. When None, a per-user
-                cache directory from :func:`provesid.utils.user_cache_path` is
-                used, with ``service_name`` as a subdirectory if given. The
+                cache directory from
+                [`provesid.utils.user_cache_path`][provesid.utils.user_cache_path]
+                is used, with ``service_name`` as a subdirectory if given. The
                 system temp directory is deliberately not the default: ``/tmp``
                 is cleared on boot on most Linux systems, which made the
                 "persistent" cache last only until the next reboot.
             service_name: Name of the service for service-specific caching
-                (one of :data:`CACHE_SERVICES`).
+                (one of [`CACHE_SERVICES`][provesid.cache.CACHE_SERVICES]).
             max_size_gb: Size threshold in GB for warnings (default: 5.0)
             enable_warnings: Whether to enable size warnings (default: True)
         """
@@ -265,14 +273,16 @@ class CacheManager:
         Args:
             func_name: Fully qualified name of the cached function.
             args: Positional arguments of the call. For a bound method the first
-                entry is the client instance; :func:`stable_key_part` reduces it
+                entry is the client instance;
+                [`stable_key_part`][provesid.cache.stable_key_part] reduces it
                 to its ``__cache_key__`` or class name so the key does not
                 depend on the instance's memory address.
             kwargs: Keyword arguments of the call.
             version: Shape version of what this one function returns, from
                 ``@cached(version=...)``. Bumping it retires that function's
-                entries and nothing else. :data:`CACHE_KEY_VERSION` is folded
-                in as well, so a global bump retires everything.
+                entries and nothing else.
+                [`CACHE_KEY_VERSION`][provesid.cache.CACHE_KEY_VERSION] is
+                folded in as well, so a global bump retires everything.
 
         Returns:
             Hex SHA-256 digest of the normalised call signature.
@@ -296,7 +306,7 @@ class CacheManager:
         Load a cache entry from disk.
 
         Args:
-            cache_key: Key produced by :meth:`_get_cache_key`.
+            cache_key: Key produced by `_get_cache_key`.
 
         Returns:
             The stored value, or the ``_MISS`` sentinel when there is no
@@ -491,7 +501,7 @@ class CacheManager:
         Get comprehensive cache information.
 
         Returns:
-            dict: ``cache_directory``; ``memory_entries``, the entries this
+            (dict): ``cache_directory``; ``memory_entries``, the entries this
             process holds in memory; ``disk_entries`` and ``file_count``, the
             entries on disk, whichever process wrote them; ``total_size_bytes``,
             ``total_size_mb`` and ``total_size_gb``; ``warning_threshold_gb``
@@ -586,8 +596,9 @@ class CacheManager:
         Import cache data from a file.
 
         Imported entries are written to disk and found by the next
-        :meth:`get`; the keys are kept as exported, so an export imports
-        into any cache whose functions and versions match.
+        [`get`][provesid.cache.CacheManager.get]; the keys are kept as
+        exported, so an export imports into any cache whose functions and
+        versions match.
 
         Args:
             import_path: Path to import file. A name ending ``.json`` is read
@@ -662,21 +673,22 @@ def get_service_cache(service: Optional[str] = None) -> CacheManager:
     Return the cache manager for one service, building it on first use.
 
     Args:
-        service: One of :data:`CACHE_SERVICES`, or None for the global cache
-            that holds everything not attributed to a service.
+        service: One of [`CACHE_SERVICES`][provesid.cache.CACHE_SERVICES], or
+            None for the global cache that holds everything not attributed to a
+            service.
 
     Returns:
-        The shared :class:`CacheManager` for that service. The same object is
-        returned on every call, so two clients of the same service share
-        entries and share the in-memory tier.
+        The shared [`CacheManager`][provesid.cache.CacheManager] for that
+        service. The same object is returned on every call, so two clients of
+        the same service share entries and share the in-memory tier.
 
     Raises:
-        ValueError: If ``service`` is neither in :data:`CACHE_SERVICES` nor
-            already registered. Silently falling back to the global cache
-            would scatter a typo's entries somewhere the matching
-            ``clear_cache`` call never looks. A name registered directly in
-            ``_service_caches`` --- which is how tests inject a throwaway cache
-            --- counts as known.
+        ValueError: If ``service`` is neither in
+            [`CACHE_SERVICES`][provesid.cache.CACHE_SERVICES] nor already
+            registered. Silently falling back to the global cache would scatter
+            a typo's entries somewhere the matching ``clear_cache`` call never
+            looks. A name registered directly in ``_service_caches`` --- which
+            is how tests inject a throwaway cache --- counts as known.
 
     Examples:
         >>> get_service_cache('pubchem') is get_service_cache('pubchem')
@@ -713,17 +725,19 @@ def cached(func: Callable = None, *, service: Optional[str] = None,
     This replaces the standard ``@lru_cache`` decorator with unlimited caching,
     persistent storage, and size monitoring. Keys are process-stable, so an
     entry written by one run is found by the next (see
-    :func:`stable_key_part`).
+    [`stable_key_part`][provesid.cache.stable_key_part]).
 
     Failed lookups are never written. An exception propagates uncached, and a
-    return value that :func:`is_failure_result` recognises as an in-band failure
-    report is returned to the caller but not stored --- a transient HTTP 429,
-    503 or timeout must not become a permanent "no data" answer.
+    return value that [`is_failure_result`][provesid.cache.is_failure_result]
+    recognises as an in-band failure report is returned to the caller but not
+    stored --- a transient HTTP 429, 503 or timeout must not become a permanent
+    "no data" answer.
 
     Args:
         func: The function to cache, when used as a bare ``@cached``.
         service: Optional service name for service-specific caching; one of
-            :data:`CACHE_SERVICES`. Omit it to use the global cache.
+            [`CACHE_SERVICES`][provesid.cache.CACHE_SERVICES]. Omit it to use
+            the global cache.
         skip_if: Optional predicate applied to the return value; when it returns
             True the value is handed back but not stored. Use it for functions
             that report a failed lookup with something other than a
@@ -735,8 +749,9 @@ def cached(func: Callable = None, *, service: Optional[str] = None,
             the old shape become unreachable instead of being unpickled into
             something the caller cannot read. Bump the client's
             ``CACHE_SCHEMA_VERSION`` instead when the change affects every
-            method of one client, and :data:`CACHE_KEY_VERSION` when it affects
-            everything.
+            method of one client, and
+            [`CACHE_KEY_VERSION`][provesid.cache.CACHE_KEY_VERSION] when it
+            affects everything.
 
     Returns:
         The decorated function, carrying ``cache_clear`` and ``cache_info``
@@ -813,7 +828,7 @@ def cached(func: Callable = None, *, service: Optional[str] = None,
 
 # ---------------------------------------------------------------------------
 # Cache management. Every function takes ``service=`` rather than each service
-# owning a hand-written twin: the service list is data (:data:`CACHE_SERVICES`),
+# owning a hand-written twin: the service list is data (``CACHE_SERVICES``),
 # and fourteen near-identical one-line functions were fourteen places to forget
 # when an eighth service arrives.
 # ---------------------------------------------------------------------------
@@ -823,7 +838,8 @@ def clear_cache(service: Optional[str] = None, all_services: bool = False):
     Delete every cached entry for one service, or for the global cache.
 
     Args:
-        service: One of :data:`CACHE_SERVICES`, or None for the global cache.
+        service: One of [`CACHE_SERVICES`][provesid.cache.CACHE_SERVICES], or
+            None for the global cache.
         all_services: When True, clear every service cache as well as the
             global one, and ignore ``service``.
 
@@ -846,7 +862,8 @@ def get_cache_info(service: Optional[str] = None) -> Dict[str, Any]:
     Report directory, entry counts and size for one cache.
 
     Args:
-        service: One of :data:`CACHE_SERVICES`, or None for the global cache.
+        service: One of [`CACHE_SERVICES`][provesid.cache.CACHE_SERVICES], or
+            None for the global cache.
 
     Returns:
         Dict with ``cache_directory``, ``memory_entries``, ``disk_entries``,
@@ -865,10 +882,12 @@ def get_cache_info(service: Optional[str] = None) -> Dict[str, Any]:
 
 def get_all_cache_info() -> Dict[str, Dict[str, Any]]:
     """
-    Report :func:`get_cache_info` for the global cache and every service.
+    Report [`get_cache_info`][provesid.cache.get_cache_info] for the global
+    cache and every service.
 
     Returns:
-        Dict keyed by ``'global'`` and by each name in :data:`CACHE_SERVICES`.
+        Dict keyed by ``'global'`` and by each name in
+        [`CACHE_SERVICES`][provesid.cache.CACHE_SERVICES].
 
     Examples:
         >>> 'pubchem' in get_all_cache_info()
@@ -888,7 +907,8 @@ def export_cache(export_path: str, format: str = 'pickle',
     Args:
         export_path: Destination file.
         format: ``'pickle'`` (default, preserves Python objects) or ``'json'``.
-        service: One of :data:`CACHE_SERVICES`, or None for the global cache.
+        service: One of [`CACHE_SERVICES`][provesid.cache.CACHE_SERVICES], or
+            None for the global cache.
 
     Returns:
         True on success, False if the export failed (a warning says why).
@@ -906,13 +926,15 @@ def export_cache(export_path: str, format: str = 'pickle',
 def import_cache(import_path: str, merge: bool = True,
                  service: Optional[str] = None) -> bool:
     """
-    Load entries exported by :func:`export_cache` into one cache.
+    Load entries exported by [`export_cache`][provesid.cache.export_cache] into
+    one cache.
 
     Args:
-        import_path: File written by :func:`export_cache`.
+        import_path: File written by [`export_cache`][provesid.cache.export_cache].
         merge: When True (default), keep existing entries; when False, clear
             the cache first.
-        service: One of :data:`CACHE_SERVICES`, or None for the global cache.
+        service: One of [`CACHE_SERVICES`][provesid.cache.CACHE_SERVICES], or
+            None for the global cache.
 
     Returns:
         True on success, False if the import failed (a warning says why).
@@ -936,7 +958,8 @@ def get_cache_size(service: Optional[str] = None) -> Dict[str, Union[int, float]
     Measure one cache on disk.
 
     Args:
-        service: One of :data:`CACHE_SERVICES`, or None for the global cache.
+        service: One of [`CACHE_SERVICES`][provesid.cache.CACHE_SERVICES], or
+            None for the global cache.
 
     Returns:
         Dict with ``bytes``, ``mb``, ``gb`` and ``files``.
@@ -957,8 +980,9 @@ def set_cache_warning_threshold(size_gb: float, service: Optional[str] = None):
 
     Args:
         size_gb: New threshold.
-        service: One of :data:`CACHE_SERVICES`, or None for the global cache.
-            The setting is per cache and is not remembered across processes.
+        service: One of [`CACHE_SERVICES`][provesid.cache.CACHE_SERVICES], or
+            None for the global cache. The setting is per cache and is not
+            remembered across processes.
 
     Raises:
         ValueError: If ``service`` names no known service.
@@ -975,7 +999,8 @@ def enable_cache_warnings(enabled: bool = True, service: Optional[str] = None):
 
     Args:
         enabled: True to warn past the threshold, False to stay quiet.
-        service: One of :data:`CACHE_SERVICES`, or None for the global cache.
+        service: One of [`CACHE_SERVICES`][provesid.cache.CACHE_SERVICES], or
+            None for the global cache.
 
     Raises:
         ValueError: If ``service`` names no known service.

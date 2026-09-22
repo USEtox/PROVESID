@@ -2,9 +2,10 @@
 
 This module provides high-level "give me chemical-class labels for these
 structures" capabilities on top of PROVESID's identifier resolution. The first
-backend implemented here is :class:`ChebifierClassifier`, a wrapper around the
-offline, AI-based ChEB-AI ``chebifier`` ensemble that assigns ChEBI ontology
-classes to molecules.
+backend implemented here is
+[`ChebifierClassifier`][provesid.taxonomy.ChebifierClassifier], a wrapper
+around the offline, AI-based ChEB-AI ``chebifier`` ensemble that assigns ChEBI
+ontology classes to molecules.
 
 ``chebifier`` is a heavy, optional dependency (it pulls in PyTorch and, for the
 graph models, part of the PyG stack). It is therefore **not** a core requirement
@@ -21,12 +22,16 @@ design rationale.
 
 Key design points (mirrors the PROVESID conventions):
 
-* **Optional + lazily imported.** Importing :mod:`provesid.taxonomy` never
-  requires PyTorch. ``chebifier`` is imported only when a
-  :class:`ChebifierClassifier` actually needs it, and a missing install raises a
-  clear :class:`ChebifierMissingError` rather than a raw ``ModuleNotFoundError``.
+* **Optional + lazily imported.** Importing
+  [`provesid.taxonomy`][provesid.taxonomy] never requires PyTorch.
+  ``chebifier`` is imported only when a
+  [`ChebifierClassifier`][provesid.taxonomy.ChebifierClassifier] actually needs
+  it, and a missing install raises a clear
+  [`ChebifierMissingError`][provesid.taxonomy.ChebifierMissingError] rather
+  than a raw ``ModuleNotFoundError``.
 * **Systemwide model storage.** Model weights are redirected to the shared
-  per-user PROVESID dataset directory (:func:`provesid.utils.user_dataset_path`,
+  per-user PROVESID dataset directory
+  ([`provesid.utils.user_dataset_path`][provesid.utils.user_dataset_path],
   overridable with ``PROVESID_DATA_DIR``) so a single copy is reused across all
   virtual environments on the machine, exactly like the other large PROVESID
   datasets.
@@ -36,8 +41,8 @@ Key design points (mirrors the PROVESID conventions):
 * **Self-healing checkpoint compatibility.** chebifier's graph checkpoints
   require chebai-graph's property index vocabularies in a specific (older) state.
   ``chebifier[models]==1.2.2`` pins a matching ``chebai-graph``, and
-  :func:`ensure_v244_indices` restores the indices if a drifted version is
-  installed over it.
+  [`ensure_v244_indices`][provesid.taxonomy.ensure_v244_indices] restores the
+  indices if a drifted version is installed over it.
 """
 
 from __future__ import annotations
@@ -58,11 +63,9 @@ from .utils import user_dataset_path
 
 logger = logging.getLogger(__name__)
 
-#: chebifier release this backend is validated against (see docs/guide/chebifier.md).
 CHEBIFIER_PINNED_VERSION = "1.2.2"
+"""chebifier release this backend is validated against (see docs/guide/chebifier.md)."""
 
-#: Columns of the tidy taxonomy table returned by ``classify`` (shared with the
-#: planned ClassyFire backend, hence the ClassyFire-only level columns).
 TAXONOMY_COLUMNS = [
     "inchikey",
     "smiles",
@@ -75,6 +78,9 @@ TAXONOMY_COLUMNS = [
     "source",
     "confidence",
 ]
+"""Columns of the tidy taxonomy table returned by ``classify`` (shared with the
+planned ClassyFire backend, hence the ClassyFire-only level columns).
+"""
 
 # ---------------------------------------------------------------------------
 # chebai-graph property-index compatibility (v244 checkpoints)
@@ -114,7 +120,8 @@ class ChebifierMissingError(ChebifierError):
     Raised when the optional ``chebifier`` dependency is not installed.
 
     Raised when the ensemble is first built, not on import or construction;
-    check :func:`chebifier_available` first to avoid it.
+    check [`chebifier_available`][provesid.taxonomy.chebifier_available] first
+    to avoid it.
 
     Examples:
         >>> issubclass(ChebifierMissingError, ChebifierError)
@@ -139,12 +146,6 @@ def chebifier_available() -> bool:
     return importlib.util.find_spec("chebifier") is not None
 
 
-#: Modules the *default* chebifier ensemble needs, beyond ``chebifier`` itself.
-#: ``pip install 'provesid[chebifier]'`` (i.e. ``chebifier[models]``) installs all
-#: of them; the graph models additionally need ``torch_scatter`` from the PyG wheel
-#: index, which is what ``scripts/install_chebifier.sh`` adds. Missing any of these
-#: makes the default ensemble fail at predict time with a bare
-#: ``ModuleNotFoundError``.
 _DEFAULT_ENSEMBLE_MODULES = (
     "chebifier",
     "chebai",         # electra transformer model
@@ -153,16 +154,24 @@ _DEFAULT_ENSEMBLE_MODULES = (
     "chemlog_extra",  # chemlog_element / chemlog_organox models
     "c3p",            # c3p model
 )
+"""Modules the *default* chebifier ensemble needs, beyond ``chebifier`` itself.
+``pip install 'provesid[chebifier]'`` (i.e. ``chebifier[models]``) installs all
+of them; the graph models additionally need ``torch_scatter`` from the PyG wheel
+index, which is what ``scripts/install_chebifier.sh`` adds. Missing any of these
+makes the default ensemble fail at predict time with a bare
+``ModuleNotFoundError``.
+"""
 
 
 def missing_ensemble_modules() -> List[str]:
     """Modules required by the default chebifier ensemble that are not installed.
 
     Use this to decide whether a full classification run can succeed.
-    :func:`chebifier_available` only reports whether ``chebifier`` itself imports,
-    which is not enough: the default ensemble also loads transformer, graph,
-    rule-based and c3p models from separate packages, and a partial install fails
-    only once prediction is attempted.
+    [`chebifier_available`][provesid.taxonomy.chebifier_available] only reports
+    whether ``chebifier`` itself imports, which is not enough: the default
+    ensemble also loads transformer, graph, rule-based and c3p models from
+    separate packages, and a partial install fails only once prediction is
+    attempted.
 
     Returns:
         The missing module names, in the order they appear in the ensemble.
@@ -184,7 +193,9 @@ def default_ensemble_available() -> bool:
     """Whether every module the default chebifier ensemble needs is installed.
 
     Returns:
-        ``True`` when :func:`missing_ensemble_modules` is empty.
+        ``True`` when
+        [`missing_ensemble_modules`][provesid.taxonomy.missing_ensemble_modules]
+        is empty.
 
     Examples:
         >>> from provesid.taxonomy import default_ensemble_available
@@ -295,9 +306,10 @@ def ensure_element_class_mappings(
 
     This writes both files into the PROVESID chebifier data directory using
     upstream's own derivation rules, skipping unnamed nodes.
-    :attr:`ChebifierClassifier.ensemble` then builds the ensemble with that
-    directory as the working directory, so the files are found without writing
-    anything into the caller's working directory.
+    [`ChebifierClassifier.ensemble`][provesid.taxonomy.ChebifierClassifier.ensemble]
+    then builds the ensemble with that directory as the working directory, so
+    the files are found without writing anything into the caller's working
+    directory.
 
     Args:
         data_dir: Base directory for chebifier data. When ``None``, uses
@@ -422,7 +434,9 @@ def chebi_class_names(data_dir: Optional[str] = None) -> Dict[str, str]:
 
     Args:
         data_dir: Base directory for chebifier storage; defaults to the shared
-            PROVESID dataset dir, exactly as :class:`ChebifierClassifier` does.
+            PROVESID dataset dir, exactly as
+            [`ChebifierClassifier`][provesid.taxonomy.ChebifierClassifier]
+            does.
 
     Returns:
         ``{"33659": "organic aromatic compound", ...}`` -- ids are bare, without
@@ -478,7 +492,7 @@ class ChebifierClassifier:
 
     Wraps the ChEB-AI ``chebifier`` ensemble behind PROVESID conventions:
     systemwide model storage, an InChIKey-keyed resumable cache, and a tidy
-    :class:`pandas.DataFrame` output. The (expensive) ensemble is constructed
+    `pandas.DataFrame` output. The (expensive) ensemble is constructed
     lazily on first use and reused for the lifetime of the instance.
 
     Args:
@@ -487,20 +501,24 @@ class ChebifierClassifier:
         use_cache: When ``True`` (default), classified structures are cached on
             disk by InChIKey and reused on subsequent calls.
         resolve_names: When ``True``, resolve predicted ChEBI IDs to names via the
-            online :class:`provesid.ChEBI` client (cached). Defaults to ``False``
-            to keep classification fast and dependency-light.
+            online [`provesid.ChEBI`][provesid.chebi.ChEBI] client (cached).
+            Defaults to ``False`` to keep classification fast and
+            dependency-light.
         model_configs: Optional custom chebifier ensemble configuration (path or
             dict) passed straight to ``BaseEnsemble``. When ``None``, chebifier's
             default ensemble is used.
-        patch_indices: When ``True`` (default), call :func:`ensure_v244_indices`
+        patch_indices: When ``True`` (default), call
+            [`ensure_v244_indices`][provesid.taxonomy.ensure_v244_indices]
             before loading the ensemble so the graph models load correctly.
         with_scores: When ``True``, populate the ``confidence`` column with the
             ensemble's smoothed net score for each predicted class instead of
-            leaving it empty. See :meth:`predict_with_scores`.
+            leaving it empty. See
+            [`predict_with_scores`][provesid.taxonomy.ChebifierClassifier.predict_with_scores].
         exclude_models: Model names to drop from the ensemble configuration, e.g.
             ``["electra_chebi50-3star_v244"]`` to build a fallback ensemble for
             structures that crash the transformer's tokenizer (see
-            :meth:`classify`). Applied on top of ``model_configs``.
+            [`classify`][provesid.taxonomy.ChebifierClassifier.classify]).
+            Applied on top of ``model_configs``.
 
     Raises:
         ChebifierMissingError: If ``chebifier`` is not installed (raised when the
@@ -565,11 +583,12 @@ class ChebifierClassifier:
         """The lazily-constructed, reused ``BaseEnsemble`` instance.
 
         Note:
-            The ensemble is built with :attr:`data_dir` as the working directory,
-            because ``chemlog_extra`` resolves its element-class mapping files
-            relative to the working directory (see
-            :func:`ensure_element_class_mappings`). The previous directory is
-            always restored.
+            The ensemble is built with
+            [`data_dir`][provesid.taxonomy.ChebifierClassifier] as the working
+            directory, because ``chemlog_extra`` resolves its element-class
+            mapping files relative to the working directory (see
+            [`ensure_element_class_mappings`][provesid.taxonomy.ensure_element_class_mappings]).
+            The previous directory is always restored.
 
         Raises:
             ChebifierMissingError: If ``chebifier`` is not installed.
@@ -693,7 +712,8 @@ class ChebifierClassifier:
             Verified to reproduce ``predict_smiles_list``'s label sets exactly.
             The scores are the *smoothed* ones, i.e. the values the ontology
             consistency pass actually thresholds, so ``score > 0`` holds for
-            every returned label. Not cached; :meth:`classify` with
+            every returned label. Not cached;
+            [`classify`][provesid.taxonomy.ChebifierClassifier.classify] with
             ``with_scores=True`` is.
 
         Examples:
@@ -744,13 +764,15 @@ class ChebifierClassifier:
                 caching consistent across equivalent SMILES.
 
         Returns:
-            A :class:`pandas.DataFrame` with one row per input structure and the
-            columns in :data:`TAXONOMY_COLUMNS`. For this backend the ClassyFire
-            level columns (``kingdom``/``superclass``/``class``/``subclass``) are
-            ``None``; ``chebi_ids`` holds the ``|``-joined predicted ChEBI ids,
-            ``chebi_names`` the ``|``-joined names when ``resolve_names`` is set,
-            ``source`` is ``"chebifier"``, and ``confidence`` the ``|``-joined
-            per-label scores when available.
+            A `pandas.DataFrame` with one row per input structure and the
+            columns in
+            [`TAXONOMY_COLUMNS`][provesid.taxonomy.TAXONOMY_COLUMNS]. For this
+            backend the ClassyFire level columns
+            (``kingdom``/``superclass``/``class``/``subclass``) are ``None``;
+            ``chebi_ids`` holds the ``|``-joined predicted ChEBI ids,
+            ``chebi_names`` the ``|``-joined names when ``resolve_names`` is
+            set, ``source`` is ``"chebifier"``, and ``confidence`` the
+            ``|``-joined per-label scores when available.
 
         Raises:
             ChebifierMissingError: If ``chebifier`` is not installed.
@@ -879,7 +901,8 @@ class ChebifierClassifier:
         """Collapse a taxonomy table to a ``{inchikey: label}`` mapping.
 
         Args:
-            df: A taxonomy table as returned by :meth:`classify`.
+            df: A taxonomy table as returned by
+                [`classify`][provesid.taxonomy.ChebifierClassifier.classify].
             level: The column to use as the label (e.g. ``"chebi_ids"`` or
                 ``"chebi_names"``).
 
@@ -910,9 +933,11 @@ def classify_chebifier(
 ) -> pd.DataFrame:
     """Classify structures with the chebifier ensemble (convenience wrapper).
 
-    Thin functional wrapper over :class:`ChebifierClassifier` for one-off calls.
-    For repeated calls, construct a :class:`ChebifierClassifier` once and reuse it
-    so the model is loaded a single time.
+    Thin functional wrapper over
+    [`ChebifierClassifier`][provesid.taxonomy.ChebifierClassifier] for one-off
+    calls. For repeated calls, construct a
+    [`ChebifierClassifier`][provesid.taxonomy.ChebifierClassifier] once and
+    reuse it so the model is loaded a single time.
 
     Args:
         smiles: A SMILES string or sequence of SMILES strings.
@@ -922,7 +947,8 @@ def classify_chebifier(
         resolve_names: Whether to resolve ChEBI ids to names.
 
     Returns:
-        A tidy taxonomy :class:`pandas.DataFrame` (see :meth:`ChebifierClassifier.classify`).
+        A tidy taxonomy `pandas.DataFrame` (see
+        [`ChebifierClassifier.classify`][provesid.taxonomy.ChebifierClassifier.classify]).
 
     Raises:
         ChebifierMissingError: If ``chebifier`` is not installed.

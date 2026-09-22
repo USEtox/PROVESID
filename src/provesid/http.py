@@ -4,21 +4,22 @@ One rate-limited, retrying HTTP transport shared by every PROVESID web client.
 Before this module each web-API client carried its own copy of "pause, request,
 decide what the status code meant, maybe give up" --- four copies that had
 drifted apart, none of which honoured ``Retry-After`` and only one of which
-retried at all. :class:`HTTPClient` is the single place that decides *when to
-ask again*; the clients keep everything that encodes their upstream's contract:
-the URLs they build, the bodies they parse and the exceptions they raise.
+retried at all. [`HTTPClient`][provesid.http.HTTPClient] is the single place
+that decides *when to ask again*; the clients keep everything that encodes
+their upstream's contract: the URLs they build, the bodies they parse and the
+exceptions they raise.
 
 The one thing services genuinely disagree about is what a response *means*.
 PubChem answers a momentary overload with ``PUGVIEW.ServerBusy`` behind a 404,
 so its status code alone is a lie; the NCI resolver returns plain text and a
 bare 404 for absence. That disagreement is the ``classify`` callback --- a
-function from a response to an :class:`Outcome` --- and it is the only part of
-the policy a caller is expected to supply.
+function from a response to an [`Outcome`][provesid.http.Outcome] --- and it is
+the only part of the policy a caller is expected to supply.
 
 Two things belong to the *host* rather than to any one client, and live on its
-shared :class:`RateLimiter`: the pacing clock, and the circuit breaker. The
-breaker is the time a ``Retry-After`` named, and no client sharing the host
-asks before it.
+shared [`RateLimiter`][provesid.http.RateLimiter]: the pacing clock, and the
+circuit breaker. The breaker is the time a ``Retry-After`` named, and no client
+sharing the host asks before it.
 
 Examples:
     >>> client = HTTPClient(min_interval=0.2, timeout=30)
@@ -43,10 +44,12 @@ class ServiceError(Exception):
     """
     Base for every failure this package reports from a web service.
 
-    Each client raises its own subclass --- :class:`~provesid.pubchemview.PubChemViewError`,
-    :class:`~provesid.resolver.NCIResolverError` and so on --- so a caller can
-    catch one service or, through this base, all of them. A raw ``requests``
-    exception never escapes :class:`HTTPClient`.
+    Each client raises its own subclass ---
+    [`PubChemViewError`][provesid.pubchemview.PubChemViewError],
+    [`NCIResolverError`][provesid.resolver.NCIResolverError] and so on --- so a
+    caller can catch one service or, through this base, all of them. A raw
+    ``requests`` exception never escapes
+    [`HTTPClient`][provesid.http.HTTPClient].
 
     The message is the whole of what most callers want, so it stays the single
     positional argument and ``str(exc)`` is unchanged. The response detail is
@@ -156,10 +159,11 @@ class Outcome(Enum):
     FATAL = "fatal"
 
 
-#: Status codes that mean "the service is momentarily unwilling", whatever
-#: else the body says. 429 is explicit throttling; 5xx is the service failing
-#: on its own side.
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504, 507, 509})
+"""Status codes that mean "the service is momentarily unwilling", whatever
+else the body says. 429 is explicit throttling; 5xx is the service failing
+on its own side.
+"""
 
 
 def default_classify(response: requests.Response) -> Outcome:
@@ -176,7 +180,7 @@ def default_classify(response: requests.Response) -> Outcome:
         response: The response to classify.
 
     Returns:
-        The :class:`Outcome` for this response.
+        The [`Outcome`][provesid.http.Outcome] for this response.
 
     Examples:
         >>> class R: status_code = 404
@@ -204,7 +208,8 @@ def retry_after_seconds(response: requests.Response) -> Optional[float]:
 
     RFC 9110 permits a number of seconds or an HTTP date. A service that
     troubles itself to say when to come back knows better than any backoff
-    curve, so :class:`HTTPClient` prefers this over its own schedule.
+    curve, so [`HTTPClient`][provesid.http.HTTPClient] prefers this over its
+    own schedule.
 
     Args:
         response: The response whose headers to read.
@@ -253,8 +258,8 @@ class RateLimiter:
     The clock it measures that promise against belongs to the *host*, because
     the limit being respected does too: PubChem publishes five requests per
     second **per IP**, not per Python object. Two clients aimed at PubChem in
-    one process --- a :class:`~provesid.pubchem.PubChemAPI` and a
-    :class:`~provesid.pubchemview.PubChemView`, which is the ordinary way to
+    one process --- a [`PubChemAPI`][provesid.pubchem.PubChemAPI] and a
+    [`PubChemView`][provesid.pubchemview.PubChemView], which is the ordinary way to
     use this package --- each kept their own clock before this class existed,
     so each could believe it was pacing correctly while together they asked
     twice as fast as PubChem allows.
@@ -264,13 +269,14 @@ class RateLimiter:
     threads queue rather than all waking at once.
 
     A ``Retry-After`` is information about the host in the same way, so it is
-    kept here too, as :attr:`not_before`: the circuit breaker. Before, each
-    call rediscovered a throttle by being refused it; a caller resolving a
-    thousand names against a PubChem that had blocked this IP paid a request
-    per name to learn the same thing a thousand times. Now the first refusal
-    is remembered, and every client aimed at that host either waits it out,
-    when that fits its own retry patience, or fails at once without asking ---
-    see :meth:`HTTPClient.request`.
+    kept here too, as [`not_before`][provesid.http.RateLimiter]: the circuit
+    breaker. Before, each call rediscovered a throttle by being refused it; a
+    caller resolving a thousand names against a PubChem that had blocked this
+    IP paid a request per name to learn the same thing a thousand times. Now
+    the first refusal is remembered, and every client aimed at that host either
+    waits it out, when that fits its own retry patience, or fails at once
+    without asking --- see
+    [`HTTPClient.request`][provesid.http.HTTPClient.request].
 
     Args:
         host: The host this clock belongs to, for messages. None for a
@@ -282,7 +288,7 @@ class RateLimiter:
             timestamp; 0.0 before the first request.
         not_before: The Unix time before which the host has asked not to be
             asked; 0.0 when it has asked for nothing. Only ever moves later,
-            until :meth:`release` clears it.
+            until [`release`][provesid.http.RateLimiter.release] clears it.
 
     Examples:
         >>> limiter = RateLimiter()
@@ -312,8 +318,9 @@ class RateLimiter:
         """
         Sleep until ``min_interval`` has passed since this host was last asked.
 
-        Pacing only: this does not wait out a :meth:`hold`, because whether a
-        hold is worth waiting for is the caller's decision, not the clock's.
+        Pacing only: this does not wait out a
+        [`hold`][provesid.http.RateLimiter.hold], because whether a hold is
+        worth waiting for is the caller's decision, not the clock's.
 
         Args:
             min_interval: Seconds the caller promises to leave between
@@ -367,8 +374,8 @@ class RateLimiter:
         Return how many seconds remain before the host may be asked again.
 
         Returns:
-            Seconds until :attr:`not_before`; 0.0 when there is no hold or it
-            has passed.
+            Seconds until [`not_before`][provesid.http.RateLimiter]; 0.0 when
+            there is no hold or it has passed.
 
         Examples:
             >>> RateLimiter().held_for()
@@ -394,16 +401,18 @@ class RateLimiter:
             self.not_before = 0.0
 
 
-#: Every host a limiter has been asked for, so that clients aimed at the same
-#: service find the same clock. Keyed by lower-cased ``host:port``. Entries are
-#: never removed --- there are a handful of them and each is two floats.
 _host_limiters: Dict[str, RateLimiter] = {}
+"""Every host a limiter has been asked for, so that clients aimed at the same
+service find the same clock. Keyed by lower-cased ``host:port``. Entries are
+never removed --- there are a handful of them and each is two floats.
+"""
 _host_limiters_lock = threading.Lock()
 
 
 def host_limiter(url_or_host: str) -> RateLimiter:
     """
-    Return the process-wide :class:`RateLimiter` for one host, creating it once.
+    Return the process-wide [`RateLimiter`][provesid.http.RateLimiter] for one
+    host, creating it once.
 
     Args:
         url_or_host: A full URL, whose host is used, or a bare host. Accepting
@@ -436,7 +445,8 @@ def release_holds() -> None:
     """
     Forget every host's ``Retry-After`` hold in this process.
 
-    The process-wide form of :meth:`RateLimiter.release`: after it, every
+    The process-wide form of
+    [`RateLimiter.release`][provesid.http.RateLimiter.release]: after it, every
     client asks its host again on its next call. Pacing clocks are untouched.
 
     Examples:
@@ -485,12 +495,12 @@ class HTTPClient:
             caller who is waiting at a prompt.
         headers: Headers sent with every request. Omitted entirely when None,
             so a stub that accepts only ``(url, timeout=...)`` still works.
-        classify: Maps a response to an :class:`Outcome`. Defaults to
-            :func:`default_classify`.
+        classify: Maps a response to an [`Outcome`][provesid.http.Outcome]. Defaults to
+            [`default_classify`][provesid.http.default_classify].
         error_cls: Raised for a fatal response --- a malformed request, a
             rejected key --- and, unless ``retry_exhausted_cls`` says
             otherwise, for an exhausted retry budget.
-        not_found_cls: Raised for :attr:`Outcome.ABSENT`.
+        not_found_cls: Raised for [`Outcome.ABSENT`][provesid.http.Outcome].
         timeout_cls: Raised when every attempt timed out or could not connect.
             Defaults to ``error_cls``.
         rate_limit_cls: Raised when every attempt was throttled. Defaults to
@@ -557,12 +567,13 @@ class HTTPClient:
         Sleep, if needed, so requests to this service stay ``min_interval``
         apart.
 
-        Called by :meth:`request` before every attempt --- including retries,
-        which is the point: a service that is shedding load should not be
-        asked again faster than a service that is not.
+        Called by [`request`][provesid.http.HTTPClient.request] before every
+        attempt --- including retries, which is the point: a service that is
+        shedding load should not be asked again faster than a service that is
+        not.
 
         The interval is this client's own; the clock it is measured against
-        belongs to :attr:`limiter`, which is shared with every other client
+        belongs to `limiter`, which is shared with every other client
         aimed at the same host when ``pace_host`` was given. So the wait is
         ``min_interval`` since *anybody* last asked that service, not since
         this object did.
@@ -586,11 +597,11 @@ class HTTPClient:
         signature; a client that always passed ``params=None, headers=None``
         would break them for no gain.
 
-        The call goes through :attr:`session` when the client was given one,
-        and otherwise through the ``requests`` module functions. Which of the
-        two is visible from outside: a session's ``get`` carries the session's
-        persistent headers and pooled connection, and is patched as
-        ``requests.Session.get``.
+        The call goes through [`session`][provesid.http.HTTPClient] when the
+        client was given one, and otherwise through the ``requests`` module
+        functions. Which of the two is visible from outside: a session's
+        ``get`` carries the session's persistent headers and pooled connection,
+        and is patched as ``requests.Session.get``.
 
         Args:
             method: ``"GET"`` or ``"POST"``.
@@ -635,7 +646,7 @@ class HTTPClient:
 
         A ``Retry-After`` the service sent wins over the exponential curve,
         because it is the service's own estimate, and it is returned whole:
-        whether it is worth waiting for is :meth:`_patience`'s question. The
+        whether it is worth waiting for is `_patience`'s question. The
         curve is capped at ``max_backoff``.
 
         Args:
@@ -715,21 +726,22 @@ class HTTPClient:
         Make a request, retrying transient failures, and return the response.
 
         A ``Retry-After`` on any refused attempt is recorded on the host's
-        :class:`RateLimiter`, so it binds every client sharing that host, not
-        only this call. A call that finds the host held waits the hold out when
-        it is no longer than ``max_backoff`` (and ``max_elapsed``), and
-        otherwise raises ``rate_limit_cls`` at once, without a request. That is
-        what makes a throttled host fail in microseconds for the thousandth
-        name rather than cost a refused request per name.
+        [`RateLimiter`][provesid.http.RateLimiter], so it binds every client
+        sharing that host, not only this call. A call that finds the host held
+        waits the hold out when it is no longer than ``max_backoff`` (and
+        ``max_elapsed``), and otherwise raises ``rate_limit_cls`` at once,
+        without a request. That is what makes a throttled host fail in
+        microseconds for the thousandth name rather than cost a refused request
+        per name.
 
         Args:
             method: ``"GET"`` or ``"POST"``.
             url: The full URL.
             **kwargs: ``params``, ``data``, ``json``, ``headers``, ``timeout``
-                and ``stream``, all optional --- see :meth:`_send`.
+                and ``stream``, all optional --- see `_send`.
 
         Returns:
-            The response, already classified as :attr:`Outcome.OK`.
+            The response, already classified as [`Outcome.OK`][provesid.http.Outcome].
 
         Raises:
             not_found_cls: The service reported the record as absent.
@@ -744,9 +756,9 @@ class HTTPClient:
                 ``max_backoff``. Defaults to ``error_cls``.
 
         Every one of those carries the status, the URL and the response on the
-        exception when there was a response --- see :class:`ServiceError` --- so
-        a client can tell a rejected key from an unknown record without
-        re-reading the wire.
+        exception when there was a response --- see
+        [`ServiceError`][provesid.http.ServiceError] --- so a client can tell a
+        rejected key from an unknown record without re-reading the wire.
 
         Examples:
             >>> client = HTTPClient()
@@ -873,11 +885,11 @@ class HTTPClient:
         Build the exception to raise, with the response detail when it fits.
 
         Every exception class in this package descends from
-        :class:`ServiceError` and so accepts the keyword detail. A caller is
-        free to pass a plain ``Exception`` subclass as ``error_cls``, though,
-        and handing that one keywords it never declared would turn a service
-        failure into a ``TypeError``. So the detail is attached only when the
-        class is known to take it.
+        [`ServiceError`][provesid.http.ServiceError] and so accepts the keyword
+        detail. A caller is free to pass a plain ``Exception`` subclass as
+        ``error_cls``, though, and handing that one keywords it never declared
+        would turn a service failure into a ``TypeError``. So the detail is
+        attached only when the class is known to take it.
 
         Args:
             cls: The exception class to instantiate.
@@ -924,7 +936,7 @@ class HTTPClient:
 
         Args:
             url: The full URL.
-            **kwargs: See :meth:`request`.
+            **kwargs: See [`request`][provesid.http.HTTPClient.request].
 
         Returns:
             The response.
@@ -941,7 +953,7 @@ class HTTPClient:
 
         Args:
             url: The full URL.
-            **kwargs: See :meth:`request`.
+            **kwargs: See [`request`][provesid.http.HTTPClient.request].
 
         Returns:
             The response.
@@ -958,7 +970,7 @@ class HTTPClient:
 
         Args:
             url: The full URL.
-            **kwargs: See :meth:`request`.
+            **kwargs: See [`request`][provesid.http.HTTPClient.request].
 
         Returns:
             The response body, with surrounding whitespace removed.
@@ -975,7 +987,7 @@ class HTTPClient:
 
         Args:
             url: The full URL.
-            **kwargs: See :meth:`request`.
+            **kwargs: See [`request`][provesid.http.HTTPClient.request].
 
         Returns:
             The decoded JSON.
@@ -998,7 +1010,7 @@ class HTTPClient:
 
         Args:
             url: The full URL.
-            **kwargs: See :meth:`request`.
+            **kwargs: See [`request`][provesid.http.HTTPClient.request].
 
         Returns:
             The decoded JSON.

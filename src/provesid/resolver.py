@@ -5,11 +5,11 @@ CACTUS (https://cactus.nci.nih.gov/chemical/structure) turns any identifier it
 recognises --- a name, a CAS number, SMILES, InChI or InChIKey --- into
 another representation, through one URL shape:
 ``/chemical/structure/{identifier}/{representation}``.
-:class:`NCIChemicalIdentifierResolver` wraps it with pacing, retries and
-caching, and the ``nci_*`` functions are one-line shortcuts that return None
-instead of raising.
+[`NCIChemicalIdentifierResolver`][provesid.resolver.NCIChemicalIdentifierResolver]
+wraps it with pacing, retries and caching, and the ``nci_*`` functions are
+one-line shortcuts that return None instead of raising.
 
-Every call needs the network. :class:`~provesid.search.Search` asks CACTUS
+Every call needs the network. [`Search`][provesid.search.Search] asks CACTUS
 only when its offline sources cannot answer and ``online_fallback`` allows.
 
 Examples:
@@ -58,8 +58,8 @@ class NCIResolverNotFoundError(NCIResolverError, NotFoundError):
     Exception raised when chemical identifier is not found.
 
     CACTUS reports this as HTTP 500 with a "Page not found" body;
-    :func:`nci_classify` reads the body so that it is not retried as a
-    server fault.
+    [`nci_classify`][provesid.resolver.nci_classify] reads the body so that it
+    is not retried as a server fault.
 
     Examples:
         >>> NCIChemicalIdentifierResolver().resolve(
@@ -75,7 +75,7 @@ class NCIResolverTimeoutError(NCIResolverError, ServiceTimeoutError):
     Exception raised when request times out.
 
     Raised after every attempt timed out or failed to connect. Also a
-    :class:`~provesid.http.ServiceTimeoutError`.
+    [`ServiceTimeoutError`][provesid.http.ServiceTimeoutError].
 
     Examples:
         >>> issubclass(NCIResolverTimeoutError, ServiceTimeoutError)
@@ -83,12 +83,13 @@ class NCIResolverTimeoutError(NCIResolverError, ServiceTimeoutError):
     """
     pass
 
-#: CACTUS reports an identifier it cannot resolve with HTTP 500 and a body of
-#: ``<h1>Page not found (404)</h1>``. Its status code is not a reliable guide,
-#: so the body decides --- verified live on 2026-09-19 against
-#: ``this_is_definitely_not_a_chemical_12345``, which answers 500/404-body while
-#: ``\u03b1-glucose`` answers 200.
 _NOT_FOUND_BODY = re.compile(r"Page not found", re.IGNORECASE)
+r"""CACTUS reports an identifier it cannot resolve with HTTP 500 and a body of
+``<h1>Page not found (404)</h1>``. Its status code is not a reliable guide,
+so the body decides --- verified live on 2026-09-19 against
+``this_is_definitely_not_a_chemical_12345``, which answers 500/404-body while
+``\u03b1-glucose`` answers 200.
+"""
 
 
 def nci_classify(response: requests.Response) -> Outcome:
@@ -105,9 +106,9 @@ def nci_classify(response: requests.Response) -> Outcome:
         response: The response to classify.
 
     Returns:
-        :attr:`~provesid.http.Outcome.ABSENT` for a 404, and for a 5xx whose
+        [`ABSENT`][provesid.http.Outcome] for a 404, and for a 5xx whose
         body is CACTUS's not-found page; otherwise whatever
-        :func:`~provesid.http.default_classify` says.
+        [`default_classify`][provesid.http.default_classify] says.
 
     Examples:
         >>> class R:
@@ -252,7 +253,9 @@ class NCIChemicalIdentifierResolver:
         Size and location of the CACTUS cache.
 
         Returns:
-            The statistics :func:`provesid.cache.get_cache_info` reports for
+            The statistics
+            [`provesid.cache.get_cache_info`][provesid.cache.get_cache_info]
+            reports for
                 ``service='nci'``.
 
         Examples:
@@ -698,7 +701,8 @@ def nci_cas_to_mol(cas_rn: str) -> Dict[str, Any]:
 
     Returns:
         Dictionary with molecular data, as
-        :meth:`NCIChemicalIdentifierResolver.get_molecular_data` returns it
+        [`NCIChemicalIdentifierResolver.get_molecular_data`][provesid.resolver.NCIChemicalIdentifierResolver.get_molecular_data]
+        returns it
 
     Examples:
         >>> nci_cas_to_mol("64-17-5")["formula"]                 # doctest: +SKIP
@@ -717,7 +721,8 @@ def nci_id_to_mol(identifier: str) -> Dict[str, Any]:
 
     Returns:
         Dictionary with molecular data, as
-        :meth:`NCIChemicalIdentifierResolver.get_molecular_data` returns it
+        [`NCIChemicalIdentifierResolver.get_molecular_data`][provesid.resolver.NCIChemicalIdentifierResolver.get_molecular_data]
+        returns it
 
     Examples:
         >>> nci_id_to_mol("CCO")["stdinchikey"]                  # doctest: +SKIP

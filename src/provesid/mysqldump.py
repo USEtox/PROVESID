@@ -8,9 +8,10 @@ ChEMBL's 74 tables, and the MySQL dump is the only one of the three that can
 be read *as a stream*: one ``CREATE TABLE`` per table, then its rows as
 ``INSERT INTO ... VALUES (...),(...);`` lines.  Reading those lines as they are
 decompressed, and keeping only the eight tables, builds the same extract as
-:meth:`provesid.CheMBL.compact` without the 27.7 GiB release ever existing on
-disk.  That is what :meth:`provesid.CheMBL.build_from_mysql_dump` does with
-this module.
+[`provesid.CheMBL.compact`][provesid.chembl.CheMBL.compact] without the 27.7
+GiB release ever existing on disk.  That is what
+[`provesid.CheMBL.build_from_mysql_dump`][provesid.chembl.CheMBL.build_from_mysql_dump]
+does with this module.
 
 What is understood
 ------------------
@@ -29,11 +30,11 @@ Exactly what ``mysqldump`` writes, and nothing more general:
 
 Anything else inside a wanted table's ``INSERT`` --- a hex literal from
 ``--hex-blob``, a ``_binary`` introducer, a statement with no closing ``;`` ---
-raises :class:`DumpFormatError` naming the table and the position.  A reader
-that guessed would put wrong values into a database that is then trusted, so
-this one refuses instead.  Tables that are not wanted are skipped by looking at
-the first few bytes of each line, which is what makes a 2.1 GB dump cheap to
-read when most of it is bioactivity data.
+raises [`DumpFormatError`][provesid.mysqldump.DumpFormatError] naming the table
+and the position.  A reader that guessed would put wrong values into a database
+that is then trusted, so this one refuses instead.  Tables that are not wanted
+are skipped by looking at the first few bytes of each line, which is what makes
+a 2.1 GB dump cheap to read when most of it is bioactivity data.
 
 Examples:
     >>> dump = [
@@ -271,10 +272,11 @@ def sqlite_affinity(mysql_type: str) -> str:
     Applies SQLite's own affinity rules (section 3.1 of its datatype
     documentation) to the MySQL type name, and returns the affinity keyword
     that ``CREATE TABLE ... AS SELECT`` writes.  That is the point: the extract
-    :meth:`provesid.CheMBL.compact` builds from ChEMBL's SQLite release gets its
-    column types from exactly that statement, so an extract built from the
-    MySQL dump with these types stores every value the same way --- a
-    ``decimal(9,2)`` of ``180.00`` becomes the integer 180 in both.
+    [`provesid.CheMBL.compact`][provesid.chembl.CheMBL.compact] builds from
+    ChEMBL's SQLite release gets its column types from exactly that statement,
+    so an extract built from the MySQL dump with these types stores every value
+    the same way --- a ``decimal(9,2)`` of ``180.00`` becomes the integer 180
+    in both.
 
     Args:
         mysql_type: The type as written in the dump, e.g. ``bigint``,
@@ -317,13 +319,14 @@ def read_statements(
             unwanted tables affordable.
 
     Yields:
-        :class:`CreateTable` once per wanted table, before any of its
-        :class:`Insert` statements.
+        [`CreateTable`][provesid.mysqldump.CreateTable] once per wanted table,
+        before any of its [`Insert`][provesid.mysqldump.Insert] statements.
 
     Raises:
         DumpFormatError: If a wanted table's rows arrive before its
             ``CREATE TABLE``, if its column definitions never close, or if an
-            ``INSERT`` cannot be parsed (:func:`parse_values`).
+            ``INSERT`` cannot be parsed
+            ([`parse_values`][provesid.mysqldump.parse_values]).
 
     Examples:
         >>> dump = [

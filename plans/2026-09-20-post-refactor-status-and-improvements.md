@@ -3896,13 +3896,142 @@ signatures carry no annotations, and the docstrings give the types in prose.
 - **Sphinx roles render literally.** Docstrings use `:class:`, `:func:`,
   `:data:` and `:attr:`; mkdocstrings shows them as `:data: OUTPUT_COLUMNS`.
   They should become Markdown cross-references (`` [`Search`][provesid.Search] ``)
-  module by module, which `--strict` would then check.
+  module by module, which `--strict` would then check. **Done, §30.1.**
 - A typed Google return (`dict: Keyed by …`) renders the type in the *Name*
-  column, since `returns_named_value` stays on (§29.2).
+  column, since `returns_named_value` stays on (§29.2). **Done, §30.3.**
 - Bulleted lists inside a `Returns:` description (`cas_to_detail`,
   `get_molecular_data`) run together into one paragraph: they need a blank
-  line before the list.
+  line before the list. **Done, §30.4.**
 - The tutorials were moved, not reviewed. They are step 19's.
 - The quick start's online cells were not executed (the block from §28.6 does
   not apply to MyST pages, but no live run was made); `--execute` in
-  `validate_docs_local.sh` does it.
+  `validate_docs_local.sh` does it. **Done, §30.5.**
+
+## 30. Landed on 2026-09-22 — §29.5, the docstrings as the site renders them
+
+Four of §29.5's five items. The fifth, reviewing the tutorials, is step 19.
+No code changed: in all 27 changed modules, the AST with string statements
+removed is identical to HEAD's.
+
+### 30.1 Sphinx roles became cross-references
+
+657 roles: 648 in docstrings, counting the ones §30.2 moved out of `#:`
+comments, and 9 in comments. A role in a docstring became
+`` [`name`][canonical.path] `` when its target renders on the site, and plain
+`` `name` `` otherwise. The role's own display rule was kept: `~a.b.C` shows
+`C`, and anything else shows as written. A role in a comment became
+``` ``name`` ```, since comments are never rendered.
+
+Targets were resolved with griffe, from the scope of the object that owns
+the docstring outward (the object, then its class, then its module). Each
+resolved to its canonical path, because that is the id mkdocstrings gives an
+object on the page. "Renders on the site" means that the built site has an
+element with that id. The ids were collected from the site, so the test is
+the same one autorefs applies. The count:
+
+- **562 links** to the object itself.
+- **29 links to the owning class**, for instance attributes and enum members
+  that have no docstring of their own but are described in their class's
+  `Attributes:` section. `PubChemID.offline_properties` is 9 of these; the
+  others include `Outcome.OK` and `Outcome.ABSENT` and
+  `Search.sources_available`.
+- **57 plain.** 16 name something outside the package (`pandas.DataFrame`,
+  `sqlite3.Connection`, `requests.Response`, `json.dumps`, ...): no
+  inventory is configured, and fetching one would make the build go online.
+  The other 41 are private names, except for three public ones without a
+  docstring: `CheMBL.DEFAULT_DB_URL`, `HTTPClient.limiter`,
+  `PubChemView.experimental_properties`.
+
+Two resolution details:
+
+- **A `:func:`/`:meth:`/`:class:` role never resolves to an attribute.** In
+  `Search`'s docstring, `` :func:`strip_salts` `` means the module function.
+  The nearest `strip_salts`, though, is the instance attribute holding the
+  constructor flag.
+- **`--strict` checks them now.** Planting
+  `` [`Nope`][provesid.config.Nope] `` in `config.py` fails the build with
+  autorefs' "Could not find cross-reference target".
+
+A reference is longer than the role it replaces. Lines pushed past the
+project's 88 columns (`ruff`'s `line-length`) were refilled to 79, from the
+long line to the end of its paragraph. Hanging indents for Google items
+(+4) and bullets (+2) were kept, and so were two spaces after a sentence.
+The refill never crosses a doctest line, a bullet or a closing `"""`. A
+first attempt did cross a closing `"""`: it pulled the code after a
+one-line docstring into the docstring, which was caught because the module
+would no longer parse. The only lines still over 88 are a reference alone on
+its line, which cannot be split.
+
+### 30.2 `#:` comments became attribute docstrings
+
+griffe does not read Sphinx's `#:` comments, so the resolution in §30.1 found
+`DATASETS`, `Search.PRESETS`, `LOOKUPS`, `CACHE_SERVICES`, `FTP_ROOT`,
+`RDKIT_DESCRIPTORS` and every `ParsedValue` field "not rendered".
+The 145 such roles made up most of the first dry run's misses. The 85
+`#:` blocks in 18 modules were moved into a string literal after the
+assignment, which griffe does read. As a result, 77 more objects appear in
+the API reference (660 ids before, 737 after). One block quoted
+`` \u03b1-glucose `` and became a raw docstring. `OUTPUT_COLUMNS` had a plain
+`#` comment; it now has a docstring saying what it is. That makes 78.
+
+Two side effects:
+
+- **`show_attribute_values: false`.** An attribute's heading shows its value
+  by default, and `LOOKUPS`, `DATASETS` and `PRESETS` then filled the heading
+  with a single line hundreds of characters long.
+- **The `DATASETS` sizes paragraph** had been hand-edited into ragged lines,
+  and PubChem's size had fallen out of it ("PubChem as the FTP build leaves
+  it"). Now that it renders, it is refilled and gives 2.31 GiB,
+  `PUBCHEM_FTP_RESIDENT`.
+
+### 30.3 Typed returns
+
+With `returns_named_value` on, griffe reads `dict: Keyed by …` as a value
+*named* `dict`. The parenthesised form, `(dict): Keyed by …`, is a type and
+no name. It renders in the Type column, and it is still readable in
+`help()`. griffe itself, run with the site's options, listed the 63 affected
+sections, and those are the ones rewritten; it lists none now. 25 more
+sections began with a dotted or generic type (`pd.DataFrame:`,
+`list[dict]:`, `sqlite3.Connection:`). griffe had read the whole line as
+description, so the type showed as prose. They are parenthesised too.
+
+### 30.4 Lists
+
+Python-Markdown needs a blank line between a paragraph and a list. 17
+docstrings had a bullet list straight after its lead-in line (`Dictionary
+with compound details including:`), and each gained the blank line. A list
+after a NumPy section underline (`-----`) needs none and was left alone.
+`get_molecular_data`, named in §29.5, had already been rewritten as prose.
+A blank line inside a Google `Returns:` section does not end the section:
+`cas_to_detail`'s list renders as 13 items in it.
+
+### 30.5 The quick start, executed
+
+Every cell of `docs/quickstart.md` was run as a script on this machine on
+2026-09-22, the online cell included. PubChem, PUG-View and CACTUS all
+answered, and every cell produced what the page describes. One thing the
+output shows: `PubChemView.get_property_table(2244, "Melting Point")` gives
+`ValueSI` NaN, with `UnitSI` K, for the range `138-140`. A range has no
+single value, so NaN is right. The page shows only that column, though, and
+not the range's `*_min_si`/`*_max_si`.
+
+### 30.6 Validation
+
+- `mkdocs build --strict`: clean, 0 warnings, with 591 cross-references
+  resolved.
+- `pytest --doctest-modules src/provesid`, with the network refused: 477
+  passed, 87 skipped, the same as before this change.
+- AST comparison with HEAD, docstrings and other string statements
+  removed: identical for all 27 changed modules.
+
+### 30.7 Still open
+
+- **The tutorials** (step 19).
+- **Three public names are still plain** because they have no docstring
+  (§30.1).
+- **`help()` shows the reference syntax.** A reader of the source or of
+  `help(Search)` sees `` [`PRESETS`][provesid.search.Search.PRESETS] ``. That
+  is the cost of links checked by `--strict`. mkdocstrings-python's
+  `relative_crossrefs`/`scoped_crossrefs` would allow the shorter
+  `` [`PRESETS`][] ``, at the price of resolution that depends on scope.
+- §27.6, §26.5, §24.5's other items, §23.5, §4.13 and §22.6 are unchanged.

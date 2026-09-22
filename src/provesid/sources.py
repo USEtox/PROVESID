@@ -1,13 +1,13 @@
-"""The sources :class:`~provesid.search.Search` queries, as a table.
+"""The sources [`Search`][provesid.search.Search] queries, as a table.
 
-Each lookup takes one source client and one :class:`Query` and returns that
-source's candidates for it, best first, already adapted by the ``tools``
-``candidate_from_*`` helpers.  A lookup that finds nothing returns an empty
-list.  Lookups do not catch exceptions, bar one: an online service's "not
+Each lookup takes one source client and one [`Query`][provesid.sources.Query]
+and returns that source's candidates for it, best first, already adapted by the
+``tools`` ``candidate_from_*`` helpers.  A lookup that finds nothing returns an
+empty list.  Lookups do not catch exceptions, bar one: an online service's "not
 found" is a miss rather than a failure, so the online lookups turn
-:class:`~provesid.http.NotFoundError` into an empty list.  The one driver
-that calls them, ``Search._collect``, logs a failing source and carries on
-with the rest, so that policy is written once instead of once per rung.
+[`NotFoundError`][provesid.http.NotFoundError] into an empty list.  The one
+driver that calls them, ``Search._collect``, logs a failing source and carries
+on with the rest, so that policy is written once instead of once per rung.
 
 The table is keyed by *lookup kind* first and source second.  The first five
 sources are offline databases; the last two are web services, asked only
@@ -75,14 +75,14 @@ log = logging.getLogger(__name__)
 
 Candidate = Dict[str, Any]
 
-#: Every offline source key, in the order results are pooled and reported.
 SOURCE_KEYS: List[str] = ["chebi", "comptox", "pubchem", "zeropm", "chembl"]
+"""Every offline source key, in the order results are pooled and reported."""
 
-#: The web services ``Search(online_fallback=True)`` asks when every offline
-#: source missed, pooled and reported after the offline ones.
 ONLINE_SOURCE_KEYS: List[str] = ["pubchem_online", "cactus"]
+"""The web services ``Search(online_fallback=True)`` asks when every offline
+source missed, pooled and reported after the offline ones.
+"""
 
-#: Display names, as they appear in ``source_details`` and in log lines.
 SOURCE_DISPLAY: Dict[str, str] = {
     "chebi": "ChEBI",
     "comptox": "CompTox",
@@ -92,6 +92,7 @@ SOURCE_DISPLAY: Dict[str, str] = {
     "pubchem_online": "PubChem (online)",
     "cactus": "CACTUS",
 }
+"""Display names, as they appear in ``source_details`` and in log lines."""
 
 
 @dataclass(frozen=True)
@@ -193,7 +194,7 @@ def comptox_skeleton_search(comptox: Any, skeleton: str) -> List[Dict[str, Any]]
     client has no public prefix search.
 
     Args:
-        comptox: An open :class:`~provesid.CompToxID` client.
+        comptox: An open [`CompToxID`][provesid.comptox.CompToxID] client.
         skeleton: The 14-character InChIKey connectivity block.
 
     Returns:
@@ -221,7 +222,7 @@ def pubchem_skeleton_search(pubchem: Any, skeleton: str) -> List[Dict[str, Any]]
     """Search PubChemID for InChIKeys sharing a 14-character skeleton.
 
     Args:
-        pubchem: An open :class:`~provesid.PubChemID` client.
+        pubchem: An open [`PubChemID`][provesid.pubchem_id.PubChemID] client.
         skeleton: The 14-character InChIKey connectivity block.
 
     Returns:
@@ -249,7 +250,7 @@ def chebi_skeleton_search(chebi: Any, skeleton: str) -> List[Dict[str, Any]]:
     """Search ChEBI's in-memory InChIKey index for a 14-character skeleton.
 
     Args:
-        chebi: A loaded :class:`~provesid.ChebiSDF` client.
+        chebi: A loaded [`ChebiSDF`][provesid.chebi_sdf.ChebiSDF] client.
         skeleton: The 14-character InChIKey connectivity block.
 
     Returns:
@@ -319,11 +320,11 @@ def _zeropm_fuzzy(client: Any, q: Query) -> List[Candidate]:
 
 # ── The online services ──────────────────────────────────────────────────────
 
-#: The PUG-REST properties an online PubChem candidate is built from.
 PUBCHEM_ONLINE_PROPERTIES: List[str] = [
     "Title", "IUPACName", "MolecularFormula", "SMILES", "InChI", "InChIKey",
     "MolecularWeight",
 ]
+"""The PUG-REST properties an online PubChem candidate is built from."""
 
 
 def _pubchem_online(cids_for: Callable[[Any, str], Any]) -> Lookup:
@@ -332,7 +333,9 @@ def _pubchem_online(cids_for: Callable[[Any, str], Any]) -> Lookup:
     Costs two requests plus one per CID taken: the CID lookup, one property
     table for every CID at once, and each CID's synonyms, which are where
     PubChem keeps CAS numbers.  A CID PubChem answers with no properties is
-    dropped, as :meth:`~provesid.PubChemID.properties_for_cids` drops it.
+    dropped, as
+    [`properties_for_cids`][provesid.pubchem_id.PubChemID.properties_for_cids]
+    drops it.
 
     Args:
         cids_for: ``(api, value) -> CIDs``, the one call that differs between
@@ -391,7 +394,6 @@ def _cas_or_name_cids(api: Any, value: str) -> Any:
 
 # ── The table ────────────────────────────────────────────────────────────────
 
-#: ``LOOKUPS[kind][source](client, query)`` returns that source's candidates.
 LOOKUPS: Dict[str, Dict[str, Lookup]] = {
     "cas": {
         "chebi": lambda c, q: _top(candidate_from_chebi_row, c.search_by_cas(q.value), q.k),
@@ -500,3 +502,4 @@ LOOKUPS: Dict[str, Dict[str, Lookup]] = {
         ),
     },
 }
+"""``LOOKUPS[kind][source](client, query)`` returns that source's candidates."""

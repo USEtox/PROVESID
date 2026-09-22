@@ -1,11 +1,11 @@
 """
-CAS Common Chemistry, online: :class:`CASCommonChem`.
+CAS Common Chemistry, online: [`CASCommonChem`][provesid.cascommonchem.CASCommonChem].
 
 CAS Common Chemistry (https://commonchemistry.cas.org) is CAS's free subset
 of the CAS Registry: about half a million substances with their CAS number,
 names, structure and some experimental properties. Its API (v2.0) needs a
 free API key, sent in the ``X-API-KEY`` header; see
-:meth:`CASCommonChem._load_api_key` for where it is looked for.
+`CASCommonChem._load_api_key` for where it is looked for.
 
 The lookups report failure in the dict they return (``found`` False and a
 ``status``) rather than raising, and are cached only when they succeed.
@@ -28,11 +28,12 @@ from .config import get_cas_api_key
 from .http import HTTPClient, NotFoundError, ServiceError, ServiceTimeoutError
 CASCommonChem_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 
-#: Seconds between two requests to CAS Common Chemistry. CAS does not publish a
-#: per-second figure alongside the API key, so this is politeness: five
-#: requests a second is what the rest of the package uses for a service that
-#: has not said otherwise.
 CAS_MIN_INTERVAL = 0.2
+"""Seconds between two requests to CAS Common Chemistry. CAS does not publish a
+per-second figure alongside the API key, so this is politeness: five
+requests a second is what the rest of the package uses for a service that
+has not said otherwise.
+"""
 
 
 class CASCommonChemError(ServiceError):
@@ -81,7 +82,7 @@ def _lookup_failed(result: Any) -> bool:
     Caching the failure would turn one throttled request into a permanent
     "no such CAS number"; caching the absence would do the same thing for a
     substance CAS adds next month. Re-asking costs one cheap request, and
-    :func:`~provesid.cache.is_empty_result` makes the same trade for every
+    [`is_empty_result`][provesid.cache.is_empty_result] makes the same trade for every
     other client in the package.
 
     Args:
@@ -130,7 +131,7 @@ class CASCommonChem:
 
         Raises:
             ValueError: If no API key is found in any of the places
-                :meth:`_load_api_key` looks.
+                `_load_api_key` looks.
         """
         self.data_folder = CASCommonChem_path
         self.swagger_file_path = os.path.join(self.data_folder, swagger_file_name)
@@ -211,12 +212,13 @@ class CASCommonChem:
             return "Network Error"
         return self.responses.get(exc.status_code, "Unknown Status")
 
-    #: Bumped whenever an entry written by an earlier version must not be
-    #: served. Version 2 is this change: the old code cached failures, so a CAS
-    #: number that was looked up during one network outage is on disk as a
-    #: permanent ``{"found": False, "status": "Network Error"}``. Version 1
-    #: entries are made unreachable rather than left to be served as fact.
     CACHE_SCHEMA_VERSION = 2
+    """Bumped whenever an entry written by an earlier version must not be
+    served. Version 2 is this change: the old code cached failures, so a CAS
+    number that was looked up during one network outage is on disk as a
+    permanent ``{"found": False, "status": "Network Error"}``. Version 1
+    entries are made unreachable rather than left to be served as fact.
+    """
 
     def __cache_key__(self) -> tuple:
         """
@@ -229,7 +231,7 @@ class CASCommonChem:
 
         Returns:
             Tuple of the class path, the configured base URL and
-            :attr:`CACHE_SCHEMA_VERSION`.
+            [`CACHE_SCHEMA_VERSION`][provesid.cascommonchem.CASCommonChem.CACHE_SCHEMA_VERSION].
 
         Examples:
             >>> cas = CASCommonChem.__new__(CASCommonChem)
@@ -300,6 +302,7 @@ class CASCommonChem:
 
         Returns:
             Dictionary with compound details including:
+
             - found: True when CAS returned the substance
             - status: Request status: ``"Success"``, or the failure, e.g.
               ``"Not Found"``, ``"Timeout"`` or ``"Unauthorized - Check API Key"``
@@ -406,15 +409,17 @@ class CASCommonChem:
         """
         Look a substance up by SMILES, through CAS's search.
 
-        The same call as :meth:`name_to_detail`: CAS's search accepts a SMILES
-        where it accepts a name.
+        The same call as
+        [`name_to_detail`][provesid.cascommonchem.CASCommonChem.name_to_detail]:
+        CAS's search accepts a SMILES where it accepts a name.
 
         Args:
             smiles: SMILES string.
             timeout: Request timeout in seconds.
 
         Returns:
-            Dictionary with compound details, as :meth:`name_to_detail`.
+            Dictionary with compound details, as
+            [`name_to_detail`][provesid.cascommonchem.CASCommonChem.name_to_detail].
 
         Examples:
             >>> cas = CASCommonChem(api_key="your-cas-api-key")
@@ -443,7 +448,9 @@ class CASCommonChem:
         Size and location of the CAS Common Chemistry cache.
 
         Returns:
-            The statistics :func:`provesid.cache.get_cache_info` reports for
+            The statistics
+            [`provesid.cache.get_cache_info`][provesid.cache.get_cache_info]
+            reports for
                 ``service='cas'``.
 
         Examples:

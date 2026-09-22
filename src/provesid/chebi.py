@@ -3,8 +3,8 @@ ChEBI (Chemical Entities of Biological Interest) API interface.
 
 This module provides a Python interface to the ChEBI 2.0 REST API for retrieving
 chemical compound information from the ChEBI database. Offline access through
-ChEBI's SDF release is :class:`~provesid.chebi_sdf.ChebiSDF`, in
-:mod:`provesid.chebi_sdf`.
+ChEBI's SDF release is [`ChebiSDF`][provesid.chebi_sdf.ChebiSDF], in
+[`provesid.chebi_sdf`][provesid.chebi_sdf].
 
 API documentation: https://www.ebi.ac.uk/chebi/backend/api/docs/
 
@@ -19,11 +19,12 @@ from typing import Dict, List, Optional, Union, Any
 from .http import HTTPClient, NotFoundError, ServiceError, ServiceTimeoutError
 
 
-#: Seconds between two requests to ChEBI from this process. EBI publishes no
-#: per-IP figure for the ChEBI 2.0 API, so this is politeness rather than a
-#: quoted limit: ten requests a second is well inside what a walk over an
-#: ontology subtree needs.
 CHEBI_MIN_INTERVAL = 0.1
+"""Seconds between two requests to ChEBI from this process. EBI publishes no
+per-IP figure for the ChEBI 2.0 API, so this is politeness rather than a
+quoted limit: ten requests a second is well inside what a walk over an
+ontology subtree needs.
+"""
 
 
 class ChEBIError(ServiceError):
@@ -81,7 +82,7 @@ class ChEBI:
     Every method needs the network. Lookups that fail return None (or an
     empty collection) after logging a warning, rather than raising; the
     offline alternative for records, names and structures is
-    :class:`~provesid.chebi_sdf.ChebiSDF`.
+    [`ChebiSDF`][provesid.chebi_sdf.ChebiSDF].
 
     Examples:
         >>> chebi = ChEBI()
@@ -158,7 +159,7 @@ class ChEBI:
             chebi_id: ChEBI ID (int, bare number string, or ``CHEBI:…`` string)
 
         Returns:
-            str: ID in ``CHEBI:<number>`` form
+            (str): ID in ``CHEBI:<number>`` form
         """
         chebi_id_str = str(chebi_id).strip()
         if not chebi_id_str.upper().startswith("CHEBI:"):
@@ -215,7 +216,7 @@ class ChEBI:
 
     def _get_raw(self, endpoint: str, params: Optional[Dict] = None) -> requests.Response:
         """
-        Perform a GET request and return the raw :class:`requests.Response`.
+        Perform a GET request and return the raw `requests.Response`.
 
         Useful for endpoints that return non-JSON content (SVG, molfile, images).
 
@@ -355,18 +356,22 @@ class ChEBI:
         only_ontology_parents: bool = False,
         only_ontology_children: bool = False,
     ) -> Optional[Dict[str, Any]]:
-        """Backward-compatible alias for :meth:`get_compound`.
+        """Backward-compatible alias for
+        [`get_compound`][provesid.chebi.ChEBI.get_compound].
 
         Older examples and user code refer to ``get_complete_entity``. The
         ChEBI 2.0 client uses ``get_compound`` as the canonical method name.
 
         Args:
             chebi_id: ChEBI ID (with or without ``CHEBI:`` prefix).
-            only_ontology_parents: As for :meth:`get_compound`.
-            only_ontology_children: As for :meth:`get_compound`.
+            only_ontology_parents: As for
+                [`get_compound`][provesid.chebi.ChEBI.get_compound].
+            only_ontology_children: As for
+                [`get_compound`][provesid.chebi.ChEBI.get_compound].
 
         Returns:
-            The :meth:`get_compound` record, or None on error.
+            The [`get_compound`][provesid.chebi.ChEBI.get_compound] record, or
+            None on error.
 
         Examples:
             >>> ChEBI().get_complete_entity("CHEBI:15377")["name"]  # doctest: +SKIP
@@ -474,7 +479,8 @@ class ChEBI:
     def search_by_name(self, search_text: str, *, page: int = 1,
                        size: int = 15) -> List[Dict[str, Any]]:
         """
-        Search ChEBI by compound name (convenience wrapper around :meth:`search`).
+        Search ChEBI by compound name (convenience wrapper around
+        [`search`][provesid.chebi.ChEBI.search]).
 
         Args:
             search_text: Text to search for.
@@ -483,8 +489,8 @@ class ChEBI:
 
         Returns:
             list of matching entity dicts (may be empty): the ``results`` of
-            :meth:`search`, each carrying ``_score`` and the record under
-            ``_source``.
+            [`search`][provesid.chebi.ChEBI.search], each carrying ``_score``
+            and the record under ``_source``.
 
         Examples:
             >>> hits = ChEBI().search_by_name("paracetamol", size=2)  # doctest: +SKIP
@@ -632,7 +638,8 @@ class ChEBI:
 
         Returns:
             Ontology children data, or *None* on error: as for
-            :meth:`get_ontology_parents`, with the relations under
+            [`get_ontology_parents`][provesid.chebi.ChEBI.get_ontology_parents],
+            with the relations under
             ``ontology_relations["incoming_relations"]`` and the child named by
             ``init_id`` and ``init_name``.
 
@@ -1050,8 +1057,10 @@ class ChEBI:
         """
         Retrieve compound info for multiple ChEBI IDs one-by-one.
 
-        For small batches prefer :meth:`get_compounds` which uses the bulk
-        endpoint.  This method calls :meth:`get_compound` in a loop with an
+        For small batches prefer
+        [`get_compounds`][provesid.chebi.ChEBI.get_compounds] which uses the
+        bulk endpoint.  This method calls
+        [`get_compound`][provesid.chebi.ChEBI.get_compound] in a loop with an
         optional pause between requests.
 
         Args:

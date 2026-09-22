@@ -1,10 +1,10 @@
 """
 One connection policy for the four SQLite-backed clients.
 
-:class:`~provesid.PubChemID`, :class:`~provesid.CompToxID`,
-:class:`~provesid.ZeroPM` and :class:`~provesid.CheMBL` each open a local
-database in ``__init__`` and each used to close it in ``__del__`` and nowhere
-else.  That is three defects in one shape:
+[`PubChemID`][provesid.pubchem_id.PubChemID], [`CompToxID`][provesid.comptox.CompToxID],
+[`ZeroPM`][provesid.zeropm.ZeroPM] and [`CheMBL`][provesid.chembl.CheMBL] each
+open a local database in ``__init__`` and each used to close it in ``__del__``
+and nowhere else.  That is three defects in one shape:
 
 * **No way to let go.**  A notebook cell that re-runs ``db = PubChemID()``
   leaves the previous connection open until the collector happens to run.  On
@@ -15,15 +15,15 @@ else.  That is three defects in one shape:
   ``finally``.
 * **One connection, shared by every thread.**  ``sqlite3`` refuses by default
   to use a connection from a thread other than the one that created it, so a
-  user who reaches for :class:`~concurrent.futures.ThreadPoolExecutor` over a
+  user who reaches for `ThreadPoolExecutor` over a
   list of CAS numbers --- the obvious thing to do with a 2.2 GB local database
   --- meets ``ProgrammingError: SQLite objects created in a thread can only be
   used in that same thread`` on the first worker.
 
-:class:`SQLiteClient` is the mixin all four now inherit.  It gives them
-:meth:`~SQLiteClient.close`, ``with`` support, and **one connection and cursor
-per thread**, created on that thread's first query and closed together when
-the owner is closed.
+[`SQLiteClient`][provesid.sqlite_client.SQLiteClient] is the mixin all four now
+inherit.  It gives them [`close`][provesid.sqlite_client.SQLiteClient.close],
+``with`` support, and **one connection and cursor per thread**, created on that
+thread's first query and closed together when the owner is closed.
 
 Why per-thread connections rather than ``check_same_thread=False``
 ------------------------------------------------------------------
@@ -35,7 +35,7 @@ classes are written as ``self.cursor.execute(...)`` followed by
 would read each other's rows.  Silently wrong answers are a far worse failure
 than the exception they replace.  A connection per thread makes the existing
 code correct as written, and SQLite serialises the writes that
-:class:`~provesid.ZeroPM` performs when it builds an index or a view.
+[`ZeroPM`][provesid.zeropm.ZeroPM] performs when it builds an index or a view.
 
 What threads buy, and what they do not
 --------------------------------------
@@ -81,7 +81,7 @@ logger = logging.getLogger(__name__)
 class DatabaseClosedError(RuntimeError):
     """Raised when a closed client is asked for its connection.
 
-    Inherits from :class:`RuntimeError` so that ``except RuntimeError`` in
+    Inherits from `RuntimeError` so that ``except RuntimeError`` in
     existing calling code still catches it, and carries the class name and
     the database path so the message says which client was closed and which
     file it was reading.
@@ -102,17 +102,20 @@ class SQLiteClient:
 
     A mixin, not a base class with behaviour of its own: the four clients keep
     their own constructors, download logic and query methods, and call
-    :meth:`_open_database` once the file they want is known to be on disk.
-    After that they use :attr:`conn` and :attr:`cursor` exactly as they did
+    `_open_database` once the file they want is known to be on disk.
+    After that they use [`conn`][provesid.sqlite_client.SQLiteClient.conn] and
+    [`cursor`][provesid.sqlite_client.SQLiteClient.cursor] exactly as they did
     when both were plain attributes.
 
     Attributes:
         conn (sqlite3.Connection): This thread's connection.  Opened on first
             access from a thread that does not have one yet.
         cursor (sqlite3.Cursor): This thread's cursor, belonging to
-            :attr:`conn`.  Long-lived, as the query methods assume: they
-            ``execute`` and then ``fetchone`` as two statements.
-        closed (bool): True once :meth:`close` has run.
+            [`conn`][provesid.sqlite_client.SQLiteClient.conn].  Long-lived, as
+            the query methods assume: they ``execute`` and then ``fetchone`` as
+            two statements.
+        closed (bool): True once
+            [`close`][provesid.sqlite_client.SQLiteClient.close] has run.
 
     Examples:
         >>> class Tiny(SQLiteClient):
@@ -131,11 +134,12 @@ class SQLiteClient:
         True
     """
 
-    #: Seconds a connection waits for a write lock before raising
-    #: ``sqlite3.OperationalError``.  The stdlib default is 5; these databases
-    #: are read mostly, but ZeroPM's index build can hold a lock for longer
-    #: than that on a slow disk.
     _SQLITE_TIMEOUT = 30.0
+    """Seconds a connection waits for a write lock before raising
+    ``sqlite3.OperationalError``.  The stdlib default is 5; these databases
+    are read mostly, but ZeroPM's index build can hold a lock for longer
+    than that on a slow disk.
+    """
 
     # ── Opening ───────────────────────────────────────────────────────────────
 
@@ -157,21 +161,21 @@ class SQLiteClient:
             db_path: Path to the SQLite file.  Stored as given; the callers
                 have already made it absolute.
             row_factory: Assigned to every connection this client opens.
-                :class:`sqlite3.Row` (the default) gives access by column
-                name; pass ``None`` for plain tuples, as :class:`ZeroPM`
-                does.
+                `sqlite3.Row` (the default) gives access by column
+                name; pass ``None`` for plain tuples, as
+                [`ZeroPM`][provesid.zeropm.ZeroPM] does.
             timeout: Lock timeout in seconds.  Defaults to
-                :attr:`_SQLITE_TIMEOUT`.
+                `_SQLITE_TIMEOUT`.
 
         Returns:
-            sqlite3.Connection: The calling thread's connection, also
-            reachable as :attr:`conn`.
+            (sqlite3.Connection): The calling thread's connection, also
+            reachable as [`conn`][provesid.sqlite_client.SQLiteClient.conn].
 
         Raises:
             sqlite3.Error: If the file cannot be opened.  Subclasses that
                 promise their own exception type catch and translate it ---
-                :class:`~provesid.CheMBL` raises
-                :class:`~provesid.ChEMBLError`.
+                [`CheMBL`][provesid.chembl.CheMBL] raises
+                [`ChEMBLError`][provesid.chembl.ChEMBLError].
         """
         self._db_file = os.fspath(db_path)
         self._row_factory = row_factory
@@ -193,22 +197,25 @@ class SQLiteClient:
         The supported way to give a client a connection it did not open
         itself: an in-memory database, or a stub in a test that builds the
         instance with ``object.__new__`` and never runs ``__init__``.  The
-        connection joins the registry, so :meth:`close` closes it like any
+        connection joins the registry, so
+        [`close`][provesid.sqlite_client.SQLiteClient.close] closes it like any
         other.
 
-        There is deliberately no setter on :attr:`conn`.  Assigning to it
+        There is deliberately no setter on
+        [`conn`][provesid.sqlite_client.SQLiteClient.conn].  Assigning to it
         would leave the replaced connection open and unreachable --- nothing
         would ever close it --- and this method is the version of that
         assignment which keeps the bookkeeping straight.
 
         Args:
-            connection: An open :class:`sqlite3.Connection`, or anything
+            connection: An open `sqlite3.Connection`, or anything
                 quacking like one.  Its ``row_factory`` is left as it is, and
                 it becomes the calling thread's connection; other threads open
                 their own from ``db_path``, so this is for single-threaded use
                 unless ``db_path`` names a real file.
-            db_path: What to report as :attr:`db_file`, and what any other
-                thread would open.
+            db_path: What to report as
+                [`db_file`][provesid.sqlite_client.SQLiteClient.db_file], and
+                what any other thread would open.
 
         Examples:
             >>> import sqlite3
@@ -233,8 +240,8 @@ class SQLiteClient:
         """Open a connection and cursor for the calling thread.
 
         Returns:
-            sqlite3.Connection: The new connection, already recorded in the
-            registry :meth:`close` walks.
+            (sqlite3.Connection): The new connection, already recorded in the
+            registry [`close`][provesid.sqlite_client.SQLiteClient.close] walks.
 
         Raises:
             DatabaseClosedError: If the client was closed first.
@@ -274,7 +281,8 @@ class SQLiteClient:
         """Raise if the client has been closed.
 
         Raises:
-            DatabaseClosedError: If :meth:`close` has run.
+            DatabaseClosedError: If
+                [`close`][provesid.sqlite_client.SQLiteClient.close] has run.
         """
         if getattr(self, "_closed", False):
             raise DatabaseClosedError(
@@ -290,7 +298,7 @@ class SQLiteClient:
         """This thread's connection, opening one if the thread has none.
 
         Returns:
-            sqlite3.Connection: A connection owned by the calling thread.
+            (sqlite3.Connection): A connection owned by the calling thread.
 
         Raises:
             DatabaseClosedError: If the client has been closed.
@@ -320,7 +328,8 @@ class SQLiteClient:
         statement and ``fetchone`` in the next.
 
         Returns:
-            sqlite3.Cursor: A cursor belonging to :attr:`conn`.
+            (sqlite3.Cursor): A cursor belonging to
+            [`conn`][provesid.sqlite_client.SQLiteClient.conn].
 
         Raises:
             DatabaseClosedError: If the client has been closed.
@@ -350,12 +359,14 @@ class SQLiteClient:
 
     @property
     def closed(self) -> bool:
-        """Whether :meth:`close` has run.
+        """Whether [`close`][provesid.sqlite_client.SQLiteClient.close] has run.
 
         Returns:
-            bool: True after :meth:`close`, False while the client is usable.
+            bool: True after
+                [`close`][provesid.sqlite_client.SQLiteClient.close], False
+                while the client is usable.
             True as well for a client whose constructor failed before it
-            reached :meth:`_open_database`, since such an object owns nothing.
+            reached `_open_database`, since such an object owns nothing.
 
         Examples:
             >>> client = SQLiteClient()
@@ -372,7 +383,7 @@ class SQLiteClient:
         """The database file this client opened, or None if it never opened one.
 
         Returns:
-            str | None: The path passed to :meth:`_open_database`.
+            str | None: The path passed to `_open_database`.
 
         Examples:
             >>> client = SQLiteClient()
@@ -393,8 +404,9 @@ class SQLiteClient:
         before it opened anything.  After it returns, the database file is
         no longer held open by this client --- which is what lets a
         re-download replace it on Windows --- and any further use raises
-        :class:`DatabaseClosedError` rather than the ``Cannot operate on a
-        closed database`` that bare ``sqlite3`` would give.
+        [`DatabaseClosedError`][provesid.sqlite_client.DatabaseClosedError]
+        rather than the ``Cannot operate on a closed database`` that bare
+        ``sqlite3`` would give.
 
         Threads other than the caller are not consulted.  A query already
         executing on another thread when this runs will fail; closing a
@@ -439,7 +451,7 @@ class SQLiteClient:
         """Return the client, so ``with Client() as db`` binds the client.
 
         Returns:
-            SQLiteClient: ``self``.
+            (SQLiteClient): ``self``.
 
         Raises:
             DatabaseClosedError: If the client has already been closed.
@@ -461,7 +473,7 @@ class SQLiteClient:
             traceback: Traceback, or None.
 
         Returns:
-            bool: False --- an exception raised in the block propagates.
+            (bool): False --- an exception raised in the block propagates.
         """
         self.close()
         return False
@@ -470,8 +482,9 @@ class SQLiteClient:
         """Close as a backstop for callers who never did.
 
         Interpreter shutdown can have torn down enough of the module for
-        :meth:`close` to fail, and an exception in ``__del__`` is printed and
-        discarded rather than raised, so it is swallowed here.
+        [`close`][provesid.sqlite_client.SQLiteClient.close] to fail, and an
+        exception in ``__del__`` is printed and discarded rather than raised,
+        so it is swallowed here.
         """
         try:
             self.close()

@@ -1,13 +1,16 @@
 """
-PubChem's annotations, online: :class:`PubChemView`, over PUG-View.
+PubChem's annotations, online:
+[`PubChemView`][provesid.pubchemview.PubChemView], over PUG-View.
 
-PUG-REST (:mod:`provesid.pubchem`) serves what PubChem computes; PUG-View
+PUG-REST ([`provesid.pubchem`][provesid.pubchem]) serves what PubChem computes; PUG-View
 serves what depositors report, which is where the *measured* properties
 live --- melting and boiling points, densities, solubilities, vapour
-pressures --- each with its source. :class:`PubChemView` fetches one heading
-of a compound's record, walks it, and turns every value into a
-:class:`PropertyData` whose ``parsed`` field holds the numbers recovered from
-PubChem's prose (see :mod:`provesid.pubchemview_parse`).
+pressures --- each with its source.
+[`PubChemView`][provesid.pubchemview.PubChemView] fetches one heading of a
+compound's record, walks it, and turns every value into a
+[`PropertyData`][provesid.pubchemview.PropertyData] whose ``parsed`` field
+holds the numbers recovered from PubChem's prose (see
+[`provesid.pubchemview_parse`][provesid.pubchemview_parse]).
 
 Every call needs the network and is cached. There is no offline copy of this
 data.
@@ -46,13 +49,15 @@ class PropertyData:
         conditions: The measurement conditions, a copy of ``parsed.conditions``.
         reference: The first reference string attached to the value.
         reference_number: PubChem's reference number, which
-            :meth:`PubChemView.get_property_table` resolves to a full citation.
+            [`PubChemView.get_property_table`][provesid.pubchemview.PubChemView.get_property_table]
+            resolves to a full citation.
         description: PUG-View's own description of the value, when it gives one.
         name: PUG-View's ``Name`` field for the value, when it gives one.
         heading: The section heading the value was found under, e.g.
             ``"Melting Point"``. This is what tells the parser that a bare
             number is a temperature.
-        parsed: The value turned into numbers: see :class:`ParsedValue` for the
+        parsed: The value turned into numbers: see
+            [`ParsedValue`][provesid.pubchemview_parse.ParsedValue] for the
             range, the SI conversion, the measurement temperature and any
             comparison operator or qualitative term. None only when the value
             string was empty.
@@ -98,9 +103,9 @@ class PubChemViewNotFoundError(PubChemViewError, NotFoundError):
 
     PUG-View answers 404 for an unknown compound and 400 for a heading the
     compound does not have; both are absence. Only the raw
-    :meth:`PubChemView.get_property` and
-    :meth:`PubChemView.get_experimental_properties` raise it; the parsing
-    methods turn it into an empty result.
+    [`PubChemView.get_property`][provesid.pubchemview.PubChemView.get_property] and
+    [`PubChemView.get_experimental_properties`][provesid.pubchemview.PubChemView.get_experimental_properties]
+    raise it; the parsing methods turn it into an empty result.
 
     Examples:
         >>> view = PubChemView()
@@ -119,16 +124,19 @@ class PubChemView:
     The response to these queries is a large JSON object that requires some post-processing to extract the
     relevant information.
 
-    Three levels, from raw to tabular: :meth:`get_property` returns
-    PUG-View's JSON; :meth:`extract_property_data` returns one
-    :class:`PropertyData` per value; :meth:`get_property_table` returns a
-    DataFrame with the numbers, SI conversions and resolved citations. The
-    ``get_melting_point`` family are shortcuts for common headings.
-    :attr:`experimental_properties` lists the experimental headings, but any
-    PUG-View heading works.
+    Three levels, from raw to tabular:
+    [`get_property`][provesid.pubchemview.PubChemView.get_property] returns
+    PUG-View's JSON;
+    [`extract_property_data`][provesid.pubchemview.PubChemView.extract_property_data]
+    returns one [`PropertyData`][provesid.pubchemview.PropertyData] per value;
+    [`get_property_table`][provesid.pubchemview.PubChemView.get_property_table]
+    returns a DataFrame with the numbers, SI conversions and resolved
+    citations. The ``get_melting_point`` family are shortcuts for common
+    headings. `experimental_properties` lists the experimental headings, but
+    any PUG-View heading works.
 
     Requests share PubChem's per-address pacing with every
-    :class:`~provesid.pubchem.PubChemAPI` in the process.
+    [`PubChemAPI`][provesid.pubchem.PubChemAPI] in the process.
 
     Examples:
         >>> view = PubChemView()
@@ -164,7 +172,7 @@ class PubChemView:
 
         # One shared transport. PubChem describes every error in the body, so
         # it supplies its own classifier rather than trusting the status code:
-        # see :func:`provesid.pubchem.pugview_classify`.
+        # see ``provesid.pubchem.pugview_classify``.
         self._http = HTTPClient(
             min_interval=0.2,          # 5 requests per second max
             timeout=timeout,
@@ -229,12 +237,13 @@ class PubChemView:
             "Viscosity": "Viscosity"
         }
 
-    #: Bumped whenever the *shape* of what a cached method returns changes, so
-    #: that entries written by an earlier version become unreachable instead of
-    #: being deserialised into the wrong structure. Version 2 introduced
-    #: ``PropertyData.parsed``: a version-1 entry unpickles into an object with
-    #: no such attribute, and every caller that reads it would raise.
     CACHE_SCHEMA_VERSION = 2
+    """Bumped whenever the *shape* of what a cached method returns changes, so
+    that entries written by an earlier version become unreachable instead of
+    being deserialised into the wrong structure. Version 2 introduced
+    ``PropertyData.parsed``: a version-1 entry unpickles into an object with
+    no such attribute, and every caller that reads it would raise.
+    """
 
     def __cache_key__(self) -> tuple:
         """
@@ -247,7 +256,7 @@ class PubChemView:
 
         Returns:
             Tuple of the class path, the configured base URL and
-            :attr:`CACHE_SCHEMA_VERSION`.
+            [`CACHE_SCHEMA_VERSION`][provesid.pubchemview.PubChemView.CACHE_SCHEMA_VERSION].
         """
         return ("provesid.pubchemview.PubChemView", self.base_url,
                 self.CACHE_SCHEMA_VERSION)
@@ -272,7 +281,9 @@ class PubChemView:
         Size and location of the PUG-View cache.
 
         Returns:
-            The statistics :func:`provesid.cache.get_cache_info` reports for
+            The statistics
+            [`provesid.cache.get_cache_info`][provesid.cache.get_cache_info]
+            reports for
                 ``service='pubchemview'``.
 
         Examples:
@@ -339,9 +350,10 @@ class PubChemView:
 
         The transport handles the pacing, the retries and the back-off; what
         stays here is the shape of a PUG-View request. Classification is
-        :func:`provesid.pubchem.pugview_classify`, which reads the fault code
-        in the body because PubChem's status codes alone do not distinguish a
-        compound that has no such data from a service shedding load.
+        [`provesid.pubchem.pugview_classify`][provesid.pubchem.pugview_classify],
+        which reads the fault code in the body because PubChem's status codes
+        alone do not distinguish a compound that has no such data from a
+        service shedding load.
 
         Args:
             url: Request URL
@@ -398,7 +410,9 @@ class PubChemView:
         Returns:
             Raw JSON response for the specific property. The heading sits
             wherever it does in the compound's table of contents, not at a
-            fixed path; :meth:`extract_property_data` finds it.
+            fixed path;
+            [`extract_property_data`][provesid.pubchemview.PubChemView.extract_property_data]
+            finds it.
 
         Raises:
             PubChemViewNotFoundError: If the compound does not exist or does
@@ -424,13 +438,14 @@ class PubChemView:
     def _extract_value_info(self, info_item: Dict[str, Any],
                             heading: Optional[str] = None) -> PropertyData:
         """
-        Turn one PUG-View ``Information`` item into a :class:`PropertyData`.
+        Turn one PUG-View ``Information`` item into a
+        [`PropertyData`][provesid.pubchemview.PropertyData].
 
         Args:
             info_item: A single ``Information`` dictionary from a PUG-View
                 response.
             heading: The section heading the item was found under. Passed
-                through to :func:`~provesid.pubchemview_parse.parse_value`,
+                through to [`parse_value`][provesid.pubchemview_parse.parse_value],
                 which needs it to read a bare number: 138 under "Melting Point"
                 is 138 °C, while 1.19 under "LogP" is dimensionless.
 
@@ -541,9 +556,10 @@ class PubChemView:
 
         Returns:
             List of PropertyData objects, each carrying the value as PubChem
-            wrote it plus a ``parsed`` :class:`ParsedValue` holding the numbers
-            recovered from it. An empty list means PubChem holds no such
-            property for this compound.
+            wrote it plus a ``parsed``
+            [`ParsedValue`][provesid.pubchemview_parse.ParsedValue] holding the
+            numbers recovered from it. An empty list means PubChem holds no
+            such property for this compound.
 
         Raises:
             PubChemViewError: If the request could not be completed, for example
@@ -573,7 +589,7 @@ class PubChemView:
 
         Args:
             response: Raw JSON response from PUG-View, as returned by
-                :meth:`get_property`.
+                [`get_property`][provesid.pubchemview.PubChemView.get_property].
 
         Returns:
             One PropertyData per value in the response, in document order.
@@ -623,7 +639,7 @@ class PubChemView:
 
         Args:
             response: Raw JSON response from PUG-View, as returned by
-                :meth:`get_experimental_properties`.
+                [`get_experimental_properties`][provesid.pubchemview.PubChemView.get_experimental_properties].
 
         Returns:
             A dict mapping each heading that carried values to its
@@ -932,9 +948,9 @@ class PubChemView:
         Note:
             One property failing does not abort the batch: that entry is logged
             at WARNING and comes back as an empty list, so here — unlike in
-            :meth:`extract_property_data` — an empty list does not prove the
-            property is absent. Call ``extract_property_data`` directly when the
-            difference matters.
+            [`extract_property_data`][provesid.pubchemview.PubChemView.extract_property_data]
+            — an empty list does not prove the property is absent. Call
+            ``extract_property_data`` directly when the difference matters.
 
         Examples:
             >>> found = PubChemView().batch_extract_properties(
@@ -958,7 +974,8 @@ class PubChemView:
 
         Args:
             property_data_list: List of PropertyData objects, as returned by
-                :meth:`extract_property_data` or any of the convenience getters.
+                [`extract_property_data`][provesid.pubchemview.PubChemView.extract_property_data]
+                or any of the convenience getters.
 
         Returns:
             One dict per value, carrying the original string, the reference, and
@@ -1003,13 +1020,15 @@ class PubChemView:
         return rows
 
 
-    #: Columns of the frame :meth:`get_property_table` returns, in order.
     PROPERTY_TABLE_COLUMNS = [
         "CID", "Heading", "StringWithMarkup", "ExperimentalValue",
         "ValueMin", "ValueMax", "Unit", "ValueSI", "ValueMinSI", "ValueMaxSI",
         "UnitSI", "Operator", "Qualitative", "Temperature", "Conditions",
         "FullReference",
     ]
+    """Columns of the frame
+    [`get_property_table`][provesid.pubchemview.PubChemView.get_property_table]
+    returns, in order."""
 
     @cached(service='pubchemview', skip_if=is_empty_result)
     def get_property_table(self, cid: Union[int, str], property_name: str) -> pd.DataFrame:
@@ -1022,7 +1041,8 @@ class PubChemView:
                 heading works, not only the experimental ones.
 
         Returns:
-            A DataFrame with the columns in :attr:`PROPERTY_TABLE_COLUMNS`:
+            A DataFrame with the columns in
+            [`PROPERTY_TABLE_COLUMNS`][provesid.pubchemview.PubChemView.PROPERTY_TABLE_COLUMNS]:
 
             - ``StringWithMarkup`` — the value exactly as PubChem wrote it.
             - ``ExperimentalValue`` — the single number, as a float; NaN when
@@ -1224,7 +1244,7 @@ def get_property_table(cid: Union[int, str], property_name: str) -> pd.DataFrame
 
     Returns:
         pandas DataFrame with the columns listed in
-        :attr:`PubChemView.PROPERTY_TABLE_COLUMNS`.
+        [`PubChemView.PROPERTY_TABLE_COLUMNS`][provesid.pubchemview.PubChemView.PROPERTY_TABLE_COLUMNS].
 
     Examples:
         >>> table = get_property_table(2244, "LogP")             # doctest: +SKIP

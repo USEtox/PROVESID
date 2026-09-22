@@ -1,15 +1,15 @@
 """
-The online PubChem client: :class:`PubChemAPI`, over PUG-REST.
+The online PubChem client: [`PubChemAPI`][provesid.pubchem.PubChemAPI], over PUG-REST.
 
 A small subset of what PubChemPy covers, behind a simpler interface: CIDs from
 names, SMILES, InChIKeys and formulas; compound, substance and assay records;
 properties in bulk, synonyms, and structure searches. Requests go through the shared
-:class:`~provesid.http.HTTPClient`, which paces them against PubChem's per-IP
+[`HTTPClient`][provesid.http.HTTPClient], which paces them against PubChem's per-IP
 limit and retries what PubChem reports as transient.
 
-The offline identifier database, :class:`~provesid.pubchem_id.PubChemID`,
-lives in :mod:`provesid.pubchem_id`, and falls back to this client for what
-it does not hold.
+The offline identifier database, [`PubChemID`][provesid.pubchem_id.PubChemID],
+lives in [`provesid.pubchem_id`][provesid.pubchem_id], and falls back to this
+client for what it does not hold.
 """
 
 import requests
@@ -30,33 +30,36 @@ from .http import (
 pugrest_prolog = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
 pause_between_calls = 0.2 # seconds
 
-#: Longest identifier list PROVESID will put in a URL path before switching to
-#: POST. PUG-REST documents a ceiling of about 2000 characters for the whole
-#: URL; the margin left here covers the prolog, the operation and the property
-#: list that share the path with the identifiers.
 URL_IDENTIFIER_LIMIT = 1600
+"""Longest identifier list PROVESID will put in a URL path before switching to
+POST. PUG-REST documents a ceiling of about 2000 characters for the whole
+URL; the margin left here covers the prolog, the operation and the property
+list that share the path with the identifiers.
+"""
 
-#: Longest total time a PubChem client will spend waiting between retries, in
-#: seconds: "do not make the caller wait longer than this".
-#:
-#: Ten seconds leaves the whole cheap back-off curve intact --- 1 + 2 + 4 for a
-#: transient 500 or a timeout, which is where retrying earns its keep --- while
-#: declining to sit out PubChem's ``Retry-After: 30``. That is deliberate.
-#: PubChem sends that header when it has throttled or blacklisted an IP, and a
-#: block like that does not lift in thirty seconds: measured on 2026-09-19,
-#: waiting the full thirty and asking again returned the same 503. So the wait
-#: buys nothing while every call pays it, which for a caller resolving a
-#: thousand names is hours instead of an immediate "you are blocked".
-#:
-#: A caller who does want to wait a throttle out raises it
-#: (``api._http.max_elapsed = 180``), which is the right setting for an
-#: unattended bulk job.
 RETRY_WAIT_BUDGET = 10.0
+"""Longest total time a PubChem client will spend waiting between retries, in
+seconds: "do not make the caller wait longer than this".
 
-#: Default number of CIDs per bulk property request. PubChem answers several
-#: hundred at a time without complaint, but a smaller chunk costs less to redo
-#: when one request has to be retried.
+Ten seconds leaves the whole cheap back-off curve intact --- 1 + 2 + 4 for a
+transient 500 or a timeout, which is where retrying earns its keep --- while
+declining to sit out PubChem's ``Retry-After: 30``. That is deliberate.
+PubChem sends that header when it has throttled or blacklisted an IP, and a
+block like that does not lift in thirty seconds: measured on 2026-09-19,
+waiting the full thirty and asking again returned the same 503. So the wait
+buys nothing while every call pays it, which for a caller resolving a
+thousand names is hours instead of an immediate "you are blocked".
+
+A caller who does want to wait a throttle out raises it
+(``api._http.max_elapsed = 180``), which is the right setting for an
+unattended bulk job.
+"""
+
 PROPERTY_CHUNK_SIZE = 200
+"""Default number of CIDs per bulk property request. PubChem answers several
+hundred at a time without complaint, but a smaller chunk costs less to redo
+when one request has to be retried.
+"""
 
 
 class Domain:
@@ -64,7 +67,8 @@ class Domain:
     The ``<domain>`` of a PUG-REST URL: which kind of record is asked about.
 
     A PUG-REST URL reads ``<prolog>/<domain>/<namespace>/<identifiers>/
-    <operation>/<output>``. :class:`PubChemAPI` mostly asks about compounds.
+    <operation>/<output>``. [`PubChemAPI`][provesid.pubchem.PubChemAPI] mostly
+    asks about compounds.
 
     Examples:
         >>> Domain.COMPOUND
@@ -84,8 +88,9 @@ class CompoundDomainNamespace:
     The ``<namespace>`` values of the compound domain: what the identifiers are.
 
     ``STRUCTURE_SEARCH``, ``XREF``, ``MASS`` and ``FAST_SEARCH`` each open a
-    further level of the URL; see :class:`StructureSearch` and
-    :class:`FastSearch` for two of them.
+    further level of the URL; see
+    [`StructureSearch`][provesid.pubchem.StructureSearch] and
+    [`FastSearch`][provesid.pubchem.FastSearch] for two of them.
 
     Examples:
         >>> f"compound/{CompoundDomainNamespace.INCHIKEY}/BSYNRYMUTXBXSQ-UHFFFAOYSA-N"
@@ -138,7 +143,8 @@ class StructureSearch:
     """
     The kind of structure search, in ``compound/<search>/<query type>/<query>``.
 
-    The query is given as one of :class:`StructureSearchQueryType`.
+    The query is given as one of
+    [`StructureSearchQueryType`][provesid.pubchem.StructureSearchQueryType].
 
     Examples:
         >>> f"compound/{StructureSearch.SUBSTRUCTURE}/{StructureSearchQueryType.SMILES}"
@@ -151,7 +157,8 @@ class StructureSearch:
 
 class StructureSearchQueryType:
     """
-    How the query of a :class:`StructureSearch` is written: SMILES, InChI, SDF or a CID.
+    How the query of a [`StructureSearch`][provesid.pubchem.StructureSearch] is
+    written: SMILES, InChI, SDF or a CID.
 
     Examples:
         >>> f"{FastSearch.FASTSUBSTRUCTURE}/{StructureSearchQueryType.CID}"
@@ -166,9 +173,10 @@ class FastSearch:
     """
     PubChem's synchronous "fast" searches, which answer in one request.
 
-    The plain :class:`StructureSearch` kinds may answer with a ``ListKey`` to
-    poll instead; these do not. :meth:`PubChemAPI.substructure_search` and its
-    siblings use them.
+    The plain [`StructureSearch`][provesid.pubchem.StructureSearch] kinds may
+    answer with a ``ListKey`` to poll instead; these do not.
+    [`PubChemAPI.substructure_search`][provesid.pubchem.PubChemAPI.substructure_search]
+    and its siblings use them.
 
     Examples:
         >>> f"compound/{FastSearch.FASTFORMULA}/C9H8O4/cids/JSON"
@@ -215,8 +223,9 @@ class OutputFormat:
     """
     The ``<output>`` of a PUG-REST URL: the format of the answer.
 
-    :class:`PubChemAPI` asks for ``JSON`` by default and parses it; ``PNG``
-    comes back as bytes, and the other text formats as a string.
+    [`PubChemAPI`][provesid.pubchem.PubChemAPI] asks for ``JSON`` by default
+    and parses it; ``PNG`` comes back as bytes, and the other text formats as a
+    string.
 
     Examples:
         >>> api = PubChemAPI()
@@ -237,10 +246,14 @@ class CompoundProperties:
     """
     The property names PUG-REST's ``property`` operation accepts.
 
-    Pass them to :meth:`PubChemAPI.get_compound_properties` or
-    :meth:`PubChemAPI.get_properties_for_cids`. The attribute names are
-    Python spellings of PubChem's names; the values are PubChem's own.
-    :meth:`PubChemAPI.get_all_compound_info` asks for all of them.
+    Pass them to
+    [`PubChemAPI.get_compound_properties`][provesid.pubchem.PubChemAPI.get_compound_properties]
+    or
+    [`PubChemAPI.get_properties_for_cids`][provesid.pubchem.PubChemAPI.get_properties_for_cids].
+    The attribute names are Python spellings of PubChem's names; the values are
+    PubChem's own.
+    [`PubChemAPI.get_all_compound_info`][provesid.pubchem.PubChemAPI.get_all_compound_info]
+    asks for all of them.
 
     Examples:
         >>> CompoundProperties.MOLECULAR_WEIGHT
@@ -320,8 +333,8 @@ class PubChemTimeoutError(PubChemError, ServiceTimeoutError):
     """
     Every attempt at a PubChem request timed out or could not connect.
 
-    Also a :class:`~provesid.http.ServiceTimeoutError`, so code that handles
-    timeouts for every service catches it.
+    Also a [`ServiceTimeoutError`][provesid.http.ServiceTimeoutError], so code
+    that handles timeouts for every service catches it.
 
     Examples:
         >>> issubclass(PubChemTimeoutError, ServiceTimeoutError)
@@ -334,7 +347,7 @@ class PubChemNotFoundError(PubChemError, NotFoundError):
     PubChem has no such compound, substance or assay.
 
     A permanent answer, never retried. Also a
-    :class:`~provesid.http.NotFoundError`.
+    [`NotFoundError`][provesid.http.NotFoundError].
 
     Examples:
         >>> api = PubChemAPI()
@@ -351,8 +364,8 @@ class PubChemServerError(PubChemError):
 
     Raised after the retries are spent, and at once, with no request, while
     PubChem's host is held by a ``Retry-After`` longer than the client will
-    wait; see :class:`provesid.http.RateLimiter`. ``held_until`` is set in
-    that case.
+    wait; see [`provesid.http.RateLimiter`][provesid.http.RateLimiter].
+    ``held_until`` is set in that case.
 
     Examples:
         >>> err = PubChemServerError("PubChem is throttling this address")
@@ -362,12 +375,6 @@ class PubChemServerError(PubChemError):
     pass
 
 
-#: Fault codes PubChem returns when it is shedding load rather than reporting
-#: absence. PubChem does not always pair them with a 5xx status, so the code in
-#: the body — not the HTTP status alone — decides whether the answer is "no such
-#: data" or "ask again later". Both services' codes live here because both
-#: :mod:`provesid.pubchem` and :mod:`provesid.pubchemview` read this one set;
-#: PUG-REST never emits a ``PUGVIEW.*`` code, so carrying them is inert there.
 TRANSIENT_FAULT_CODES = frozenset({
     "PUGREST.ServerBusy",
     "PUGREST.ServerError",
@@ -376,15 +383,24 @@ TRANSIENT_FAULT_CODES = frozenset({
     "PUGVIEW.ServerError",
     "PUGVIEW.Timeout",
 })
+"""Fault codes PubChem returns when it is shedding load rather than reporting
+absence. PubChem does not always pair them with a 5xx status, so the code in
+the body — not the HTTP status alone — decides whether the answer is "no such
+data" or "ask again later". Both services' codes live here because both
+[`provesid.pubchem`][provesid.pubchem] and
+[`provesid.pubchemview`][provesid.pubchemview] read this one set; PUG-REST
+never emits a ``PUGVIEW.*`` code, so carrying them is inert there.
+"""
 
 
-#: Fault codes that report genuine absence: no such compound, no such heading.
-#: Permanent answers, so a request carrying one is never retried.
 ABSENCE_FAULT_CODES = frozenset({
     "PUGREST.NotFound",
     "PUGVIEW.NotFound",
     "PUGVIEW.BadRequest",
 })
+"""Fault codes that report genuine absence: no such compound, no such heading.
+Permanent answers, so a request carrying one is never retried.
+"""
 
 
 def fault_code(response: requests.Response) -> Optional[str]:
@@ -422,15 +438,16 @@ def _classify_fault(response: requests.Response, bare_400: Outcome) -> Outcome:
     """
     Classify a PubChem response, reading the fault code before the status.
 
-    Shared by :func:`pugrest_classify` and :func:`pugview_classify`, which
-    differ in one place only --- see ``bare_400``.
+    Shared by [`pugrest_classify`][provesid.pubchem.pugrest_classify] and
+    [`pugview_classify`][provesid.pubchem.pugview_classify], which differ in
+    one place only --- see ``bare_400``.
 
     Args:
         response: The response to classify.
         bare_400: What a 400 that carries no fault code means for this service.
 
     Returns:
-        The :class:`~provesid.http.Outcome` for this response.
+        The [`Outcome`][provesid.http.Outcome] for this response.
     """
     status = response.status_code
     if 200 <= status < 300:
@@ -463,17 +480,18 @@ def pugrest_classify(response: requests.Response) -> Outcome:
     §17.6 of the refactor plan). The fault code in the body is what the service
     always sends, so it is what decides.
 
-    A 400 is where this differs from :func:`pugview_classify`: PUG-REST takes
-    its query in the URL path, so a 400 means the path was wrong --- an
-    unknown property name, a malformed identifier. That is a permanent error in
-    the request, not a statement that the compound has no such data, and the
-    caller needs the body to learn which property it misspelled.
+    A 400 is where this differs from
+    [`pugview_classify`][provesid.pubchem.pugview_classify]: PUG-REST takes its
+    query in the URL path, so a 400 means the path was wrong --- an unknown
+    property name, a malformed identifier. That is a permanent error in the
+    request, not a statement that the compound has no such data, and the caller
+    needs the body to learn which property it misspelled.
 
     Args:
         response: The response to classify.
 
     Returns:
-        :attr:`~provesid.http.Outcome.OK` for a 2xx, ``RETRY`` for any
+        [`OK`][provesid.http.Outcome] for a 2xx, ``RETRY`` for any
         transient fault code and for 429/5xx, ``ABSENT`` for an absence fault
         code and for a bare 404, ``FATAL`` for a 400 and any other client
         error.
@@ -497,17 +515,19 @@ def pugview_classify(response: requests.Response) -> Outcome:
     """
     Decide what a PUG-View response means, reading the fault code first.
 
-    Identical to :func:`pugrest_classify` but for a bare 400, which PUG-View
-    uses to say "no such heading" --- the heading is a query parameter, and
-    asking for one a compound does not have is absence, not a bad request.
-    ``PUGVIEW.BadRequest`` is already in :data:`ABSENCE_FAULT_CODES` for the
-    same reason; this covers the case where the body carries no fault at all.
+    Identical to [`pugrest_classify`][provesid.pubchem.pugrest_classify] but
+    for a bare 400, which PUG-View uses to say "no such heading" --- the
+    heading is a query parameter, and asking for one a compound does not have
+    is absence, not a bad request. ``PUGVIEW.BadRequest`` is already in
+    [`ABSENCE_FAULT_CODES`][provesid.pubchem.ABSENCE_FAULT_CODES] for the same
+    reason; this covers the case where the body carries no fault at all.
 
     Args:
         response: The response to classify.
 
     Returns:
-        As :func:`pugrest_classify`, except that a bare 400 is ``ABSENT``.
+        As [`pugrest_classify`][provesid.pubchem.pugrest_classify], except that
+        a bare 400 is ``ABSENT``.
 
     Examples:
         >>> class R:
@@ -526,7 +546,7 @@ def _synonyms_incomplete(result: Any) -> bool:
     ``get_compound_properties`` returns the properties it did retrieve even when
     the follow-up synonym request failed, so the dict looks successful while its
     ``synonyms`` entry is missing. Caching that would make the gap permanent, so
-    it is passed to :func:`cached` as a ``skip_if`` predicate.
+    it is passed to [`cached`][provesid.cache.cached] as a ``skip_if`` predicate.
 
     Args:
         result: Return value of ``get_compound_properties``.
@@ -545,19 +565,22 @@ class PubChemAPI:
     chemical compound, substance, and assay information.
 
     Every method sends at least one request, paced to PubChem's limit of five
-    per second per address, and most are cached (see :mod:`provesid.cache`).
-    For the ~1.4 M compounds with a CAS number, the offline
-    :class:`~provesid.pubchem_id.PubChemID` answers identifier lookups with
-    no network at all.
+    per second per address, and most are cached (see
+    [`provesid.cache`][provesid.cache]). For the ~1.4 M compounds with a CAS
+    number, the offline [`PubChemID`][provesid.pubchem_id.PubChemID] answers
+    identifier lookups with no network at all.
 
     The methods fall into three groups: the raw calls, which return
     PUG-REST's own JSON with at most one wrapper removed
     (``get_compound_by_cid``, ``get_cids_by_*``, the structure searches,
     substances and assays); the flat property calls
-    (:meth:`get_compound_properties`, :meth:`get_properties_for_cids`); and
-    convenience layers over both (:meth:`search_compound`,
-    :meth:`get_basic_compound_info`, :meth:`get_compound_identifiers`,
-    :meth:`find_cids_comprehensive`).
+    ([`get_compound_properties`][provesid.pubchem.PubChemAPI.get_compound_properties],
+    [`get_properties_for_cids`][provesid.pubchem.PubChemAPI.get_properties_for_cids]);
+    and convenience layers over both
+    ([`search_compound`][provesid.pubchem.PubChemAPI.search_compound],
+    [`get_basic_compound_info`][provesid.pubchem.PubChemAPI.get_basic_compound_info],
+    [`get_compound_identifiers`][provesid.pubchem.PubChemAPI.get_compound_identifiers],
+    [`find_cids_comprehensive`][provesid.pubchem.PubChemAPI.find_cids_comprehensive]).
 
     Examples:
         >>> api = PubChemAPI()
@@ -595,7 +618,7 @@ class PubChemAPI:
 
         # One shared transport. PUG-REST describes every error in the body, so
         # it supplies its own classifier rather than trusting the status code:
-        # see :func:`pugrest_classify`. ``pace_host`` is what keeps this client
+        # see ``pugrest_classify``. ``pace_host`` is what keeps this client
         # and any PubChemView in the same process inside PubChem's five
         # requests per second, which is a per-IP budget and not a per-object
         # one.
@@ -641,7 +664,7 @@ class PubChemAPI:
         Kept on the transport; exposed here because it describes this client's
         own pacing. The clock the pacing is *measured* against is shared with
         every other client aimed at PubChem --- see
-        :class:`provesid.http.RateLimiter`.
+        [`provesid.http.RateLimiter`][provesid.http.RateLimiter].
 
         Returns:
             Seconds since the epoch, or 0.0 before the first request.
@@ -687,7 +710,9 @@ class PubChemAPI:
         Size and location of the PubChem PUG-REST cache.
 
         Returns:
-            The statistics :func:`provesid.cache.get_cache_info` reports for
+            The statistics
+            [`provesid.cache.get_cache_info`][provesid.cache.get_cache_info]
+            reports for
                 ``service='pubchem'``: ``cache_directory``, ``memory_entries``,
                 ``disk_entries``, ``file_count``, ``total_size_bytes``,
                 ``total_size_mb``, ``total_size_gb``, ``warning_threshold_gb``
@@ -703,7 +728,8 @@ class PubChemAPI:
 
     def _rate_limit(self):
         """
-        Sleep, if needed, so requests to PubChem stay :attr:`pause_time` apart.
+        Sleep, if needed, so requests to PubChem stay
+        [`pause_time`][provesid.pubchem.PubChemAPI.pause_time] apart.
 
         Delegates to the shared transport, which paces every request it makes
         including retries.
@@ -721,9 +747,10 @@ class PubChemAPI:
         The transport handles the pacing, the retries and the back-off; what
         stays here is the shape of a PUG-REST request and the one status code
         that is neither success nor failure. Classification is
-        :func:`pugrest_classify`, which reads the fault code in the body
-        because PubChem's status codes alone do not distinguish a compound that
-        has no such data from a service shedding load.
+        [`pugrest_classify`][provesid.pubchem.pugrest_classify], which reads
+        the fault code in the body because PubChem's status codes alone do not
+        distinguish a compound that has no such data from a service shedding
+        load.
 
         Args:
             url: Request URL
@@ -735,7 +762,7 @@ class PubChemAPI:
         Returns:
             Response object. Returned unparsed because the caller knows which
             of JSON, text, SDF or PNG it asked for --- see
-            :meth:`_parse_response`.
+            `_parse_response`.
 
         Raises:
             PubChemNotFoundError: The compound, substance or assay does not
@@ -839,8 +866,9 @@ class PubChemAPI:
         Get compound record by CID
 
         The full record: atoms, bonds, coordinates and PubChem's computed
-        properties as a list of ``props``. :meth:`get_compound_properties` is
-        the flat alternative when only some properties are wanted.
+        properties as a list of ``props``.
+        [`get_compound_properties`][provesid.pubchem.PubChemAPI.get_compound_properties]
+        is the flat alternative when only some properties are wanted.
 
         Args:
             cid: Compound ID
@@ -1192,9 +1220,10 @@ class PubChemAPI:
         Fetch one ``PropertyTable`` covering several CIDs in a single request.
 
         The identifiers go in the URL path while they fit within
-        :data:`URL_IDENTIFIER_LIMIT`, and in a POST body when they do not. Both
-        forms hit the same endpoint and return the same payload; the choice is
-        purely about the URL length ceiling.
+        [`URL_IDENTIFIER_LIMIT`][provesid.pubchem.URL_IDENTIFIER_LIMIT], and in
+        a POST body when they do not. Both forms hit the same endpoint and
+        return the same payload; the choice is purely about the URL length
+        ceiling.
 
         Args:
             cids_tuple: CIDs to look up, as a tuple so the result is cacheable.
@@ -1242,17 +1271,20 @@ class PubChemAPI:
         """
         Get a property table for many CIDs, a few hundred compounds per request.
 
-        This is the bulk counterpart to :meth:`get_compound_properties`, which
-        asks about one compound at a time. PubChem's property endpoint accepts a
-        comma-separated CID list and answers the whole set in one round trip, so
-        a thousand compounds cost five requests here instead of a thousand.
+        This is the bulk counterpart to
+        [`get_compound_properties`][provesid.pubchem.PubChemAPI.get_compound_properties],
+        which asks about one compound at a time. PubChem's property endpoint
+        accepts a comma-separated CID list and answers the whole set in one
+        round trip, so a thousand compounds cost five requests here instead of
+        a thousand.
 
         Args:
             cids: CIDs to look up. Duplicates are collapsed, and the original
                 order of first appearance is preserved.
             properties: Property names, e.g.
                 ``['MolecularWeight', 'SMILES']``. See
-                :class:`CompoundProperties` for the full list.
+                [`CompoundProperties`][provesid.pubchem.CompoundProperties] for
+                the full list.
             chunk_size: How many CIDs to put in one request. The default is
                 deliberately below what PubChem tolerates: a smaller chunk
                 wastes less work when a request has to be retried.
@@ -1298,10 +1330,13 @@ class PubChemAPI:
         """
         Get compound properties for multiple CIDs, one row per CID.
 
-        A convenience layer over :meth:`get_properties_for_cids` that reshapes
-        the raw property table into the flat, self-describing dicts
-        :meth:`get_compound_properties` returns, so a caller can iterate over
-        the result without checking which CIDs came back.
+        A convenience layer over
+        [`get_properties_for_cids`][provesid.pubchem.PubChemAPI.get_properties_for_cids]
+        that reshapes the raw property table into the flat, self-describing
+        dicts
+        [`get_compound_properties`][provesid.pubchem.PubChemAPI.get_compound_properties]
+        returns, so a caller can iterate over the result without checking which
+        CIDs came back.
 
         Args:
             cids: List of CIDs. Duplicates are answered once each, in the order
@@ -1324,9 +1359,12 @@ class PubChemAPI:
         Note:
             This asks PubChem about ``chunk_size`` compounds per request rather
             than one compound per request, so it does not share cache entries
-            with :meth:`get_compound_properties`. Synonyms are not included;
-            they need one request per compound, which defeats the point of
-            batching. Use :meth:`get_compound_synonyms` where they are needed.
+            with
+            [`get_compound_properties`][provesid.pubchem.PubChemAPI.get_compound_properties].
+            Synonyms are not included; they need one request per compound,
+            which defeats the point of batching. Use
+            [`get_compound_synonyms`][provesid.pubchem.PubChemAPI.get_compound_synonyms]
+            where they are needed.
 
         Examples:
             >>> api = PubChemAPI()
@@ -1990,7 +2028,8 @@ class PubChemAPI:
             Dictionary with search results and metadata: ``success``,
             ``query``, ``search_type``, ``data`` (the full record, or a list of
             records when several match) and ``error``. Pass it to
-            :meth:`format_search_compound_result` for flat properties.
+            [`format_search_compound_result`][provesid.pubchem.PubChemAPI.format_search_compound_result]
+            for flat properties.
 
         Examples:
             >>> api = PubChemAPI()
@@ -2214,7 +2253,8 @@ class PubChemAPI:
             plus 'success', 'cid', 'synonyms', and 'error' metadata keys.
             The properties are ``MolecularFormula``, ``MolecularWeight``,
             ``SMILES``, ``InChI``, ``InChIKey`` and ``IUPACName``; see
-            :meth:`get_compound_properties` for how a failure is reported.
+            [`get_compound_properties`][provesid.pubchem.PubChemAPI.get_compound_properties]
+            for how a failure is reported.
 
         Examples:
             >>> api = PubChemAPI()
@@ -2275,6 +2315,7 @@ class PubChemAPI:
         Returns:
             Dictionary with lists of unique identifiers for each type, in
             order of first appearance:
+
             - casrn: CAS Registry Numbers (2-7 digits-2 digits-1 digit)
             - nsc: NSC numbers (begins with NSC)
             - dtxsid: DTXSID identifiers (begins with DTXSID)
@@ -2381,9 +2422,10 @@ class PubChemAPI:
 
         Returns:
             Dictionary with 'success', 'cid', 'error' metadata and extracted identifiers,
-            as :meth:`extract_identifiers_from_synonyms` finds them, plus
-            ``total_synonyms``. A failed request gives ``success=False``
-            and empty lists rather than raising.
+            as
+            [`extract_identifiers_from_synonyms`][provesid.pubchem.PubChemAPI.extract_identifiers_from_synonyms]
+            finds them, plus ``total_synonyms``. A failed request gives
+            ``success=False`` and empty lists rather than raising.
 
         Examples:
             >>> api = PubChemAPI()

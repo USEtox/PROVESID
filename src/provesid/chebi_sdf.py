@@ -1,12 +1,14 @@
 """
-Offline access to ChEBI through its SDF release: :class:`ChebiSDF`.
+Offline access to ChEBI through its SDF release:
+[`ChebiSDF`][provesid.chebi_sdf.ChebiSDF].
 
 EBI publishes the whole of ChEBI as one gzipped SDF file (``chebi.sdf.gz``).
-:class:`ChebiSDF` downloads it once into the per-user dataset directory,
-indexes it, pickles the index beside the file, and answers lookups by ChEBI
-ID, name, synonym, InChIKey, formula and cross-reference with no network.
+[`ChebiSDF`][provesid.chebi_sdf.ChebiSDF] downloads it once into the per-user
+dataset directory, indexes it, pickles the index beside the file, and answers
+lookups by ChEBI ID, name, synonym, InChIKey, formula and cross-reference with
+no network.
 
-The online ChEBI 2.0 REST client lives in :mod:`provesid.chebi`.
+The online ChEBI 2.0 REST client lives in [`provesid.chebi`][provesid.chebi].
 
 Examples:
     >>> from provesid import ChebiSDF
@@ -138,7 +140,7 @@ class ChebiSDF:
             force (bool): If True, download even if file already exists (default: False)
 
         Returns:
-            str: Path to the downloaded and extracted SDF file
+            (str): Path to the downloaded and extracted SDF file
 
         Raises:
             FileExistsError: If the file already exists and force=False
@@ -223,9 +225,9 @@ class ChebiSDF:
         *neighbouring* record — silently returning another compound's data.
 
         Returns:
-            dict: Index containing mappings for various query types, plus a
+            (dict): Index containing mappings for various query types, plus a
             ``_meta`` entry recording the SDF the index was built from (see
-            :meth:`_index_meta`).
+            `_index_meta`).
         """
         index = {
             'id_to_offset': {},           # ChEBI ID -> file offset
@@ -335,12 +337,12 @@ class ChebiSDF:
 
         The index stores raw byte offsets into the SDF, so it is only valid for
         the exact file it was built from.  Recording the file's size and the
-        index format version lets :meth:`_load_index` detect a stale cache — for
+        index format version lets `_load_index` detect a stale cache — for
         instance one written by an older release whose offsets were computed in
         text mode and are silently wrong.
 
         Returns:
-            dict: ``format_version`` and ``sdf_size`` (bytes) of the SDF file.
+            (dict): ``format_version`` and ``sdf_size`` (bytes) of the SDF file.
         """
         return {
             'format_version': self.INDEX_FORMAT_VERSION,
@@ -360,7 +362,7 @@ class ChebiSDF:
         """Load index from disk, rebuilding it when it does not match the SDF.
 
         Returns:
-            dict: A validated index for the current SDF file.  When the cached
+            (dict): A validated index for the current SDF file.  When the cached
             index is missing, unreadable, written by an older format version, or
             was built from a differently sized SDF, it is rebuilt and re-saved.
         """
@@ -395,13 +397,13 @@ class ChebiSDF:
         Read a molecule entry from the SDF file at a specific offset.
 
         Reads in binary and decodes per line so that ``offset`` is interpreted
-        as the exact byte position recorded by :meth:`_build_index`.
+        as the exact byte position recorded by `_build_index`.
 
         Args:
             offset (int): File offset where molecule starts
 
         Returns:
-            dict: Molecule data including molfile and properties
+            (dict): Molecule data including molfile and properties
         """
         data = {'molfile': ''}
 
@@ -439,7 +441,7 @@ class ChebiSDF:
             chebi_id (str): ChEBI ID (e.g., "CHEBI:15377" or "15377")
 
         Returns:
-            dict: Compound data, or None if not found
+            (dict): Compound data, or None if not found
 
         Examples:
             >>> chebi_sdf = ChebiSDF()
@@ -466,7 +468,7 @@ class ChebiSDF:
             exact (bool): If True, exact match; if False, partial match (default: True)
 
         Returns:
-            list: List of matching compound data
+            (list): List of matching compound data
 
         Examples:
             >>> chebi_sdf = ChebiSDF()
@@ -504,7 +506,7 @@ class ChebiSDF:
             exact (bool): If True, exact match; if False, partial match (default: True)
 
         Returns:
-            list: List of matching compound data. A partial match returns each
+            (list): List of matching compound data. A partial match returns each
             compound once, in no particular order.
 
         Examples:
@@ -543,7 +545,7 @@ class ChebiSDF:
             inchikey (str): InChIKey to search for
 
         Returns:
-            dict: Compound data, or None if not found
+            (dict): Compound data, or None if not found
 
         Examples:
             >>> ChebiSDF().search_by_inchikey("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")["ChEBI NAME"]
@@ -562,7 +564,7 @@ class ChebiSDF:
             inchi (str): InChI string to search for
 
         Returns:
-            dict: Compound data, or None if not found. The match is on the
+            (dict): Compound data, or None if not found. The match is on the
             exact string.
 
         Examples:
@@ -582,7 +584,7 @@ class ChebiSDF:
             cas (str): CAS Registry Number
 
         Returns:
-            list: List of matching compound data. Only about 29 000 of
+            (list): List of matching compound data. Only about 29 000 of
             ChEBI's ~192 000 entries carry a CAS number.
 
         Examples:
@@ -607,7 +609,7 @@ class ChebiSDF:
             formula (str): Molecular formula (e.g., "H2O")
 
         Returns:
-            list: List of matching compound data. The formula must be written
+            (list): List of matching compound data. The formula must be written
             as ChEBI writes it.
 
         Examples:
@@ -632,7 +634,7 @@ class ChebiSDF:
             min_stars (int): Minimum star rating (1-3, default: 3)
 
         Returns:
-            list: List of ChEBI IDs matching criteria
+            (list): List of ChEBI IDs matching criteria
 
         Note:
             Reads every record in the file, which takes several seconds.
@@ -664,7 +666,7 @@ class ChebiSDF:
             chebi_ids (list): List of ChEBI IDs
 
         Returns:
-            list: List of compound data dictionaries, in the order asked;
+            (list): List of compound data dictionaries, in the order asked;
             IDs not in the file are left out
 
         Examples:
@@ -689,7 +691,7 @@ class ChebiSDF:
             fields (list, optional): List of field names to include. If None, includes common fields.
 
         Returns:
-            pd.DataFrame: DataFrame with compound data
+            (pd.DataFrame): DataFrame with compound data
 
         Examples:
             >>> chebi_sdf = ChebiSDF()
@@ -720,7 +722,7 @@ class ChebiSDF:
         Get statistics about the ChEBI SDF database.
 
         Returns:
-            dict: Statistics including counts of various indexed fields:
+            (dict): Statistics including counts of various indexed fields:
             ``total_compounds``, and the number of distinct keys in each index
             --- ``compounds_with_inchikey``, ``compounds_with_inchi`` and
             ``compounds_with_cas`` count distinct InChIKeys, InChIs and CAS

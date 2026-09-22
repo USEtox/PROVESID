@@ -1,18 +1,22 @@
 """
-The offline PubChem identifier database: :class:`PubChemID`.
+The offline PubChem identifier database: [`PubChemID`][provesid.pubchem_id.PubChemID].
 
 ``pubchem_id.db`` is a local SQLite file of the ~1.43 M PubChem compounds that
 carry a CAS number, with their identifiers, names, synonyms, formula and
-masses. :class:`PubChemID` answers lookups against it with no network, and
-falls back to PUG-REST (through :class:`~provesid.pubchem.PubChemAPI`) only
-for what the file does not hold, the computed descriptors among them.
+masses. [`PubChemID`][provesid.pubchem_id.PubChemID] answers lookups against it
+with no network, and falls back to PUG-REST (through
+[`PubChemAPI`][provesid.pubchem.PubChemAPI]) only for what the file does not
+hold, the computed descriptors among them.
 
-The file is built from PubChem's FTP site by :mod:`provesid.pubchem_ftp`, or
-downloaded prebuilt from Zenodo. The online client lives in
-:mod:`provesid.pubchem`.
+The file is built from PubChem's FTP site by
+[`provesid.pubchem_ftp`][provesid.pubchem_ftp], or downloaded prebuilt from
+Zenodo. The online client lives in [`provesid.pubchem`][provesid.pubchem].
 
-This module also holds :func:`rdkit_descriptors`, the RDKit computation
-behind :meth:`PubChemID.descriptors`, for structures that are not in PubChem.
+This module also holds
+[`rdkit_descriptors`][provesid.pubchem_id.rdkit_descriptors], the RDKit
+computation behind
+[`PubChemID.descriptors`][provesid.pubchem_id.PubChemID.descriptors], for
+structures that are not in PubChem.
 
 Examples:
     >>> from provesid import PubChemID
@@ -34,13 +38,6 @@ from .sqlite_client import SQLiteClient
 from .utils import user_dataset_path
 
 
-#: Descriptors :func:`rdkit_descriptors` computes, in the order it reports
-#: them. The names are PubChem's wherever the quantity is the same one ---
-#: a polar surface area, a count of donors --- so that a table can switch
-#: source without renaming its columns. The logP is the exception: PubChem's
-#: ``XLogP`` is the XLogP3 model and RDKit's is Crippen's, a different model
-#: with a different number, so it keeps RDKit's name, ``MolLogP``. PubChem's
-#: ``Complexity`` has no RDKit counterpart and is not here.
 RDKIT_DESCRIPTORS = (
     'MolLogP',
     'TPSA',
@@ -50,9 +47,15 @@ RDKIT_DESCRIPTORS = (
     'HeavyAtomCount',
     'Charge',
 )
+"""Descriptors [`rdkit_descriptors`][provesid.pubchem_id.rdkit_descriptors]
+computes, in the order it reports them. The names are PubChem's wherever the
+quantity is the same one --- a polar surface area, a count of donors --- so
+that a table can switch source without renaming its columns. The logP is the
+exception: PubChem's ``XLogP`` is the XLogP3 model and RDKit's is Crippen's, a
+different model with a different number, so it keeps RDKit's name, ``MolLogP``.
+PubChem's ``Complexity`` has no RDKit counterpart and is not here.
+"""
 
-#: The computed descriptors PubChem publishes, which ``pubchem_id.db`` no
-#: longer stores (see :meth:`PubChemID.descriptors`).
 PUBCHEM_DESCRIPTORS = (
     'XLogP',
     'TPSA',
@@ -63,11 +66,17 @@ PUBCHEM_DESCRIPTORS = (
     'HeavyAtomCount',
     'Charge',
 )
+"""The computed descriptors PubChem publishes, which ``pubchem_id.db`` no
+longer stores (see
+[`PubChemID.descriptors`][provesid.pubchem_id.PubChemID.descriptors]).
+"""
 
 
 def _rdkit_descriptor_functions() -> Dict[str, Any]:
     """
-    Map each name in :data:`RDKIT_DESCRIPTORS` to the RDKit function computing it.
+    Map each name in
+    [`RDKIT_DESCRIPTORS`][provesid.pubchem_id.RDKIT_DESCRIPTORS] to the RDKit
+    function computing it.
 
     Built on call because RDKit is slow to import, and a session that never
     asks for a descriptor should not pay for it.
@@ -99,9 +108,10 @@ def rdkit_descriptors(smiles: str,
     """
     Compute molecular descriptors for a structure with RDKit.
 
-    This is what :meth:`PubChemID.descriptors` runs on each stored SMILES,
-    exposed for structures that are not in PubChem. No network; about half a
-    millisecond per molecule, half of it the logP.
+    This is what
+    [`PubChemID.descriptors`][provesid.pubchem_id.PubChemID.descriptors] runs
+    on each stored SMILES, exposed for structures that are not in PubChem. No
+    network; about half a millisecond per molecule, half of it the logP.
 
     The numbers are RDKit's, and they are not always PubChem's. PubChem
     computes its descriptors with Cactvs, which counts differently. Against
@@ -123,8 +133,9 @@ def rdkit_descriptors(smiles: str,
 
     Args:
         smiles: The structure, as SMILES.
-        descriptors: Names from :data:`RDKIT_DESCRIPTORS` to compute. Defaults
-            to all of them.
+        descriptors: Names from
+            [`RDKIT_DESCRIPTORS`][provesid.pubchem_id.RDKIT_DESCRIPTORS] to
+            compute. Defaults to all of them.
 
     Returns:
         A dict from descriptor name to value, in the order requested, or None
@@ -132,8 +143,9 @@ def rdkit_descriptors(smiles: str,
         floats, the rest ints.
 
     Raises:
-        ValueError: If a name is not in :data:`RDKIT_DESCRIPTORS`. The message
-            says where to get it instead, for PubChem's ``XLogP`` and
+        ValueError: If a name is not in
+            [`RDKIT_DESCRIPTORS`][provesid.pubchem_id.RDKIT_DESCRIPTORS]. The
+            message says where to get it instead, for PubChem's ``XLogP`` and
             ``Complexity``.
 
     Examples:
@@ -208,23 +220,27 @@ class PubChemID(SQLiteClient):
     when there is none on disk yet:
 
     * ``"ftp"`` (default) builds it from a dated monthly snapshot of PubChem's
-      FTP site with :func:`provesid.pubchem_ftp.build_pubchem_id_db`. The
-      result records its release and the MD5 of every source file (see
-      :meth:`provenance`), and carries cross-references to DSSTox, ChEBI,
-      ChEMBL, EC and UNII (see :meth:`xrefs`).
+      FTP site with
+      [`provesid.pubchem_ftp.build_pubchem_id_db`][provesid.pubchem_ftp.build_pubchem_id_db].
+      The result records its release and the MD5 of every source file (see
+      [`provenance`][provesid.pubchem_id.PubChemID.provenance]), and carries
+      cross-references to DSSTox, ChEBI, ChEMBL, EC and UNII (see
+      [`xrefs`][provesid.pubchem_id.PubChemID.xrefs]).
     * ``"zenodo"`` downloads a prebuilt copy, refreshed by hand every few
       months. Quicker to fetch, but it is whatever release it was built from.
 
     Both hold the same tables, so every lookup works on either. They differ in
     the property columns: a database built from FTP has ``MonoisotopicMass``
     and none of the eight computed descriptors (XLogP, TPSA and the like).
-    :meth:`descriptors` computes those with RDKit from the stored SMILES, or
-    fetches PubChem's own on request; :meth:`properties` fetches PubChem's.
-    See :attr:`offline_properties` for what the open database can answer.
+    [`descriptors`][provesid.pubchem_id.PubChemID.descriptors] computes those
+    with RDKit from the stored SMILES, or fetches PubChem's own on request;
+    [`properties`][provesid.pubchem_id.PubChemID.properties] fetches PubChem's.
+    See [`offline_properties`][provesid.pubchem_id.PubChemID] for what the open
+    database can answer.
 
     Connection handling comes from
-    :class:`~provesid.sqlite_client.SQLiteClient`: use the class as a context
-    manager, or call :meth:`~provesid.sqlite_client.SQLiteClient.close` when
+    [`SQLiteClient`][provesid.sqlite_client.SQLiteClient]: use the class as a context
+    manager, or call [`close`][provesid.sqlite_client.SQLiteClient.close] when
     finished, and query it from as many threads as you like --- each gets its
     own connection.
 
@@ -232,8 +248,10 @@ class PubChemID(SQLiteClient):
         db_path (str): Path to the SQLite database file
         conn (sqlite3.Connection): This thread's database connection
         source (str): The acquisition route this instance was given.
-        offline_properties (dict): The part of :attr:`OFFLINE_PROPERTIES` the
-            open database has columns for --- what :meth:`properties` answers
+        offline_properties (dict): The part of
+            [`OFFLINE_PROPERTIES`][provesid.pubchem_id.PubChemID.OFFLINE_PROPERTIES]
+            the open database has columns for --- what
+            [`properties`][provesid.pubchem_id.PubChemID.properties] answers
             without the network, and retrieves when no properties are named.
 
     Examples:
@@ -252,24 +270,12 @@ class PubChemID(SQLiteClient):
     DEFAULT_DB_NAME = "pubchem_id.db"
     DEFAULT_DB_URL = "https://zenodo.org/records/18173204/files/pubchem_id.db"
 
-    #: Where a missing database comes from. ``"ftp"`` builds it from PubChem's
-    #: FTP site (:mod:`provesid.pubchem_ftp`); ``"zenodo"`` downloads a
-    #: prebuilt copy.
     SOURCES = ("ftp", "zenodo")
+    """Where a missing database comes from. ``"ftp"`` builds it from PubChem's
+    FTP site ([`provesid.pubchem_ftp`][provesid.pubchem_ftp]); ``"zenodo"`` downloads a
+    prebuilt copy.
+    """
 
-    #: PubChem property names the local database can answer, mapped to their
-    #: column in the ``compounds`` table. These are the properties that are
-    #: *data* about a compound --- its identifiers, names, formula and masses.
-    #: The computed descriptors (``XLogP``, ``TPSA``, ``Complexity`` and the
-    #: counts) are not served from disk even by a Zenodo database that still
-    #: holds them: they are PubChem's model outputs, and a user who asks for
-    #: them gets PubChem's current values, labelled ``Source='online'``, or
-    #: RDKit's from :meth:`descriptors`, labelled ``Source='rdkit'``.
-    #: Note that ``smiles`` holds the isomeric SMILES, which is what PubChem now
-    #: calls ``SMILES``; the stereochemistry-free ``ConnectivitySMILES`` is not
-    #: stored locally. ``MolecularWeight`` is computed from the formula when the
-    #: database is built from FTP --- PubChem's files do not carry it --- and
-    #: agrees with PubChem's to the second decimal for most compounds.
     OFFLINE_PROPERTIES = {
         'MolecularFormula': 'mf',
         'MolecularWeight': 'mw',
@@ -281,16 +287,30 @@ class PubChemID(SQLiteClient):
         'ExactMass': 'exactmass',
         'MonoisotopicMass': 'monoisotopicmass',
     }
+    """PubChem property names the local database can answer, mapped to their
+    column in the ``compounds`` table. These are the properties that are
+    *data* about a compound --- its identifiers, names, formula and masses.
+    The computed descriptors (``XLogP``, ``TPSA``, ``Complexity`` and the
+    counts) are not served from disk even by a Zenodo database that still
+    holds them: they are PubChem's model outputs, and a user who asks for
+    them gets PubChem's current values, labelled ``Source='online'``, or
+    RDKit's from [`descriptors`][provesid.pubchem_id.PubChemID.descriptors],
+    labelled ``Source='rdkit'``. Note that ``smiles`` holds the isomeric
+    SMILES, which is what PubChem now calls ``SMILES``; the
+    stereochemistry-free ``ConnectivitySMILES`` is not stored locally.
+    ``MolecularWeight`` is computed from the formula when the database is built
+    from FTP --- PubChem's files do not carry it --- and agrees with PubChem's
+    to the second decimal for most compounds.
+    """
 
-    #: What :meth:`properties` retrieves when the caller names no properties,
-    #: for a database that has every column. An open database uses
-    #: :attr:`offline_properties` instead, so that a Zenodo copy without
-    #: ``monoisotopicmass`` does not send every default lookup online.
     DEFAULT_PROPERTIES = tuple(OFFLINE_PROPERTIES)
+    """What [`properties`][provesid.pubchem_id.PubChemID.properties] retrieves
+    when the caller names no properties, for a database that has every column.
+    An open database uses [`offline_properties`][provesid.pubchem_id.PubChemID]
+    instead, so that a Zenodo copy without ``monoisotopicmass`` does not send
+    every default lookup online.
+    """
 
-    #: Type each property is normalised to, so that a table assembled from both
-    #: sources is usable as one table. PUG-REST reports ``MolecularWeight`` and
-    #: ``ExactMass`` as strings while the local database holds floats.
     _PROPERTY_CASTS = {
         'MolecularWeight': float,
         'ExactMass': float,
@@ -304,9 +324,13 @@ class PubChemID(SQLiteClient):
         'RotatableBondCount': int,
         'HeavyAtomCount': int,
     }
+    """Type each property is normalised to, so that a table assembled from both
+    sources is usable as one table. PUG-REST reports ``MolecularWeight`` and
+    ``ExactMass`` as strings while the local database holds floats.
+    """
 
-    #: Bound parameters per ``IN`` clause. SQLite's own default ceiling is 999.
     _SQL_PARAMETER_LIMIT = 500
+    """Bound parameters per ``IN`` clause. SQLite's own default ceiling is 999."""
 
 
     def __init__(
@@ -335,21 +359,22 @@ class PubChemID(SQLiteClient):
                 one is on disk, when ``auto_download`` is enabled. With
                 ``source="ftp"`` that is a rebuild from the newest snapshot.
             api (PubChemAPI, optional): Online client used by
-                :meth:`properties` when the local database cannot answer a
-                request. One is created on first use if none is given, so
-                passing this is only needed to share a client or to configure
-                its pause time.
+                [`properties`][provesid.pubchem_id.PubChemID.properties] when
+                the local database cannot answer a request. One is created on
+                first use if none is given, so passing this is only needed to
+                share a client or to configure its pause time.
             source (str): How a missing database is acquired, one of
-                :attr:`SOURCES`. ``"ftp"`` (default) builds it from the newest
-                monthly snapshot of PubChem's FTP site: 15.4 GB transferred,
-                a 2.5 GB database plus 7.4 GB of free disk at peak, and about
-                12 minutes of processing on top of the download time.
-                ``"zenodo"`` downloads a 2.2 GB
+                [`SOURCES`][provesid.pubchem_id.PubChemID.SOURCES]. ``"ftp"``
+                (default) builds it from the newest monthly snapshot of
+                PubChem's FTP site: 15.4 GB transferred, a 2.5 GB database plus
+                7.4 GB of free disk at peak, and about 12 minutes of processing
+                on top of the download time. ``"zenodo"`` downloads a 2.2 GB
                 prebuilt copy. It describes an acquisition, not a file: a
                 database already on disk is opened whichever way it was made.
 
         Raises:
-            ValueError: If ``source`` is not one of :attr:`SOURCES`. Checked
+            ValueError: If ``source`` is not one of
+                [`SOURCES`][provesid.pubchem_id.PubChemID.SOURCES]. Checked
                 before anything is fetched.
             FileNotFoundError: If database file doesn't exist and auto_download is False
 
@@ -398,7 +423,7 @@ class PubChemID(SQLiteClient):
 
         # One connection per thread, released by close() or by leaving a
         # ``with`` block --- see
-        # :class:`~provesid.sqlite_client.SQLiteClient`.
+        # ``SQLiteClient``.
         self._open_database(self.db_path)
         self.offline_properties = self._available_offline_properties()
 
@@ -414,7 +439,8 @@ class PubChemID(SQLiteClient):
             The same value, once it is known to be a route.
 
         Raises:
-            ValueError: If it is not one of :attr:`SOURCES`.
+            ValueError: If it is not one of
+                [`SOURCES`][provesid.pubchem_id.PubChemID.SOURCES].
         """
         if source in cls.SOURCES:
             return source
@@ -423,7 +449,8 @@ class PubChemID(SQLiteClient):
                          f"Use one of {options}.")
 
     def _acquire(self, *, force: bool) -> None:
-        """Put a database at :attr:`db_path` by the route :attr:`source` names."""
+        """Put a database at [`db_path`][provesid.pubchem_id.PubChemID] by the
+        route [`source`][provesid.pubchem_id.PubChemID] names."""
         if self.source == "ftp":
             from .pubchem_ftp import build_pubchem_id_db
 
@@ -436,7 +463,9 @@ class PubChemID(SQLiteClient):
 
     def _available_offline_properties(self) -> Dict[str, str]:
         """
-        The part of :attr:`OFFLINE_PROPERTIES` this database has columns for.
+        The part of
+        [`OFFLINE_PROPERTIES`][provesid.pubchem_id.PubChemID.OFFLINE_PROPERTIES]
+        this database has columns for.
 
         A database built from FTP and one downloaded from Zenodo differ in one
         column --- ``monoisotopicmass`` exists only in the first --- so which
@@ -457,7 +486,8 @@ class PubChemID(SQLiteClient):
         Download PubChem ID database from Zenodo --- the ``source="zenodo"`` route.
 
         To build it from PubChem's own files instead, which is the default
-        route, see :func:`provesid.pubchem_ftp.build_pubchem_id_db`.
+        route, see
+        [`provesid.pubchem_ftp.build_pubchem_id_db`][provesid.pubchem_ftp.build_pubchem_id_db].
 
         The transfer is resumable: an interrupted download leaves a ``.part``
         file beside the destination and the next call continues from it rather
@@ -473,7 +503,7 @@ class PubChemID(SQLiteClient):
             force (bool): If True, overwrite an existing local database file.
 
         Returns:
-            str: Path to the downloaded database file
+            (str): Path to the downloaded database file
 
         Raises:
             FileExistsError: If the database exists and ``force`` is False.
@@ -542,12 +572,14 @@ class PubChemID(SQLiteClient):
             cid (int): PubChem Compound ID
 
         Returns:
-            dict: Every column of the ``compounds`` row (``cid``, ``cmpdname``,
+            (dict): Every column of the ``compounds`` row (``cid``, ``cmpdname``,
             ``mf``, ``inchi``, ``smiles``, ``inchikey``, ``iupacname``, ``mw``,
             ``exactmass``, ``cidcdate`` and whichever others the database has;
-            see :meth:`get_by_cas_batch`), plus ``cas_numbers``, the compound's
-            distinct CAS numbers in database order, and ``synonyms``, at most
-            100 of its names. None if the CID is not in the database.
+            see
+            [`get_by_cas_batch`][provesid.pubchem_id.PubChemID.get_by_cas_batch]),
+            plus ``cas_numbers``, the compound's distinct CAS numbers in
+            database order, and ``synonyms``, at most 100 of its names. None if
+            the CID is not in the database.
 
         Examples:
             >>> db = PubChemID()
@@ -595,7 +627,8 @@ class PubChemID(SQLiteClient):
             cas (str): CAS Registry Number (e.g., "50-78-2")
 
         Returns:
-            dict: The :meth:`get_by_cid` record, or None if not found. A CAS
+            (dict): The [`get_by_cid`][provesid.pubchem_id.PubChemID.get_by_cid]
+                record, or None if not found. A CAS
             number PubChem gives to several compounds returns the first one.
 
         Examples:
@@ -625,7 +658,8 @@ class PubChemID(SQLiteClient):
             inchikey (str): Standard InChIKey (27 characters)
 
         Returns:
-            dict: The :meth:`get_by_cid` record, or None if not found.
+            (dict): The [`get_by_cid`][provesid.pubchem_id.PubChemID.get_by_cid]
+                record, or None if not found.
 
         Examples:
             >>> db = PubChemID()
@@ -653,7 +687,8 @@ class PubChemID(SQLiteClient):
             inchi (str): Standard InChI string
 
         Returns:
-            dict: The :meth:`get_by_cid` record, or None if not found. The
+            (dict): The [`get_by_cid`][provesid.pubchem_id.PubChemID.get_by_cid]
+                record, or None if not found. The
             match is exact: a truncated or non-standard InChI finds nothing.
 
         Examples:
@@ -681,14 +716,16 @@ class PubChemID(SQLiteClient):
         Get compound information by SMILES string.
 
         The match is on the stored string, not the structure, so only
-        PubChem's own SMILES for a compound finds it. :meth:`smiles_to_cas`
-        compares structures instead.
+        PubChem's own SMILES for a compound finds it.
+        [`smiles_to_cas`][provesid.pubchem_id.PubChemID.smiles_to_cas] compares
+        structures instead.
 
         Args:
             smiles (str): SMILES string
 
         Returns:
-            dict: The :meth:`get_by_cid` record, or None if not found.
+            (dict): The [`get_by_cid`][provesid.pubchem_id.PubChemID.get_by_cid]
+                record, or None if not found.
 
         Examples:
             >>> db = PubChemID()
@@ -726,7 +763,8 @@ class PubChemID(SQLiteClient):
             limit (int): Maximum number of results to return
 
         Returns:
-            list: :meth:`get_by_cid` records, each compound once. Empty when
+            (list): [`get_by_cid`][provesid.pubchem_id.PubChemID.get_by_cid]
+                records, each compound once. Empty when
             nothing matches.
 
         Examples:
@@ -795,7 +833,8 @@ class PubChemID(SQLiteClient):
             limit (int): Maximum number of results to return
 
         Returns:
-            list: :meth:`get_by_cid` records for compounds whose formula is
+            (list): [`get_by_cid`][provesid.pubchem_id.PubChemID.get_by_cid]
+                records for compounds whose formula is
             exactly ``formula``, in database order. The formula must be
             written as PubChem writes it (Hill order).
 
@@ -1043,7 +1082,8 @@ class PubChemID(SQLiteClient):
         Convert SMILES string to PubChem CID.
 
         Args:
-            smiles: SMILES, matched as a string against PubChem's; see :meth:`get_by_smiles`.
+            smiles: SMILES, matched as a string against PubChem's; see
+                [`get_by_smiles`][provesid.pubchem_id.PubChemID.get_by_smiles].
 
         Returns:
             The CID, or None if not found.
@@ -1066,7 +1106,7 @@ class PubChemID(SQLiteClient):
             cas_list (list): List of CAS numbers
 
         Returns:
-            dict: Mapping of CAS -> CID (None if not found), in input order.
+            (dict): Mapping of CAS -> CID (None if not found), in input order.
 
         Examples:
             >>> db = PubChemID()
@@ -1087,7 +1127,7 @@ class PubChemID(SQLiteClient):
             cas_list (list): List of CAS numbers
 
         Returns:
-            dict: Mapping of CAS -> InChIKey (None if not found)
+            (dict): Mapping of CAS -> InChIKey (None if not found)
 
         Examples:
             >>> db = PubChemID()
@@ -1107,7 +1147,7 @@ class PubChemID(SQLiteClient):
             cid_list (list): List of PubChem CIDs
 
         Returns:
-            dict: Mapping of CID -> list of CAS numbers (None if not found)
+            (dict): Mapping of CID -> list of CAS numbers (None if not found)
 
         Examples:
             >>> db = PubChemID()
@@ -1127,7 +1167,7 @@ class PubChemID(SQLiteClient):
             smiles_list (list): List of SMILES strings
 
         Returns:
-            dict: Mapping of SMILES -> CID (None if not found)
+            (dict): Mapping of SMILES -> CID (None if not found)
 
         Examples:
             >>> db = PubChemID()
@@ -1154,7 +1194,7 @@ class PubChemID(SQLiteClient):
             cas_list (list): List of CAS Registry Numbers
 
         Returns:
-            pandas.DataFrame: ``cid``, ``cas`` and then the ``compounds``
+            (pandas.DataFrame): ``cid``, ``cas`` and then the ``compounds``
             columns --- ``cmpdname``, ``mf``, ``inchi``, ``smiles``,
             ``inchikey``, ``iupacname``, ``mw``, ``exactmass``, ``cidcdate``
             and whichever others the database has. Empty, with those columns,
@@ -1182,7 +1222,8 @@ class PubChemID(SQLiteClient):
         return [row[1] for row in self.conn.execute("PRAGMA table_info(compounds)")]
 
     def _compound_columns(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        """A :meth:`get_by_cid` record without its list-valued extras."""
+        """A [`get_by_cid`][provesid.pubchem_id.PubChemID.get_by_cid] record
+        without its list-valued extras."""
         return {name: record.get(name) for name in self._compound_column_names()}
 
     def get_id_table_from_cas(self, cas: str) -> Optional['pd.DataFrame']:
@@ -1193,7 +1234,7 @@ class PubChemID(SQLiteClient):
             cas (str): CAS Registry Number
 
         Returns:
-            pandas.DataFrame: Table with columns [cid, cas, inchi, inchikey, smiles,
+            (pandas.DataFrame): Table with columns [cid, cas, inchi, inchikey, smiles,
                              cmpdname, mf, mw] or None if not found
 
         Examples:
@@ -1232,9 +1273,10 @@ class PubChemID(SQLiteClient):
             cas_list (list): List of CAS Registry Numbers
 
         Returns:
-            pandas.DataFrame: One :meth:`get_id_table_from_cas` row per CAS
-            number found; CAS numbers not found are left out. Empty, with the
-            same columns, when none is found.
+            (pandas.DataFrame): One
+            [`get_id_table_from_cas`][provesid.pubchem_id.PubChemID.get_id_table_from_cas]
+            row per CAS number found; CAS numbers not found are left out.
+            Empty, with the same columns, when none is found.
 
         Examples:
             >>> db = PubChemID()
@@ -1264,14 +1306,15 @@ class PubChemID(SQLiteClient):
         Get complete compound information for multiple SMILES strings as a DataFrame.
 
         One row per SMILES found, carrying the compound's first CAS number and
-        every column of the ``compounds`` table; see :meth:`get_by_cas_batch`
+        every column of the ``compounds`` table; see
+        [`get_by_cas_batch`][provesid.pubchem_id.PubChemID.get_by_cas_batch]
         for how those columns depend on where the database came from.
 
         Args:
             smiles_list (list): List of SMILES strings
 
         Returns:
-            pandas.DataFrame: ``cid``, ``cas`` and then the ``compounds``
+            (pandas.DataFrame): ``cid``, ``cas`` and then the ``compounds``
             columns. Empty, with those columns, when nothing is found.
 
         Examples:
@@ -1296,15 +1339,16 @@ class PubChemID(SQLiteClient):
         """
         Convert SMILES string to CAS number(s).
 
-        Unlike :meth:`smiles_to_cid`, this compares structures: the SMILES is
-        converted to a standard InChI with RDKit and looked up by that, so any
-        valid SMILES for the compound finds it.
+        Unlike [`smiles_to_cid`][provesid.pubchem_id.PubChemID.smiles_to_cid],
+        this compares structures: the SMILES is converted to a standard InChI
+        with RDKit and looked up by that, so any valid SMILES for the compound
+        finds it.
 
         Args:
             smiles (str): SMILES string
 
         Returns:
-            list: List of CAS numbers, or None if not found, if RDKit cannot
+            (list): List of CAS numbers, or None if not found, if RDKit cannot
             parse the SMILES, or if RDKit is not installed.
 
         Examples:
@@ -1336,8 +1380,10 @@ class PubChemID(SQLiteClient):
             exact (bool): If True, exact match only. If False, returns first match from search.
 
         Returns:
-            list: The first matching compound's CAS numbers, or None if no
-            compound matches. See :meth:`search_by_name` for how names match.
+            (list): The first matching compound's CAS numbers, or None if no
+            compound matches. See
+            [`search_by_name`][provesid.pubchem_id.PubChemID.search_by_name]
+            for how names match.
 
         Examples:
             >>> db = PubChemID()
@@ -1367,7 +1413,7 @@ class PubChemID(SQLiteClient):
             limit (int): Maximum number of compounds to retrieve
 
         Returns:
-            list: The distinct CAS numbers of the first ``limit`` compounds
+            (list): The distinct CAS numbers of the first ``limit`` compounds
             with this formula, sorted as strings, or None if none is found
 
         Examples:
@@ -1402,7 +1448,7 @@ class PubChemID(SQLiteClient):
             smiles_list (list): List of SMILES strings
 
         Returns:
-            dict: Mapping of SMILES -> list of CAS numbers (None if not found)
+            (dict): Mapping of SMILES -> list of CAS numbers (None if not found)
 
         Examples:
             >>> db = PubChemID()
@@ -1420,7 +1466,7 @@ class PubChemID(SQLiteClient):
             exact (bool): If True, exact match only
 
         Returns:
-            dict: Mapping of name -> list of CAS numbers (None if not found)
+            (dict): Mapping of name -> list of CAS numbers (None if not found)
 
         Examples:
             >>> db = PubChemID()
@@ -1438,7 +1484,7 @@ class PubChemID(SQLiteClient):
             limit (int): Maximum number of compounds per formula
 
         Returns:
-            dict: Mapping of formula -> list of CAS numbers (None if not found)
+            (dict): Mapping of formula -> list of CAS numbers (None if not found)
 
         Examples:
             >>> db = PubChemID()
@@ -1457,8 +1503,8 @@ class PubChemID(SQLiteClient):
         session never builds one.
 
         Returns:
-            The :class:`PubChemAPI` instance passed to ``__init__``, or one
-            created with default settings.
+            The [`PubChemAPI`][provesid.pubchem.PubChemAPI] instance passed to
+            ``__init__``, or one created with default settings.
 
         Examples:
             >>> from provesid import PubChemAPI
@@ -1479,18 +1525,21 @@ class PubChemID(SQLiteClient):
         The local database answers from disk in microseconds; the online API is
         consulted only when the local database cannot serve the request, either
         because it holds no row for this CID or because a requested property is
-        not one of the columns it carries (see :attr:`offline_properties`).
+        not one of the columns it carries (see
+        [`offline_properties`][provesid.pubchem_id.PubChemID]).
 
         Args:
             cid: PubChem Compound ID.
             properties: Property names to retrieve, e.g.
                 ``['MolecularWeight', 'XLogP']``. Defaults to every property the
-                local database can answer, :attr:`offline_properties`.
+                local database can answer,
+                [`offline_properties`][provesid.pubchem_id.PubChemID].
             use_online_fallback: When True (default), fall back to PUG-REST for
                 anything the local database cannot answer. When False, the
                 lookup is strictly offline, and a request the local database
                 cannot answer in full --- an unknown CID, or any property
-                outside :attr:`offline_properties` --- returns None.
+                outside [`offline_properties`][provesid.pubchem_id.PubChemID]
+                --- returns None.
 
         Returns:
             A dict carrying ``CID``, a ``Source`` of ``'offline'`` or
@@ -1539,7 +1588,7 @@ class PubChemID(SQLiteClient):
             cids: PubChem Compound IDs. Duplicates are collapsed and the order
                 of first appearance is preserved.
             properties: Property names to retrieve. Defaults to
-                :attr:`offline_properties`.
+                [`offline_properties`][provesid.pubchem_id.PubChemID].
             use_online_fallback: When True (default), CIDs the local database
                 does not cover are requested from PUG-REST.
             chunk_size: How many CIDs to put in one online request.
@@ -1548,8 +1597,9 @@ class PubChemID(SQLiteClient):
             One dict per CID that could be answered, in the order requested,
             each carrying ``CID``, a ``Source`` of ``'offline'`` or
             ``'online'``, and one key per property that has a value. CIDs
-            neither source knows are omitted; use :meth:`properties_table` to
-            get a row for every CID asked about.
+            neither source knows are omitted; use
+            [`properties_table`][provesid.pubchem_id.PubChemID.properties_table]
+            to get a row for every CID asked about.
 
         Raises:
             ValueError: If a CID is not an integer, ``properties`` is an empty
@@ -1558,11 +1608,11 @@ class PubChemID(SQLiteClient):
 
         Note:
             If *any* requested property lies outside
-            :attr:`offline_properties`, the whole request goes online: the
-            missing property would need a request per compound anyway, so
-            splitting the property list between the two sources would cost the
-            same traffic and return rows assembled from two different PubChem
-            snapshots.
+            [`offline_properties`][provesid.pubchem_id.PubChemID], the whole
+            request goes online: the missing property would need a request per
+            compound anyway, so splitting the property list between the two
+            sources would cost the same traffic and return rows assembled from
+            two different PubChem snapshots.
 
         Examples:
             >>> db = PubChemID()
@@ -1610,14 +1660,16 @@ class PubChemID(SQLiteClient):
         """
         Offline-first property lookup for many compounds, as a DataFrame.
 
-        Same lookup as :meth:`properties_for_cids`, reshaped so that every CID
-        asked about has a row whether or not it could be answered. That makes
-        the frame safe to concatenate or join against the caller's own table.
+        Same lookup as
+        [`properties_for_cids`][provesid.pubchem_id.PubChemID.properties_for_cids],
+        reshaped so that every CID asked about has a row whether or not it
+        could be answered. That makes the frame safe to concatenate or join
+        against the caller's own table.
 
         Args:
             cids: PubChem Compound IDs. Duplicates are collapsed.
             properties: Property names to retrieve. Defaults to
-                :attr:`offline_properties`.
+                [`offline_properties`][provesid.pubchem_id.PubChemID].
             use_online_fallback: When True (default), consult PUG-REST for CIDs
                 the local database does not cover.
             chunk_size: How many CIDs to put in one online request.
@@ -1662,18 +1714,21 @@ class PubChemID(SQLiteClient):
           compound's stored SMILES --- no network, milliseconds. The record
           says ``Source='rdkit'``. RDKit and PubChem count some things
           differently, and the logP is a different model altogether, named
-          ``MolLogP`` rather than ``XLogP``; :func:`rdkit_descriptors`
-          measures how far apart they are. ``Complexity`` is not available.
+          ``MolLogP`` rather than ``XLogP``;
+          [`rdkit_descriptors`][provesid.pubchem_id.rdkit_descriptors] measures
+          how far apart they are. ``Complexity`` is not available.
         * ``source="pubchem"`` fetches PubChem's own values from PUG-REST,
-          through the same path as :meth:`properties`, labelled
-          ``Source='online'``. This is the only way to PubChem's ``XLogP``
-          and ``Complexity``.
+          through the same path as
+          [`properties`][provesid.pubchem_id.PubChemID.properties], labelled
+          ``Source='online'``. This is the only way to PubChem's ``XLogP`` and
+          ``Complexity``.
 
         Args:
             cid: PubChem Compound ID.
             descriptors: Names to compute. Defaults to every descriptor the
-                source has: :data:`RDKIT_DESCRIPTORS` or
-                :data:`PUBCHEM_DESCRIPTORS`.
+                source has:
+                [`RDKIT_DESCRIPTORS`][provesid.pubchem_id.RDKIT_DESCRIPTORS] or
+                [`PUBCHEM_DESCRIPTORS`][provesid.pubchem_id.PUBCHEM_DESCRIPTORS].
             source: ``'rdkit'`` or ``'pubchem'``.
             use_online_fallback: For ``source="rdkit"``, whether a compound the
                 local database does not hold may have its SMILES fetched from
@@ -1713,11 +1768,12 @@ class PubChemID(SQLiteClient):
         """
         Computed molecular descriptors for many compounds, from RDKit or PubChem.
 
-        The list form of :meth:`descriptors`. With ``source="rdkit"`` the
-        SMILES of every compound in the local database are read in a handful
-        of statements, and only those it lacks are fetched from PubChem, in
-        bulk; with ``source="pubchem"`` the whole list goes to PUG-REST a few
-        hundred compounds per request.
+        The list form of
+        [`descriptors`][provesid.pubchem_id.PubChemID.descriptors]. With
+        ``source="rdkit"`` the SMILES of every compound in the local database
+        are read in a handful of statements, and only those it lacks are
+        fetched from PubChem, in bulk; with ``source="pubchem"`` the whole list
+        goes to PUG-REST a few hundred compounds per request.
 
         Args:
             cids: PubChem Compound IDs. Duplicates are collapsed and the order
@@ -1731,12 +1787,16 @@ class PubChemID(SQLiteClient):
 
         Returns:
             One dict per CID that could be answered, in the order requested,
-            shaped as :meth:`descriptors` describes. CIDs no source knows are
-            omitted; :meth:`descriptors_table` gives a row for every CID.
+            shaped as
+            [`descriptors`][provesid.pubchem_id.PubChemID.descriptors]
+            describes. CIDs no source knows are omitted;
+            [`descriptors_table`][provesid.pubchem_id.PubChemID.descriptors_table]
+            gives a row for every CID.
 
         Raises:
-            ValueError: As for :meth:`descriptors`, or if ``chunk_size`` is not
-                positive.
+            ValueError: As for
+                [`descriptors`][provesid.pubchem_id.PubChemID.descriptors], or
+                if ``chunk_size`` is not positive.
             PubChemError: If an online request could not be completed.
 
         Examples:
@@ -1775,11 +1835,13 @@ class PubChemID(SQLiteClient):
         """
         Computed molecular descriptors for many compounds, as a DataFrame.
 
-        Same lookup as :meth:`descriptors_for_cids`, with a row for every CID
-        asked about, so the frame joins safely against the caller's own table.
-        Because the RDKit and PubChem columns share names wherever the quantity
-        is the same, two tables built with each source line up column for
-        column, apart from ``MolLogP`` / ``XLogP`` and ``Complexity``.
+        Same lookup as
+        [`descriptors_for_cids`][provesid.pubchem_id.PubChemID.descriptors_for_cids],
+        with a row for every CID asked about, so the frame joins safely against
+        the caller's own table. Because the RDKit and PubChem columns share
+        names wherever the quantity is the same, two tables built with each
+        source line up column for column, apart from ``MolLogP`` / ``XLogP``
+        and ``Complexity``.
 
         Args:
             cids: PubChem Compound IDs. Duplicates are collapsed.
@@ -1797,7 +1859,8 @@ class PubChemID(SQLiteClient):
             source knows; a descriptor with no value is NaN/None.
 
         Raises:
-            ValueError: As for :meth:`descriptors_for_cids`.
+            ValueError: As for
+                [`descriptors_for_cids`][provesid.pubchem_id.PubChemID.descriptors_for_cids].
             PubChemError: If an online request could not be completed.
 
         Examples:
@@ -1821,7 +1884,8 @@ class PubChemID(SQLiteClient):
         Args:
             cids: The CIDs as the caller gave them; duplicates are collapsed.
             rows: Records carrying ``CID``, ``Source`` and values, as
-                :meth:`properties_for_cids` returns them.
+                [`properties_for_cids`][provesid.pubchem_id.PubChemID.properties_for_cids]
+                returns them.
             names: The value columns, in order.
 
         Returns:
@@ -1867,7 +1931,7 @@ class PubChemID(SQLiteClient):
         Args:
             cids: CIDs to look up, already coerced to int.
             properties: Property names, all of which must be keys of
-                :attr:`offline_properties`.
+                [`offline_properties`][provesid.pubchem_id.PubChemID].
 
         Returns:
             A dict keyed by CID, holding one record per CID present in the
@@ -1964,7 +2028,8 @@ class PubChemID(SQLiteClient):
         """
         Where this database came from and how it was built.
 
-        A database built by :func:`provesid.pubchem_ftp.build_pubchem_id_db`
+        A database built by
+        [`provesid.pubchem_ftp.build_pubchem_id_db`][provesid.pubchem_ftp.build_pubchem_id_db]
         records its PubChem release, the snapshot's timestamp, the URL and MD5
         of every source file, the row counts and the build time. That is what
         makes a lookup against it citable: the release pins down exactly which
@@ -1998,7 +2063,7 @@ class PubChemID(SQLiteClient):
         PubChem publishes these links itself, in the same file the CAS
         numbers come from, so they cost nothing to keep: DSSTox substance IDs
         (``dtxsid``), ChEBI IDs, ChEMBL IDs, EC numbers and UNIIs --- see
-        :data:`provesid.pubchem_ftp.XREF_TYPES`.
+        [`provesid.pubchem_ftp.XREF_TYPES`][provesid.pubchem_ftp.XREF_TYPES].
 
         Args:
             cid: PubChem Compound ID.
@@ -2042,7 +2107,7 @@ class PubChemID(SQLiteClient):
         Get database statistics.
 
         Returns:
-            dict: ``total_compounds``, ``total_cas_numbers`` (rows in the CAS
+            (dict): ``total_compounds``, ``total_cas_numbers`` (rows in the CAS
             table), ``compounds_with_cas``, ``total_synonyms``,
             ``compounds_with_inchikey``, ``database_path`` and
             ``database_size_mb``. The counts depend on the release.

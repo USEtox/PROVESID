@@ -130,7 +130,7 @@ class REACHDossierID:
             sheet_name (str): Worksheet name.
 
         Returns:
-            pd.DataFrame: Loaded data.
+            (pd.DataFrame): Loaded data.
 
         Raises:
             RuntimeError: If the file cannot be parsed.
@@ -163,7 +163,7 @@ class REACHDossierID:
             sheet_name (str): Target worksheet name.
 
         Returns:
-            pd.DataFrame: Parsed worksheet data.
+            (pd.DataFrame): Parsed worksheet data.
 
         Raises:
             RuntimeError: If parsing fails or sheet is not found.
@@ -307,7 +307,7 @@ class REACHDossierID:
         Get summary statistics for the loaded REACH dataset.
 
         Returns:
-            dict: Summary fields including row count and non-empty ID counts:
+            (dict): Summary fields including row count and non-empty ID counts:
             ``total_rows`` and ``rows_with_`` each of ``dossier_uuid``,
             ``cas``, ``inventory_number``, ``substance_name`` and
             ``iupac_name``.
@@ -355,7 +355,7 @@ class REACHDossierID:
             cas_number (str): CAS Registry Number.
 
         Returns:
-            list[dict]: Matching records, one per dossier.
+            (list[dict]): Matching records, one per dossier.
 
         Examples:
             >>> rows = REACHDossierID().get_by_cas("50-00-0")
@@ -376,7 +376,7 @@ class REACHDossierID:
             inventory_number (str): EC inventory number.
 
         Returns:
-            list[dict]: Matching records, one per dossier.
+            (list[dict]): Matching records, one per dossier.
 
         Examples:
             >>> [row["CAS_NUMBER_ref_sub"] for row in REACHDossierID().get_by_inventory_number("200-001-8")]
@@ -404,7 +404,7 @@ class REACHDossierID:
             limit (int, optional): Maximum number of results.
 
         Returns:
-            list[dict]: Matching records, in sheet order. Whitespace runs are
+            (list[dict]): Matching records, in sheet order. Whitespace runs are
             collapsed before matching.
 
         Examples:
@@ -444,7 +444,7 @@ class REACHDossierID:
             limit (int, optional): Maximum number of results.
 
         Returns:
-            list[dict]: Matching records, in sheet order.
+            (list[dict]): Matching records, in sheet order.
 
         Examples:
             >>> rows = REACHDossierID().get_by_iupac_name("formaldehyde", exact=True)
@@ -533,8 +533,8 @@ class REACHDossierID:
             cas_number (str): CAS number.
 
         Returns:
-            list[str]: Dossier UUID values. Distinct and non-empty, in sheet order; empty
-            when nothing matches.
+            (list[str]): Dossier UUID values. Distinct and non-empty, in sheet
+            order; empty when nothing matches.
 
         Examples:
             >>> REACHDossierID().cas_to_dossier_uuid("50-00-0")
@@ -551,8 +551,8 @@ class REACHDossierID:
             cas_number (str): CAS number.
 
         Returns:
-            list[str]: Inventory number values. Distinct and non-empty, in sheet order; empty
-            when nothing matches.
+            (list[str]): Inventory number values. Distinct and non-empty, in
+            sheet order; empty when nothing matches.
 
         Examples:
             >>> REACHDossierID().cas_to_inventory_number("50-00-0")
@@ -569,7 +569,7 @@ class REACHDossierID:
             cas_number (str): CAS number.
 
         Returns:
-            list[str]: Substance names. Distinct and non-empty, in sheet order; empty
+            (list[str]): Substance names. Distinct and non-empty, in sheet order; empty
             when nothing matches.
 
         Examples:
@@ -587,7 +587,7 @@ class REACHDossierID:
             inventory_number (str): EC inventory number.
 
         Returns:
-            list[str]: CAS values. Distinct and non-empty, in sheet order; empty
+            (list[str]): CAS values. Distinct and non-empty, in sheet order; empty
             when nothing matches.
 
         Examples:
@@ -605,8 +605,8 @@ class REACHDossierID:
             inventory_number (str): EC inventory number.
 
         Returns:
-            list[str]: Dossier UUID values. Distinct and non-empty, in sheet order; empty
-            when nothing matches.
+            (list[str]): Dossier UUID values. Distinct and non-empty, in sheet
+            order; empty when nothing matches.
 
         Examples:
             >>> REACHDossierID().inventory_number_to_dossier_uuid("200-001-8")
@@ -625,7 +625,7 @@ class REACHDossierID:
             limit (int, optional): Maximum records to inspect.
 
         Returns:
-            list[str]: CAS values, distinct, from the first ``limit`` matching
+            (list[str]): CAS values, distinct, from the first ``limit`` matching
             records.
 
         Examples:
@@ -650,7 +650,7 @@ class REACHDossierID:
             limit (int, optional): Maximum records to inspect.
 
         Returns:
-            list[str]: Dossier UUID values, distinct, from the first ``limit``
+            (list[str]): Dossier UUID values, distinct, from the first ``limit``
             matching records.
 
         Examples:

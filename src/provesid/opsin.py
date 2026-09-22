@@ -1,10 +1,11 @@
 """
 OPSIN, which turns systematic chemical names into structures.
 
-Two ways in. :class:`OPSIN` calls the hosted web service at EBI, one request
-per name, with pacing, retries and caching. :class:`PYOPSIN` runs the same
-parser locally through ``py2opsin``, which bundles OPSIN's jar and needs a
-Java runtime but no network, and parses a list in one JVM start.
+Two ways in. [`OPSIN`][provesid.opsin.OPSIN] calls the hosted web service at
+EBI, one request per name, with pacing, retries and caching.
+[`PYOPSIN`][provesid.opsin.PYOPSIN] runs the same parser locally through
+``py2opsin``, which bundles OPSIN's jar and needs a Java runtime but no
+network, and parses a list in one JVM start.
 
 OPSIN reads names; it does not look them up. ``"ethanol"`` and
 ``"2-acetyloxybenzoic acid"`` parse, while a trade name such as
@@ -33,13 +34,14 @@ from .http import (
 )
 from py2opsin import py2opsin
 
-#: Seconds between two requests to OPSIN. The service is a name parser rather
-#: than a database lookup, and EBI publishes no per-IP figure for it, so this is
-#: politeness: ten requests a second. Note that OPSIN and ChEBI are both served
-#: from ``www.ebi.ac.uk``, so they share a pacing clock and ten per second is
-#: the budget for the two of them together --- which is the point of keying the
-#: clock by host.
 OPSIN_MIN_INTERVAL = 0.1
+"""Seconds between two requests to OPSIN. The service is a name parser rather
+than a database lookup, and EBI publishes no per-IP figure for it, so this is
+politeness: ten requests a second. Note that OPSIN and ChEBI are both served
+from ``www.ebi.ac.uk``, so they share a pacing clock and ten per second is
+the budget for the two of them together --- which is the point of keying the
+clock by host.
+"""
 
 
 class OPSINError(ServiceError):
@@ -62,8 +64,8 @@ class OPSINNotFoundError(OPSINError, NotFoundError):
     Raised for an absence OPSIN reports with no usable body.
 
     Rare in practice: OPSIN explains an unparseable name in the body of its
-    404, and :func:`opsin_classify` treats that body as the answer rather than
-    as absence.
+    404, and [`opsin_classify`][provesid.opsin.opsin_classify] treats that body
+    as the answer rather than as absence.
 
     Examples:
         >>> issubclass(OPSINNotFoundError, NotFoundError)
@@ -94,7 +96,7 @@ def opsin_classify(response: requests.Response) -> Outcome:
     *reason* exists. Verified live on 2026-09-19 against
     ``notachemical12345``.
 
-    Treating that as :attr:`~provesid.http.Outcome.ABSENT` would raise before
+    Treating that as [`ABSENT`][provesid.http.Outcome] would raise before
     the body was read, which is what the module did by hand before: it mapped
     the status to the string ``"FAILURE"`` and returned, so ``message`` was
     empty for every failure the module ever reported --- including in the
@@ -105,8 +107,8 @@ def opsin_classify(response: requests.Response) -> Outcome:
         response: The response to classify.
 
     Returns:
-        :attr:`~provesid.http.Outcome.OK` for a 404, whose body is the answer;
-        otherwise whatever :func:`~provesid.http.default_classify` says.
+        [`OK`][provesid.http.Outcome] for a 404, whose body is the answer;
+        otherwise whatever [`default_classify`][provesid.http.default_classify] says.
 
     Examples:
         >>> class R: status_code = 404
@@ -177,9 +179,9 @@ class OPSIN:
     A Python interface to the OPSIN name-to-structure web service.
 
     OPSIN turns a systematic IUPAC name into a structure. This class calls the
-    hosted service; :class:`PYOPSIN` runs the same parser locally through
-    ``py2opsin``, which is faster and works offline, and is the better choice
-    for anything but a handful of names.
+    hosted service; [`PYOPSIN`][provesid.opsin.PYOPSIN] runs the same parser
+    locally through ``py2opsin``, which is faster and works offline, and is the
+    better choice for anything but a handful of names.
 
     Attributes:
         base_url: The OPSIN web service endpoint.
@@ -222,27 +224,28 @@ class OPSIN:
             logger=self.logger,
         )
 
-    #: Bumped whenever an entry written by an earlier version must not be
-    #: served. Version 2 is this change: the old code cached *failures*, so a
-    #: name that hit one momentary 503 is on disk as a permanent ``"FAILURE"``
-    #: for a name OPSIN parses perfectly well --- and every cached failure
-    #: carries an empty ``message``, because the old code never read the body
-    #: that explains it. Neither is fixable in place, so the old entries are
-    #: made unreachable instead.
     CACHE_SCHEMA_VERSION = 2
+    """Bumped whenever an entry written by an earlier version must not be
+    served. Version 2 is this change: the old code cached *failures*, so a
+    name that hit one momentary 503 is on disk as a permanent ``"FAILURE"``
+    for a name OPSIN parses perfectly well --- and every cached failure
+    carries an empty ``message``, because the old code never read the body
+    that explains it. Neither is fixable in place, so the old entries are
+    made unreachable instead.
+    """
 
     def __cache_key__(self) -> tuple:
         """
         Identify this client for cache-key purposes.
 
         Without this the key is the class name alone, which is stable across
-        processes --- what :func:`~provesid.cache.stable_key_part` is for --- but
-        carries no way to retire an entry whose content is now known to be
-        wrong. The schema version is that way.
+        processes --- what [`stable_key_part`][provesid.cache.stable_key_part]
+        is for --- but carries no way to retire an entry whose content is now
+        known to be wrong. The schema version is that way.
 
         Returns:
             Tuple of the class path, the configured base URL and
-            :attr:`CACHE_SCHEMA_VERSION`.
+            [`CACHE_SCHEMA_VERSION`][provesid.opsin.OPSIN.CACHE_SCHEMA_VERSION].
 
         Examples:
             >>> OPSIN().__cache_key__()
@@ -270,7 +273,9 @@ class OPSIN:
         Size and location of the OPSIN cache.
 
         Returns:
-            The statistics :func:`provesid.cache.get_cache_info` reports for
+            The statistics
+            [`provesid.cache.get_cache_info`][provesid.cache.get_cache_info]
+            reports for
                 ``service='opsin'``.
 
         Examples:
@@ -292,7 +297,7 @@ class OPSIN:
             timeout: Request timeout in seconds.
 
         Returns:
-            A dict in the shape of :meth:`_empty_res`. ``status`` is OPSIN's
+            A dict in the shape of `_empty_res`. ``status`` is OPSIN's
             own, ``"SUCCESS"`` or ``"FAILURE"``, and on a failure ``message``
             carries OPSIN's explanation of which part of the name it could not
             read. On a transport failure ``status`` is ``"FAILURE"`` and
@@ -366,9 +371,9 @@ class OPSIN:
 
         Returns:
             One dict per input name, in order, each in the shape
-            :meth:`get_id` returns. A name OPSIN could not parse is a
-            ``"FAILURE"`` entry carrying OPSIN's explanation in ``message``,
-            not a missing row.
+            [`get_id`][provesid.opsin.OPSIN.get_id] returns. A name OPSIN could
+            not parse is a ``"FAILURE"`` entry carrying OPSIN's explanation in
+            ``message``, not a missing row.
 
         Examples:
             >>> records = OPSIN().get_id_from_list(["ethanol", "benzene"])  # doctest: +SKIP
@@ -529,14 +534,14 @@ class PYOPSIN:
         Parse one name to every representation OPSIN writes.
 
         Six parser runs, one per representation. For more than one name use
-        :meth:`get_id_from_list`, which costs the same six runs for the whole
-        list.
+        [`get_id_from_list`][provesid.opsin.PYOPSIN.get_id_from_list], which
+        costs the same six runs for the whole list.
 
         Args:
             iupac_name: The systematic name.
 
         Returns:
-            dict: ``iupac_name``, ``status`` (``"SUCCESS"`` when a SMILES came
+            (dict): ``iupac_name``, ``status`` (``"SUCCESS"`` when a SMILES came
             back, else ``"FAILURE"``), ``message`` (always empty here),
             ``smiles``, ``extended_smiles``, ``inchi``, ``stdinchi``,
             ``stdinchikey`` and ``cml``.
@@ -565,13 +570,14 @@ class PYOPSIN:
         Parse many names to every representation, six parser runs in all.
 
         py2opsin takes the whole list per run, so this does not loop over
-        :meth:`get_id`.
+        [`get_id`][provesid.opsin.PYOPSIN.get_id].
 
         Args:
             iupac_names: The systematic names.
 
         Returns:
-            list: One :meth:`get_id` dict per name, in order, each with its own
+            (list): One [`get_id`][provesid.opsin.PYOPSIN.get_id] dict per name,
+                in order, each with its own
             ``status``.
 
         Examples:

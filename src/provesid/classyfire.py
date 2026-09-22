@@ -1,14 +1,15 @@
 """
-The ClassyFire web service (Wishart lab): :class:`ClassyFireAPI`.
+The ClassyFire web service (Wishart lab):
+[`ClassyFireAPI`][provesid.classyfire.ClassyFireAPI].
 
 .. warning::
    The service has classified nothing new since February 2023. It still
    serves queries submitted before then, but a new submission is never
    processed. For ChEBI classes computed offline use
-   :class:`provesid.taxonomy.ChebifierClassifier`.
+   [`provesid.taxonomy.ChebifierClassifier`][provesid.taxonomy.ChebifierClassifier].
 
 This is the last module still calling ``requests`` directly, with no pacing
-and no retry, and its methods return :class:`requests.Response` objects rather
+and no retry, and its methods return `requests.Response` objects rather
 than parsed data. Plan step 7 replaces it; until then it is documented as it
 is.
 
@@ -27,9 +28,12 @@ class ClassyFireAPI:
     Class to interact with the ClassyFire API. The class is converted from the original Ruby code
     provided at https://bitbucket.org/wishartlab/classyfire_api/src/master/lib/classyfire_api.rb
 
-    Every method is static. Submit a structure with :meth:`submit_query`, poll
-    :meth:`query_status`, then fetch the result with :meth:`get_query`. See
-    the module warning: new submissions are no longer processed.
+    Every method is static. Submit a structure with
+    [`submit_query`][provesid.classyfire.ClassyFireAPI.submit_query], poll
+    [`query_status`][provesid.classyfire.ClassyFireAPI.query_status], then
+    fetch the result with
+    [`get_query`][provesid.classyfire.ClassyFireAPI.get_query]. See the module
+    warning: new submissions are no longer processed.
 
     Examples:
         >>> response = ClassyFireAPI.submit_query(
@@ -57,7 +61,9 @@ class ClassyFireAPI:
         Size and location of the ClassyFire cache.
 
         Returns:
-            The statistics :func:`provesid.cache.get_cache_info` reports for
+            The statistics
+            [`provesid.cache.get_cache_info`][provesid.cache.get_cache_info]
+            reports for
                 ``service='classyfire'``.
 
         Examples:
@@ -79,7 +85,7 @@ class ClassyFireAPI:
             use_cache: When False, do not read the cache.
 
         Returns:
-            requests.Response: The service's answer, whose JSON carries the
+            (requests.Response): The service's answer, whose JSON carries the
             query ``id`` on success. An HTTP error comes back as its response,
             not raised; a connection failure comes back as None.
 
@@ -110,11 +116,13 @@ class ClassyFireAPI:
         Retrieves the status of a query.
 
         Args:
-            query_id: The ID :meth:`submit_query` returned.
+            query_id: The ID
+                [`submit_query`][provesid.classyfire.ClassyFireAPI.submit_query]
+                returned.
             use_cache: When False, do not read the cache.
 
         Returns:
-            requests.Response: The status response, or None when the request
+            (requests.Response): The status response, or None when the request
             failed for any reason.
 
         Note:
@@ -148,7 +156,7 @@ class ClassyFireAPI:
             use_cache: When False, do not read the cache.
 
         Returns:
-            requests.Response: The result in the requested format. An HTTP
+            (requests.Response): The result in the requested format. An HTTP
             error comes back as its response, not raised; a connection failure
             comes back as None.
 

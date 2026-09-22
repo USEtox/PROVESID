@@ -1,5 +1,5 @@
 """
-The ZeroPM global chemical inventory, offline: :class:`ZeroPM`.
+The ZeroPM global chemical inventory, offline: [`ZeroPM`][provesid.zeropm.ZeroPM].
 
 ZeroPM (https://zeropm.eu) merged 25 national and regional chemical
 inventories --- TSCA, the EC Inventory, Japan's CSCL, China's IECSC and
@@ -26,7 +26,7 @@ Its tables, and the names this class uses for them:
 The methods that follow every rank (``get_cas_from_name``,
 ``get_cas_from_inchi`` and the ``get_id_table_from_*`` family) are broad
 rather than precise; filter a table on ``rank == 1`` for the best answer. This
-is why :class:`~provesid.search.Search` leaves ZeroPM out of its default vote.
+is why [`Search`][provesid.search.Search] leaves ZeroPM out of its default vote.
 
 SMILES are not stored. They are written from the InChI with RDKit on demand.
 
@@ -62,12 +62,13 @@ class ZeroPM(SQLiteClient):
     The database file will be automatically downloaded if not found locally.
 
     Connection handling comes from
-    :class:`~provesid.sqlite_client.SQLiteClient`: use the class as a context
-    manager, or call :meth:`~provesid.sqlite_client.SQLiteClient.close` when
+    [`SQLiteClient`][provesid.sqlite_client.SQLiteClient]: use the class as a context
+    manager, or call [`close`][provesid.sqlite_client.SQLiteClient.close] when
     finished, and query it from as many threads as you like --- each gets its
     own connection.  This is the one client that also *writes*
-    (:meth:`create_indexes`, :meth:`create_view`); SQLite serialises those
-    against the reading connections.
+    ([`create_indexes`][provesid.zeropm.ZeroPM.create_indexes],
+    [`create_view`][provesid.zeropm.ZeroPM.create_view]); SQLite serialises
+    those against the reading connections.
 
     Example
     -------
@@ -348,8 +349,9 @@ class ZeroPM(SQLiteClient):
         Notes
         -----
         Scores with ``rapidfuzz``'s ``WRatio``, which rates a short name
-        highly whenever it appears inside the query. :meth:`match_similar_name`
-        uses a stricter scorer and reports the names and scores.
+        highly whenever it appears inside the query.
+        [`match_similar_name`][provesid.zeropm.ZeroPM.match_similar_name] uses
+        a stricter scorer and reports the names and scores.
 
         Examples
         --------
@@ -387,18 +389,19 @@ class ZeroPM(SQLiteClient):
         """
         Fuzzy-match a chemical name and return the matches with their scores.
 
-        Same purpose as :meth:`query_similar_name`, but keeps the matched name
-        and the similarity score instead of discarding them, so callers can tell
-        *what* matched and *how well*.
+        Same purpose as
+        [`query_similar_name`][provesid.zeropm.ZeroPM.query_similar_name], but
+        keeps the matched name and the similarity score instead of discarding
+        them, so callers can tell *what* matched and *how well*.
 
         Uses ``rapidfuzz.fuzz.ratio`` rather than the ``WRatio`` used by
-        :meth:`query_similar_name`. ``WRatio`` includes a partial-ratio term
-        that scores a short name highly whenever it appears anywhere inside the
-        query, which over a list of millions of chemical names is a reliable
-        source of nonsense: ``WRatio("caffiene", "ne")`` is 90 and
-        ``WRatio("zzzznotachemical", "Mica")`` is also 90, while ``ratio`` puts
-        both at 40 and still scores the genuine typo
-        ``ratio("caffiene", "caffeine")`` at 87.5.
+        [`query_similar_name`][provesid.zeropm.ZeroPM.query_similar_name].
+        ``WRatio`` includes a partial-ratio term that scores a short name
+        highly whenever it appears anywhere inside the query, which over a list
+        of millions of chemical names is a reliable source of nonsense:
+        ``WRatio("caffiene", "ne")`` is 90 and ``WRatio("zzzznotachemical",
+        "Mica")`` is also 90, while ``ratio`` puts both at 40 and still scores
+        the genuine typo ``ratio("caffiene", "caffeine")`` at 87.5.
 
         Parameters
         ----------
@@ -449,9 +452,11 @@ class ZeroPM(SQLiteClient):
         """
         Returns identifiers for the chemical whose name best fuzzy-matches *name*.
 
-        The fuzzy counterpart of :meth:`get_id_table_from_name`: use it when the
-        name may be misspelled or formatted differently from the database entry.
-        The table is built for the single best-scoring match.
+        The fuzzy counterpart of
+        [`get_id_table_from_name`][provesid.zeropm.ZeroPM.get_id_table_from_name]:
+        use it when the name may be misspelled or formatted differently from
+        the database entry. The table is built for the single best-scoring
+        match.
 
         Parameters
         ----------
@@ -462,15 +467,16 @@ class ZeroPM(SQLiteClient):
             one is turned into a table.
         score_cutoff : int, optional
             Minimum ``rapidfuzz.fuzz.ratio`` score, 0-100 (default: 80); see
-            :meth:`match_similar_name`.
+            [`match_similar_name`][provesid.zeropm.ZeroPM.match_similar_name].
 
         Returns
         -------
         pandas.DataFrame or None
-            Same columns as :meth:`get_id_table_from_name`, with an extra
-            ``matched_name`` column recording what actually matched, and
-            ``match_score`` holding its similarity. None when nothing scores at
-            or above ``score_cutoff``.
+            Same columns as
+            [`get_id_table_from_name`][provesid.zeropm.ZeroPM.get_id_table_from_name],
+            with an extra ``matched_name`` column recording what actually
+            matched, and ``match_score`` holding its similarity. None when
+            nothing scores at or above ``score_cutoff``.
 
         Examples
         --------
@@ -724,7 +730,7 @@ class ZeroPM(SQLiteClient):
         -------
         str, list, or None
             CAS number, list of CAS numbers, or None if not found; as broad
-            as :meth:`get_cas_from_inchi`
+            as [`get_cas_from_inchi`][provesid.zeropm.ZeroPM.get_cas_from_inchi]
 
         Examples
         --------
@@ -809,7 +815,8 @@ class ZeroPM(SQLiteClient):
         -------
         str, list, or None
             CAS number, list of CAS numbers, or None if not found or the
-            SMILES cannot be parsed; as broad as :meth:`get_cas_from_inchi`
+            SMILES cannot be parsed; as broad as
+            [`get_cas_from_inchi`][provesid.zeropm.ZeroPM.get_cas_from_inchi]
 
         Examples
         --------
@@ -839,7 +846,9 @@ class ZeroPM(SQLiteClient):
         The answer is broad: it is every CAS number that reaches any of the
         structures the name resolved to, at any rank. For
         ``"formaldehyde"`` that is 31 numbers, methane's and carbon's among
-        them. :meth:`get_id_table_from_name` shows where each came from.
+        them.
+        [`get_id_table_from_name`][provesid.zeropm.ZeroPM.get_id_table_from_name]
+        shows where each came from.
 
         Parameters
         ----------
@@ -1527,7 +1536,9 @@ class ZeroPM(SQLiteClient):
         pandas.DataFrame
             DataFrame with columns: 'inchikey', 'inchi', 'inchi_id', 'query_id', 'rank', 'cas', 'sources', 'synonyms'
             Returns None if the InChIKey is not found in the database.
-            Shaped as :meth:`get_id_table_from_inchi` describes.
+            Shaped as
+            [`get_id_table_from_inchi`][provesid.zeropm.ZeroPM.get_id_table_from_inchi]
+            describes.
 
         Examples
         --------
@@ -1714,9 +1725,11 @@ class ZeroPM(SQLiteClient):
         """
         Build the identifier table for one already-resolved query_id.
 
-        This is the shared body of :meth:`get_id_table_from_name` and
-        :meth:`get_id_table_from_similar_name`; the only difference between them
-        is how the ``query_id`` was found.
+        This is the shared body of
+        [`get_id_table_from_name`][provesid.zeropm.ZeroPM.get_id_table_from_name]
+        and
+        [`get_id_table_from_similar_name`][provesid.zeropm.ZeroPM.get_id_table_from_similar_name];
+        the only difference between them is how the ``query_id`` was found.
 
         Parameters
         ----------
@@ -1986,7 +1999,8 @@ class ZeroPM(SQLiteClient):
         -------
         dict
             Dictionary mapping CAS numbers to lists of names, as
-            :meth:`get_names` returns them (empty when not found)
+            [`get_names`][provesid.zeropm.ZeroPM.get_names] returns them (empty
+            when not found)
 
         Examples
         --------
@@ -2011,7 +2025,7 @@ class ZeroPM(SQLiteClient):
         dict
             Dictionary mapping InChIKeys to CAS numbers (or None if not found);
             one number as a string, several as a list, as broad as
-            :meth:`get_cas_from_inchi`
+            [`get_cas_from_inchi`][provesid.zeropm.ZeroPM.get_cas_from_inchi]
 
         Examples
         --------
@@ -2146,8 +2160,9 @@ class ZeroPM(SQLiteClient):
         -------
         list of dict
             List of dictionaries with keys: 'cas', 'inchi', 'inchikey', 'smiles'.
-            ``cas`` is as :meth:`get_cas_from_inchi` returns it. Empty for an
-            invalid SMARTS pattern.
+            ``cas`` is as
+            [`get_cas_from_inchi`][provesid.zeropm.ZeroPM.get_cas_from_inchi]
+            returns it. Empty for an invalid SMARTS pattern.
 
         Warning
         -------
@@ -2334,8 +2349,9 @@ class ZeroPM(SQLiteClient):
         Returns
         -------
         str
-            Path to the created CSV file; see :meth:`export_to_csv` for
-            where a relative ``filename`` goes
+            Path to the created CSV file; see
+            [`export_to_csv`][provesid.zeropm.ZeroPM.export_to_csv] for where a
+            relative ``filename`` goes
 
         Examples
         --------
@@ -2533,8 +2549,8 @@ class ZeroPM(SQLiteClient):
         Note
         ----
         Either source_name or source_id must be provided.
-        :meth:`count_chemicals_by_inventory` counts distinct CAS numbers
-        without building the list.
+        [`count_chemicals_by_inventory`][provesid.zeropm.ZeroPM.count_chemicals_by_inventory]
+        counts distinct CAS numbers without building the list.
 
         Examples
         --------
@@ -2596,7 +2612,8 @@ class ZeroPM(SQLiteClient):
         -------
         list of dict
             List of chemicals with keys: 'cas', 'query_id', 'inchi_id', 'country', 'source_name',
-            ordered by CAS number, repeated as :meth:`query_by_inventory`
+            ordered by CAS number, repeated as
+            [`query_by_inventory`][provesid.zeropm.ZeroPM.query_by_inventory]
             describes
 
         Raises
@@ -2673,7 +2690,8 @@ class ZeroPM(SQLiteClient):
         -------
         list of dict
             List of chemicals with keys: 'cas', 'query_id', 'inchi_id', 'region', 'country', 'source_name',
-            ordered by CAS number, repeated as :meth:`query_by_inventory`
+            ordered by CAS number, repeated as
+            [`query_by_inventory`][provesid.zeropm.ZeroPM.query_by_inventory]
             describes
 
         Raises
@@ -3013,7 +3031,8 @@ class ZeroPM(SQLiteClient):
 
     def zeropm_id_to_inchi_id(self, zeropm_id):
         """
-        Get the inchi_id for a zeropm_id — the reverse of :meth:`get_zeropm_id`.
+        Get the inchi_id for a zeropm_id — the reverse of
+        [`get_zeropm_id`][provesid.zeropm.ZeroPM.get_zeropm_id].
 
         Parameters
         ----------
@@ -3079,6 +3098,7 @@ class ZeroPM(SQLiteClient):
         -------
         dict or None
             Dictionary with probability data:
+
             - probability_of_not_p: Probability of NOT persistent
             - probability_of_p_or_vp: Probability of persistent OR very persistent
             - probability_of_p: Probability of persistent
@@ -3110,7 +3130,8 @@ class ZeroPM(SQLiteClient):
         Note
         ----
         ``pm_probabilities`` is keyed on ``inchi_id``, so a ``zeropm_id`` is
-        translated first via :meth:`zeropm_id_to_inchi_id`.
+        translated first via
+        [`zeropm_id_to_inchi_id`][provesid.zeropm.ZeroPM.zeropm_id_to_inchi_id].
         """
         if cas is None and inchi_id is None and zeropm_id is None:
             raise ValueError("One of cas, inchi_id or zeropm_id must be provided")
@@ -3244,6 +3265,7 @@ class ZeroPM(SQLiteClient):
         -------
         list of dict
             List of component information with keys:
+
             - component_id: Component identifier
             - component_frequency: How often the component appears
             - inchi_id: InChI identifier of the component
@@ -3292,12 +3314,13 @@ class ZeroPM(SQLiteClient):
         -------
         dict or None
             Dictionary with:
+
             - mc_id: Multi-component identifier
             - inchi_id: InChI identifier of the multi-component
             - inchi: InChI of the multi-component
             - inchikey: InChIKey of the multi-component
             - components: List of component dictionaries, as
-              :meth:`get_components` returns them
+              [`get_components`][provesid.zeropm.ZeroPM.get_components] returns them
             Returns None if not a multi-component substance. A CAS number is
             resolved to its rank-1 structure first.
 
@@ -3415,6 +3438,7 @@ class ZeroPM(SQLiteClient):
         -------
         list of dict or None
             List of consensus scores from different inventories, each with:
+
             - inventory_id: Inventory identifier
             - consensus_score: Consensus score value
             - consensus_count: Count of consensus

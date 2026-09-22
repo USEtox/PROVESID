@@ -1,19 +1,22 @@
 """
 The bulk datasets PROVESID reads: what they are, and how they get here.
 
-Two halves. :func:`download_file` is the transport --- one resumable,
-checksummed downloader shared by every dataset in the package. The registry
-below is the manager: :func:`status` says what is on disk, :func:`plan` what a
-download would cost, :func:`fetch` installs a dataset by name and
-:func:`remove` reclaims its space. The second half exists because the first
-one worked too well: a clean machine running one CAS lookup through
-:class:`~provesid.Search` used to spend ~32 GB without asking anyone.
+Two halves. [`download_file`][provesid.datasets.download_file] is the transport
+--- one resumable, checksummed downloader shared by every dataset in the
+package. The registry below is the manager:
+[`status`][provesid.datasets.status] says what is on disk,
+[`plan`][provesid.datasets.plan] what a download would cost,
+[`fetch`][provesid.datasets.fetch] installs a dataset by name and
+[`remove`][provesid.datasets.remove] reclaims its space. The second half exists
+because the first one worked too well: a clean machine running one CAS lookup
+through [`Search`][provesid.search.Search] used to spend ~32 GB without asking
+anyone.
 
-:mod:`provesid.http` is the transport for web *APIs* --- small requests, paced
-at five a second, retried a few times.  The bulk datasets are a different
-problem entirely: ChEMBL's archive is 5.8 GB, PubChem's identifier database
-2.2 GB, and what those transfers want is not a pacer but *resumption*, a
-checksum and an atomic rename.  So they were deliberately left out of the
+[`provesid.http`][provesid.http] is the transport for web *APIs* --- small
+requests, paced at five a second, retried a few times.  The bulk datasets are a
+different problem entirely: ChEMBL's archive is 5.8 GB, PubChem's identifier
+database 2.2 GB, and what those transfers want is not a pacer but *resumption*,
+a checksum and an atomic rename.  So they were deliberately left out of the
 ``http.py`` migration --- which left the largest transfers in the package as
 the only ones with no shared implementation.
 
@@ -37,13 +40,13 @@ a file truncated in its interior opens cleanly and fails much later, on the
 first query that touches a missing page, which a user reads as a data problem
 rather than as a download problem.
 
-:func:`download_file` is the one implementation.  It resumes against a
-``.part`` file with an HTTP ``Range`` request, verifies an MD5 when the server
-publishes one, checks the byte count it actually received against the one the
-server declared, hands the finished file to the caller's own validity check,
-and only then moves it into place.  Nothing is ever renamed onto the
-destination until every one of those has passed, so a failed download can
-never replace a good database with a broken one.
+[`download_file`][provesid.datasets.download_file] is the one implementation.
+It resumes against a ``.part`` file with an HTTP ``Range`` request, verifies
+an MD5 when the server publishes one, checks the byte count it actually
+received against the one the server declared, hands the finished file to the
+caller's own validity check, and only then moves it into place.  Nothing is
+ever renamed onto the destination until every one of those has passed, so a
+failed download can never replace a good database with a broken one.
 
 Examples:
     >>> from provesid.datasets import download_file
@@ -81,29 +84,32 @@ from .utils import user_dataset_path
 
 logger = logging.getLogger(__name__)
 
-#: Bytes read from the socket, and from disk while checksumming, at a time.
-#: A megabyte is large enough that the per-chunk work disappears against the
-#: transfer and small enough that the progress bar still moves.
 CHUNK_SIZE = 1024 * 1024
+"""Bytes read from the socket, and from disk while checksumming, at a time.
+A megabyte is large enough that the per-chunk work disappears against the
+transfer and small enough that the progress bar still moves.
+"""
 
-#: Suffix of the partial file a download accumulates into.  It sits beside the
-#: destination rather than in a temporary directory so that a resumed download
-#: finds it, and so that the final move is a rename within one filesystem.
 PART_SUFFIX = ".part"
+"""Suffix of the partial file a download accumulates into.  It sits beside the
+destination rather than in a temporary directory so that a resumed download
+finds it, and so that the final move is a rename within one filesystem.
+"""
 
-#: Suffix of the marker recording which URL a partial file came from.  Without
-#: it, a ``.part`` left over from a different release --- or a different
-#: dataset that happens to share a destination --- would be resumed, splicing
-#: two files together.  A checksum would catch that, but only the PubChem FTP
-#: mirror publishes one; the Zenodo downloads have no such backstop.
 SOURCE_SUFFIX = PART_SUFFIX + ".source"
+"""Suffix of the marker recording which URL a partial file came from.  Without
+it, a ``.part`` left over from a different release --- or a different
+dataset that happens to share a destination --- would be resumed, splicing
+two files together.  A checksum would catch that, but only the PubChem FTP
+mirror publishes one; the Zenodo downloads have no such backstop.
+"""
 
 
 class DownloadError(ServiceError):
     """
     A bulk dataset could not be downloaded, or arrived damaged.
 
-    A :class:`~provesid.http.ServiceError` like any other failure this package
+    A [`ServiceError`][provesid.http.ServiceError] like any other failure this package
     reports from a remote service, so a caller can catch the whole family; the
     separate class exists because the recovery differs. An API call that fails
     is retried or abandoned, while a download that fails has usually left a
@@ -504,7 +510,7 @@ def _host_of(url: str) -> str:
 #
 # Everything above moves bytes; everything below answers "which bytes, and do I
 # already have them?".  On a clean machine one CAS lookup through
-# :class:`~provesid.Search` used to fetch ~32 GB without asking, because every
+# ``Search`` used to fetch ~32 GB without asking, because every
 # source client defaults to ``auto_download=True`` and Search constructs all of
 # them.  The package is for researchers on laptops, where 32 GB is often the
 # whole free disk, so the download has to become something the user asks for.
@@ -513,7 +519,7 @@ def _host_of(url: str) -> str:
 # them: their filenames, their sizes, and what each one is for.  The client
 # classes cannot serve as that place --- constructing one is exactly the act
 # we are trying to avoid --- so the facts live here, in a table, and the
-# clients are imported lazily inside :func:`fetch`.
+# clients are imported lazily inside ``fetch``.
 # ──────────────────────────────────────────────────────────────────────────────
 
 _MB = 1024 ** 2
@@ -526,7 +532,7 @@ class Dataset:
 
     Attributes:
         name: Key used everywhere in this module, and the same string
-            :class:`~provesid.Search` uses for the source it feeds.
+            [`Search`][provesid.search.Search] uses for the source it feeds.
         title: Human-readable name for logs and tables.
         role: One line on what the dataset contributes to a search.
         patterns: Filenames, relative to the data directory, whose presence
@@ -572,26 +578,16 @@ class Dataset:
                                max(self.download_bytes, self.resident_bytes))
 
 
-#: The PubChem identifier database as :mod:`provesid.pubchem_ftp` builds it,
-#: measured on the first real build (2026-09-01 snapshot): the eight source
-#: files, the finished database, and the largest file, ``CID-InChI-Key.gz``,
-#: which is the only one on disk beside the database at the worst moment.
 PUBCHEM_FTP_DOWNLOAD = 15_374_591_318
+"""The PubChem identifier database as
+[`provesid.pubchem_ftp`][provesid.pubchem_ftp] builds it, measured on the first
+real build (2026-09-01 snapshot): the eight source files, the finished
+database, and the largest file, ``CID-InChI-Key.gz``, which is the only one on
+disk beside the database at the worst moment.
+"""
 PUBCHEM_FTP_RESIDENT = 2_484_281_344
 PUBCHEM_FTP_LARGEST_FILE = 7_361_682_757
 
-#: The five datasets, in the order :class:`~provesid.Search` benefits from them:
-#: the three primary sources first, then ChEMBL, which only enriches a structure
-#: the others already found, then ZeroPM, which is off by default.
-#:
-#: Sizes were measured on 2026-09-20 from the copies on a machine that had all
-#: five: ChEBI SDF 879.7 MiB plus a 74.5 MiB index, CompTox 816.6 MiB plus a
-#: 290.3 MiB name index, PubChem
-#: as the FTP build leaves it (see ``PUBCHEM_FTP_RESIDENT``), ChEMBL 36 2.42 GiB as the extract an install now keeps (27.7 GiB
-#: as the full release it is built from, out of a 5.8 GB archive), ZeroPM
-#: 438.7 MiB. They
-#: are advisory --- a later release is a little larger --- and are used to tell
-#: the user what a download will cost before it starts, not to check anything.
 DATASETS: Dict[str, Dataset] = {
     "pubchem": Dataset(
         name="pubchem",
@@ -683,22 +679,37 @@ DATASETS: Dict[str, Dataset] = {
         source="ZeroPM-H2020 GitHub repository",
     ),
 }
+"""The five datasets, in the order [`Search`][provesid.search.Search] benefits
+from them: the three primary sources first, then ChEMBL, which only enriches a
+structure the others already found, then ZeroPM, which is off by default.
 
-#: Datasets :class:`~provesid.Search` queries unless ``use_zeropm=True``.
+Sizes were measured on 2026-09-20 from the copies on a machine that had all
+five: ChEBI SDF 879.7 MiB plus a 74.5 MiB index, CompTox 816.6 MiB plus a 290.3
+MiB name index, PubChem 2.31 GiB as the FTP build leaves it (see
+``PUBCHEM_FTP_RESIDENT``), ChEMBL 36 2.42 GiB as the extract an install now
+keeps (27.7 GiB as the full release it is built from, out of a 5.8 GB archive),
+ZeroPM 438.7 MiB. They are advisory --- a later release is a little larger ---
+and are used to tell the user what a download will cost before it starts, not
+to check anything.
+"""
+
 DEFAULT_DATASETS: Tuple[str, ...] = ("pubchem", "comptox", "chebi", "chembl")
+"""Datasets [`Search`][provesid.search.Search] queries unless ``use_zeropm=True``."""
 
 
 class MissingDatasetError(ServiceError):
     """
     A dataset was needed and is not on disk.
 
-    Raised by :func:`require` --- and so by ``Search(datasets="required")`` ---
-    instead of downloading tens of gigabytes on the user's behalf. The message
-    names every missing dataset, what it costs, and the exact :func:`fetch`
-    call that would install it.
+    Raised by [`require`][provesid.datasets.require] --- and so by
+    ``Search(datasets="required")`` --- instead of downloading tens of
+    gigabytes on the user's behalf. The message names every missing dataset,
+    what it costs, and the exact [`fetch`][provesid.datasets.fetch] call that
+    would install it.
 
-    A :class:`~provesid.http.ServiceError` so that the whole family stays
-    catchable through one base, as :class:`DownloadError` is.
+    A [`ServiceError`][provesid.http.ServiceError] so that the whole family stays
+    catchable through one base, as
+    [`DownloadError`][provesid.datasets.DownloadError] is.
 
     Examples:
         >>> import tempfile
@@ -740,7 +751,7 @@ def dataset_names() -> List[str]:
     Names of every dataset in the registry, in registry order.
 
     Returns:
-        The keys of :data:`DATASETS`.
+        The keys of [`DATASETS`][provesid.datasets.DATASETS].
 
     Examples:
         >>> dataset_names()
@@ -812,8 +823,9 @@ def dataset_files(name: str, data_dir: Optional[str] = None,
         data_dir: Directory to look in; None for the default.
         include_extras: Include derived and leftover files --- ChEBI's index, a
             ``.part`` from an interrupted download. They occupy real space, so
-            :func:`status` and :func:`remove` want them; :func:`is_present`
-            does not.
+            [`status`][provesid.datasets.status] and
+            [`remove`][provesid.datasets.remove] want them;
+            [`is_present`][provesid.datasets.is_present] does not.
 
     Returns:
         Absolute paths, sorted, of the files that exist.
@@ -951,20 +963,22 @@ def _preferred_file(name: str, paths: List[str]) -> str:
     The one file a client would open, out of several a dataset may have.
 
     Only ChEMBL and ZeroPM can have more than one: ChEMBL names its file after
-    the release and leaves older ones in place, and :meth:`CheMBL.compact`
-    writes an extract beside the full release it was built from. The rule here
-    is :meth:`CheMBL._find_local_database`'s --- newest release wins, and at
-    equal releases the extract, since the two answer identically and one costs
-    a tenth of the page cache.
+    the release and leaves older ones in place, and
+    [`CheMBL.compact`][provesid.chembl.CheMBL.compact] writes an extract beside
+    the full release it was built from. The rule here is
+    `CheMBL._find_local_database`'s --- newest release wins, and at equal
+    releases the extract, since the two answer identically and one costs a
+    tenth of the page cache.
 
     It reads the rule off the filename rather than opening each candidate, so
     a status table stays a directory listing. An extract renamed to hide its
     ``_provesid`` suffix would be misreported here and opened anyway by
-    :class:`~provesid.CheMBL`, which checks the file itself.
+    [`CheMBL`][provesid.chembl.CheMBL], which checks the file itself.
 
     Args:
         name: Dataset name.
-        paths: Candidate paths, as :func:`dataset_files` returns them.
+        paths: Candidate paths, as
+            [`dataset_files`][provesid.datasets.dataset_files] returns them.
 
     Returns:
         The preferred path, or ``""`` when there are no candidates.
@@ -1060,16 +1074,17 @@ def status(names: Optional[Union[str, Iterable[str]]] = None,
 def plan(names: Optional[Union[str, Iterable[str]]] = None,
          data_dir: Optional[str] = None, *, force: bool = False) -> pd.DataFrame:
     """
-    What :func:`fetch` would download, and how much disk it would take.
+    What [`fetch`][provesid.datasets.fetch] would download, and how much disk
+    it would take.
 
     The question §4.1 of the refactor plan says nobody was asked: a clean
     machine used to spend 32 GB on one CAS lookup without a word. Run this
     first and the number is on screen before anything is transferred.
 
-    The sizes are the measured ones in :data:`DATASETS`, so they are advisory:
-    a newer ChEMBL release is a little larger than the one they were taken
-    from. They are the right order of magnitude, which is what the decision
-    turns on.
+    The sizes are the measured ones in
+    [`DATASETS`][provesid.datasets.DATASETS], so they are advisory: a newer
+    ChEMBL release is a little larger than the one they were taken from. They
+    are the right order of magnitude, which is what the decision turns on.
 
     Args:
         names: Dataset name, names, or None for every dataset.
@@ -1131,9 +1146,6 @@ def plan(names: Optional[Union[str, Iterable[str]]] = None,
     return frame
 
 
-#: Import paths of the client classes, resolved only when :func:`fetch` runs.
-#: The client modules import *this* one for :func:`download_file`, so the
-#: registry cannot import them back at module level.
 _CLIENTS: Dict[str, Tuple[str, str]] = {
     "pubchem": (".pubchem_id", "PubChemID"),
     "comptox": (".comptox", "CompToxID"),
@@ -1141,6 +1153,11 @@ _CLIENTS: Dict[str, Tuple[str, str]] = {
     "chembl": (".chembl", "CheMBL"),
     "zeropm": (".zeropm", "ZeroPM"),
 }
+"""Import paths of the client classes, resolved only when
+[`fetch`][provesid.datasets.fetch] runs. The client modules import *this* one
+for [`download_file`][provesid.datasets.download_file], so the registry cannot
+import them back at module level.
+"""
 
 
 def _client_class(name: str) -> type:
@@ -1151,7 +1168,7 @@ def _client_class(name: str) -> type:
         name: Dataset name.
 
     Returns:
-        The class, e.g. :class:`~provesid.PubChemID` for ``"pubchem"``.
+        The class, e.g. [`PubChemID`][provesid.pubchem_id.PubChemID] for ``"pubchem"``.
     """
     module_name, class_name = _CLIENTS[name]
     module = importlib.import_module(module_name, package=__package__)
@@ -1255,9 +1272,9 @@ def remove(names: Union[str, Iterable[str]], data_dir: Optional[str] = None,
     Deletes the dataset's own files and everything derived from them --- an
     index, a half-finished ``.part``, ChEMBL's extracted archive --- because
     leaving those behind reclaims a fraction of the space and confuses the next
-    :func:`status`. For ChEMBL that means *every* release and extract in the
-    directory, not only the one a client would open; ``dry_run=True`` lists
-    them first.
+    [`status`][provesid.datasets.status]. For ChEMBL that means *every* release
+    and extract in the directory, not only the one a client would open;
+    ``dry_run=True`` lists them first.
 
     This is destructive and there is no undo beyond fetching again, so pass
     ``dry_run=True`` first to see the list. Naming the datasets explicitly is
@@ -1319,7 +1336,7 @@ def require(names: Union[str, Iterable[str]], data_dir: Optional[str] = None) ->
     What ``Search(datasets="required")`` calls, and what any code that must not
     silently run on fewer sources should call. The message is the useful part:
     it names each missing dataset with its size and ends with the exact
-    :func:`fetch` call, so the user never has to look one up.
+    [`fetch`][provesid.datasets.fetch] call, so the user never has to look one up.
 
     Args:
         names: Dataset name or names.

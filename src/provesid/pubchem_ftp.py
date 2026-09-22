@@ -1,8 +1,9 @@
 """
 Build the PubChem identifier database from PubChem's own FTP files.
 
-:class:`~provesid.PubChemID` answers CAS, name, InChIKey and formula lookups
-from one SQLite file, ``pubchem_id.db``. That file used to come from a manual
+[`PubChemID`][provesid.pubchem_id.PubChemID] answers CAS, name, InChIKey and
+formula lookups from one SQLite file, ``pubchem_id.db``. That file used to come
+from a manual
 pipeline: someone downloaded a CSV from PubChem's classification browser,
 pulled CAS numbers out of its free-text synonym column with a regular
 expression, and uploaded the result to Zenodo. Nothing recorded which PubChem
@@ -15,8 +16,9 @@ FTP site, in one call, from a dated monthly snapshot:
 
 * **Scope** comes from ``CID-Identifiers.tsv.gz``, PubChem's curated mapping of
   compounds to third-party identifiers. Its ``CAS`` rows, each checked with
-  :func:`provesid.utils.check_CASRN`, decide which compounds go in --- about
-  1.43 M, with 123 CAS rows rejected where the regex let 17 379 through.
+  [`provesid.utils.check_CASRN`][provesid.utils.check_CASRN], decide which
+  compounds go in --- about 1.43 M, with 123 CAS rows rejected where the regex
+  let 17 379 through.
 * **Columns** come from one file each: title, formula and masses, isomeric
   SMILES, IUPAC name, InChI and InChIKey, creation date, and the filtered
   synonym list.
@@ -75,31 +77,31 @@ __all__ = [
     "molecular_weight",
 ]
 
-#: Root of PubChem's compound files. The HTTPS mirror of the FTP site answers
-#: ``Range`` requests and publishes an ``.md5`` beside every file, which is
-#: what :func:`~provesid.datasets.download_file` needs to resume and verify.
 FTP_ROOT = "https://ftp.ncbi.nlm.nih.gov/pubchem/Compound"
+"""Root of PubChem's compound files. The HTTPS mirror of the FTP site answers
+``Range`` requests and publishes an ``.md5`` beside every file, which is
+what [`download_file`][provesid.datasets.download_file] needs to resume and verify.
+"""
 
-#: Release name meaning "the newest monthly snapshot", the default.
 LATEST = "latest"
+"""Release name meaning "the newest monthly snapshot", the default."""
 
-#: Release name meaning PubChem's rolling ``Compound/Extras/``, regenerated with
-#: every dump. Fresher than any snapshot, but not reproducible: the files can
-#: change between two builds, or during one.
 CURRENT = "current"
+"""Release name meaning PubChem's rolling ``Compound/Extras/``, regenerated with
+every dump. Fresher than any snapshot, but not reproducible: the files can
+change between two builds, or during one.
+"""
 
-#: Version of the schema and the procedure this module writes, recorded in
-#: every database it builds. Bump it when either changes.
 BUILDER_VERSION = 1
+"""Version of the schema and the procedure this module writes, recorded in
+every database it builds. Bump it when either changes.
+"""
 
-#: Default name of the directory, beside the database, that source files are
-#: downloaded into, one subdirectory per release.
 DOWNLOAD_DIRNAME = "pubchem_ftp"
+"""Default name of the directory, beside the database, that source files are
+downloaded into, one subdirectory per release.
+"""
 
-#: Identifier types from ``CID-Identifiers.tsv.gz`` stored in ``xrefs``, mapped
-#: to the short name the table uses. These are the identifiers
-#: :class:`~provesid.Search` otherwise reconciles across sources by matching
-#: structures; PubChem publishes the links directly.
 XREF_TYPES: Dict[str, str] = {
     "DSSTox Substance ID": "dtxsid",
     "ChEBI ID": "chebi",
@@ -107,15 +109,21 @@ XREF_TYPES: Dict[str, str] = {
     "European Community (EC) Number": "ec",
     "UNII": "unii",
 }
+"""Identifier types from ``CID-Identifiers.tsv.gz`` stored in ``xrefs``, mapped
+to the short name the table uses. These are the identifiers
+[`Search`][provesid.search.Search] otherwise reconciles across sources by matching
+structures; PubChem publishes the links directly.
+"""
 
 _CAS_TYPE = b"CAS"
 
-#: Rows written per ``executemany``. Large enough that the statement overhead
-#: vanishes, small enough that a batch of synonyms stays a few megabytes.
 _BATCH_ROWS = 50_000
+"""Rows written per ``executemany``. Large enough that the statement overhead
+vanishes, small enough that a batch of synonyms stays a few megabytes.
+"""
 
-#: Lines between progress-bar updates while a file is streamed.
 _PROGRESS_EVERY = 1_000_000
+"""Lines between progress-bar updates while a file is streamed."""
 
 _RELEASE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _LISTED_RELEASE = re.compile(r'href="(\d{4}-\d{2}-\d{2})/"')
@@ -136,9 +144,6 @@ _LISTED_RELEASE = re.compile(r'href="(\d{4}-\d{2}-\d{2})/"')
 # molecular weights in PubChem's 2026-01 CAS export.
 # ──────────────────────────────────────────────────────────────────────────────
 
-#: Standard atomic weights used for ``mw``, by element symbol. Elements missing
-#: here (the radioactive ones without a standard weight) fall back to RDKit's
-#: periodic table.
 ATOMIC_WEIGHTS: Dict[str, float] = {
     "H": 1.00794, "He": 4.002602, "Li": 6.941, "Be": 9.012182, "B": 10.812,
     "C": 12.0107, "N": 14.0067, "O": 15.9994, "F": 18.9984032, "Ne": 20.1797,
@@ -160,13 +165,19 @@ ATOMIC_WEIGHTS: Dict[str, float] = {
     "Au": 196.966569, "Hg": 200.592, "Tl": 204.3833, "Pb": 207.2,
     "Bi": 208.98040, "Th": 232.03806, "Pa": 231.03588, "U": 238.02891,
 }
+"""Standard atomic weights used for ``mw``, by element symbol. Elements missing
+here (the radioactive ones without a standard weight) fall back to RDKit's
+periodic table.
+"""
 
 _FORMULA_TOKEN = re.compile(r"([A-Z][a-z]?)(\d*)")
 _FORMULA_SHAPE = re.compile(r"^(?:[A-Z][a-z]?\d*)+(?:[+-]\d*)?$")
 
 
 def _atomic_weight(symbol: str) -> Optional[float]:
-    """Weight of one element from :data:`ATOMIC_WEIGHTS`, or RDKit's, or None."""
+    """Weight of one element from
+    [`ATOMIC_WEIGHTS`][provesid.pubchem_ftp.ATOMIC_WEIGHTS], or RDKit's, or
+    None."""
     weight = ATOMIC_WEIGHTS.get(symbol)
     if weight is not None:
         return weight
@@ -188,9 +199,9 @@ def molecular_weight(formula: str) -> Optional[float]:
     """
     Molecular weight of a PubChem molecular formula, in g/mol.
 
-    Computed with :data:`ATOMIC_WEIGHTS` and rounded to two decimals. A charge
-    suffix (``+``, ``-2``) is ignored, as PubChem ignores it: the weight of an
-    ion is the weight of its atoms.
+    Computed with [`ATOMIC_WEIGHTS`][provesid.pubchem_ftp.ATOMIC_WEIGHTS] and
+    rounded to two decimals. A charge suffix (``+``, ``-2``) is ignored, as
+    PubChem ignores it: the weight of an ion is the weight of its atoms.
 
     The result agrees with PubChem's own ``MolecularWeight`` to the second
     decimal for most compounds, but PubChem rounds some weights more coarsely
@@ -234,7 +245,8 @@ def _isotopic_molecular_weight(smiles: str) -> Optional[float]:
     Molecular weight of an isotopically labelled structure, from its SMILES.
 
     Labelled atoms weigh their isotope's mass; every other atom, implicit
-    hydrogens included, weighs its entry in :data:`ATOMIC_WEIGHTS`.
+    hydrogens included, weighs its entry in
+    [`ATOMIC_WEIGHTS`][provesid.pubchem_ftp.ATOMIC_WEIGHTS].
 
     Args:
         smiles: A SMILES carrying at least one isotope label.
@@ -280,7 +292,8 @@ def list_releases(*, base_url: Optional[str] = None,
     rolling ``Compound/Extras/`` --- is always listed last.
 
     Args:
-        base_url: PubChem compound root. Defaults to :data:`FTP_ROOT`.
+        base_url: PubChem compound root. Defaults to
+            [`FTP_ROOT`][provesid.pubchem_ftp.FTP_ROOT].
         session: ``requests.Session`` to fetch through.
         timeout: Seconds to wait for the listing.
 
@@ -315,7 +328,8 @@ def resolve_release(release: str = LATEST, *, base_url: Optional[str] = None,
     Args:
         release: ``"latest"`` for the newest monthly snapshot, ``"current"``
             for the rolling dump, or a snapshot date such as ``"2026-09-01"``.
-        base_url: PubChem compound root. Defaults to :data:`FTP_ROOT`.
+        base_url: PubChem compound root. Defaults to
+            [`FTP_ROOT`][provesid.pubchem_ftp.FTP_ROOT].
         session: ``requests.Session`` to fetch the listing through.
 
     Returns:
@@ -358,9 +372,10 @@ def release_url(release: str, *, base_url: Optional[str] = None) -> str:
     URL of a concrete release's directory: ``Monthly/<date>`` or the root.
 
     Args:
-        release: ``"current"`` or a snapshot date, as :func:`resolve_release`
-            returns.
-        base_url: PubChem compound root. Defaults to :data:`FTP_ROOT`.
+        release: ``"current"`` or a snapshot date, as
+            [`resolve_release`][provesid.pubchem_ftp.resolve_release] returns.
+        base_url: PubChem compound root. Defaults to
+            [`FTP_ROOT`][provesid.pubchem_ftp.FTP_ROOT].
 
     Returns:
         The directory URL, without a trailing slash.
@@ -381,9 +396,10 @@ def extras_url(release: str, *, base_url: Optional[str] = None) -> str:
     URL of the ``Extras/`` directory of a concrete release.
 
     Args:
-        release: ``"current"`` or a snapshot date, as :func:`resolve_release`
-            returns.
-        base_url: PubChem compound root. Defaults to :data:`FTP_ROOT`.
+        release: ``"current"`` or a snapshot date, as
+            [`resolve_release`][provesid.pubchem_ftp.resolve_release] returns.
+        base_url: PubChem compound root. Defaults to
+            [`FTP_ROOT`][provesid.pubchem_ftp.FTP_ROOT].
 
     Returns:
         The directory URL, without a trailing slash.
@@ -433,9 +449,6 @@ class SourceFile:
     approx_bytes: int
 
 
-#: Every file the builder can read, in the order it reads them. The identifier
-#: file comes first because it decides which compounds are in scope; the rest
-#: are filtered by that decision.
 SOURCE_FILES: Tuple[SourceFile, ...] = (
     SourceFile("identifiers", "CID-Identifiers.tsv.gz", (), 2, 98_179_955),
     SourceFile("date", "CID-Date.gz", ("cidcdate",), 1, 330_091_504),
@@ -447,6 +460,10 @@ SOURCE_FILES: Tuple[SourceFile, ...] = (
     SourceFile("inchi", "CID-InChI-Key.gz", ("inchi", "inchikey"), 2, 7_361_682_757),
     SourceFile("synonyms", "CID-Synonym-filtered.gz", (), 1, 968_608_795),
 )
+"""Every file the builder can read, in the order it reads them. The identifier
+file comes first because it decides which compounds are in scope; the rest
+are filtered by that decision.
+"""
 
 _FILES = {source.key: source for source in SOURCE_FILES}
 
@@ -461,7 +478,8 @@ def selected_files(*, include_inchi: bool = True,
         include_synonyms: Whether the synonym list is included.
 
     Returns:
-        The :class:`SourceFile` entries, a subset of :data:`SOURCE_FILES`.
+        The [`SourceFile`][provesid.pubchem_ftp.SourceFile] entries, a subset
+        of [`SOURCE_FILES`][provesid.pubchem_ftp.SOURCE_FILES].
 
     Examples:
         >>> " ".join(f.key for f in selected_files(include_inchi=False))
@@ -479,10 +497,6 @@ def selected_files(*, include_inchi: bool = True,
 # Schema
 # ──────────────────────────────────────────────────────────────────────────────
 
-#: The ``compounds``, ``cas_numbers`` and ``synonyms`` tables are the ones the
-#: Zenodo database has always had, so every query in
-#: :class:`~provesid.PubChemID` runs unchanged; the eight descriptor columns
-#: are gone and ``monoisotopicmass`` is new.
 _SCHEMA = """
 CREATE TABLE compounds (
     cid INTEGER PRIMARY KEY,
@@ -528,9 +542,12 @@ CREATE TABLE provenance_files (
     rows_kept INTEGER
 );
 """
+"""The ``compounds``, ``cas_numbers`` and ``synonyms`` tables are the ones the
+Zenodo database has always had, so every query in
+[`PubChemID`][provesid.pubchem_id.PubChemID] runs unchanged; the eight
+descriptor columns are gone and ``monoisotopicmass`` is new.
+"""
 
-#: Built after the tables are filled, which is several times faster than
-#: maintaining them row by row. The names are the Zenodo database's.
 _INDEXES = """
 CREATE INDEX idx_compounds_inchikey ON compounds(inchikey);
 CREATE INDEX idx_compounds_inchi ON compounds(inchi);
@@ -541,6 +558,9 @@ CREATE INDEX idx_synonyms_synonym ON synonyms(synonym);
 CREATE INDEX idx_synonyms_cid ON synonyms(cid);
 CREATE INDEX idx_xrefs_cid ON xrefs(cid);
 CREATE INDEX idx_xrefs_identifier ON xrefs(identifier);
+"""
+"""Built after the tables are filled, which is several times faster than
+maintaining them row by row. The names are the Zenodo database's.
 """
 
 
@@ -588,8 +608,8 @@ def build_pubchem_id_db(
 
     Args:
         db_path: Where the database goes. Defaults to ``pubchem_id.db`` in the
-            per-user dataset directory, where :class:`~provesid.PubChemID`
-            looks for it.
+            per-user dataset directory, where
+            [`PubChemID`][provesid.pubchem_id.PubChemID] looks for it.
         release: ``"latest"`` (default) for the newest monthly snapshot, a
             snapshot date such as ``"2026-09-01"``, or ``"current"`` for the
             rolling dump. A snapshot is frozen and makes the build
@@ -601,8 +621,9 @@ def build_pubchem_id_db(
             download, but RDKit's InChI, not PubChem's, and a much longer
             build, since every structure is parsed.
         include_synonyms: Include the synonym table, which
-            :meth:`~provesid.PubChemID.search_by_name` searches. False saves a
-            1 GB download and most of the database's size.
+            [`search_by_name`][provesid.pubchem_id.PubChemID.search_by_name]
+            searches. False saves a 1 GB download and most of the database's
+            size.
         keep_downloads: Keep each source file after it has been read, in
             ``download_dir``. A later build of the same release then reuses
             them without downloading again.
@@ -610,8 +631,9 @@ def build_pubchem_id_db(
             ``pubchem_ftp/<release>/`` beside the database.
         force: Replace a database already at ``db_path``.
         progress: Show progress bars.
-        base_url: PubChem compound root. Defaults to :data:`FTP_ROOT`; a
-            mirror, or a local server in a test, goes here.
+        base_url: PubChem compound root. Defaults to
+            [`FTP_ROOT`][provesid.pubchem_ftp.FTP_ROOT]; a mirror, or a local
+            server in a test, goes here.
         session: ``requests.Session`` to download through.
 
     Returns:
@@ -745,7 +767,7 @@ class _Build:
     # ── lifecycle ──────────────────────────────────────────────────────────
 
     def run(self, files: List[SourceFile], *, derive_inchi: bool, timestamp: str) -> None:
-        """Build the whole database at :attr:`path`."""
+        """Build the whole database at `path`."""
         self.discard()
         self.connection = sqlite3.connect(self.path)
         # Nothing reads this file until it is renamed into place, and a crash

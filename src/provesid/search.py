@@ -1,17 +1,19 @@
 """PROVESID Search module — unified chemical identifier resolver.
 
-Provides the :class:`Search` class for resolving chemical identifiers across multiple
-offline databases (ChEBI, CompTox, PubChemID, ChEMBL) with structure-aware
-matching, confidence scoring, fuzzy name search, Tanimoto similarity search,
-InChIKey-skeleton matching, and salt/solvent stripping.
+Provides the [`Search`][provesid.search.Search] class for resolving chemical
+identifiers across multiple offline databases (ChEBI, CompTox, PubChemID,
+ChEMBL) with structure-aware matching, confidence scoring, fuzzy name search,
+Tanimoto similarity search, InChIKey-skeleton matching, and salt/solvent
+stripping.
 
 The datasets these sources read are large --- ~21 GiB to download and ~6.7 GiB
 installed, PubChem's being built from 14.3 GiB of FTP files that are deleted as
 they are read, and ChEMBL being compacted from 27.7 GiB to 2.4 GiB as it
-arrives --- and none of them is downloaded on the caller's behalf.  :class:`Search` queries whatever is installed and reports what is
-missing; :mod:`provesid.datasets` installs them by name.  Pass
-``datasets="auto"`` to download what is missing, or ``datasets="required"`` to
-refuse to run on a partial set.
+arrives --- and none of them is downloaded on the caller's behalf.
+[`Search`][provesid.search.Search] queries whatever is installed and reports
+what is missing; [`provesid.datasets`][provesid.datasets] installs them by
+name.  Pass ``datasets="auto"`` to download what is missing, or
+``datasets="required"`` to refuse to run on a partial set.
 
 No socket is opened unless ``online_fallback=True``.  With it, a query that no
 offline source answers is asked of PubChem's PUG-REST service and the NCI/CADD
@@ -25,8 +27,8 @@ are harvested from regulatory inventories rather than curated compound-by-compou
 so its name→structure mappings are noisier than the other four sources and, being
 counted as an independent vote, they used to push wrong structures up the
 corroboration ranking.  The ZeroPM client itself is untouched and remains available
-as :class:`~provesid.ZeroPM`; pass ``use_zeropm=True`` to let :class:`Search` query
-it again.
+as [`ZeroPM`][provesid.zeropm.ZeroPM]; pass ``use_zeropm=True`` to let
+[`Search`][provesid.search.Search] query it again.
 
 Supported identifier types:
 
@@ -162,7 +164,6 @@ _SUPPORT_FACTOR: Dict[int, float] = {
 }
 _SUPPORT_FACTOR_MAX = 1.00  # three or more databases agree
 
-# Canonical column order for the output DataFrame.
 OUTPUT_COLUMNS: List[str] = [
     "query",
     "CASRN",
@@ -191,6 +192,11 @@ OUTPUT_COLUMNS: List[str] = [
     "n_source_support",
     "opsin_smiles",
 ]
+"""The columns of the DataFrame ``Search.search`` returns, in this order.
+
+``return_alternatives=True`` adds an ``alternatives`` column after them. A
+column no candidate filled is still there, holding None.
+"""
 
 # Name-normalization: prefixes to strip before fuzzy matching.
 _NAME_PREFIXES = re.compile(
@@ -220,8 +226,8 @@ _ABBREVIATIONS: Dict[str, str] = {
 
 log = logging.getLogger(__name__)
 
-#: Source key -> that source's candidates, best first (``Search._collect``).
 Hits = Dict[str, List[Dict[str, Any]]]
+"""Source key -> that source's candidates, best first (``Search._collect``)."""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -407,18 +413,20 @@ class Search:
     - **No surprise downloads**: the offline datasets are ~21 GiB to fetch and
       ~6.7 GiB installed, and none of them is fetched on your behalf.  ``Search`` uses what is installed and
       reports the rest (``datasets="present"``, the default); install them
-      deliberately with :func:`provesid.datasets.fetch`.
+      deliberately with [`provesid.datasets.fetch`][provesid.datasets.fetch].
     - **Presets**: ``preset="balanced"`` (the default), ``"strict"`` or
       ``"recall"`` name a whole matching policy in one word; see
-      :attr:`PRESETS`.
+      [`PRESETS`][provesid.search.Search.PRESETS].
     - **Online fallback** (opt-in, ``online_fallback=True``): a query no
       offline source answers is retried against PubChem PUG-REST and CACTUS.
 
     Attributes:
         identifier_type (str): Input identifier type used for all queries.
-        preset (str): The :attr:`PRESETS` entry the instance started from.
+        preset (str): The [`PRESETS`][provesid.search.Search.PRESETS] entry the
+            instance started from.
         settings (dict): The matching and output settings in force, keyed as
-            :attr:`PRESETS`; explicit constructor arguments applied.
+            [`PRESETS`][provesid.search.Search.PRESETS]; explicit constructor
+            arguments applied.
         strip_salts (bool): Strip salts/solvents and report parent molecule.
         fuzzy (bool): Enable fuzzy name matching via rapidfuzz.
         similarity_threshold (float): Minimum Tanimoto similarity for
@@ -444,14 +452,16 @@ class Search:
         datasets (str): Dataset policy in force --- ``"present"`` (the default),
             ``"auto"`` or ``"required"``.  See the constructor.
         sources_available (list[str]): Source keys that initialised successfully,
-            filled in on the first :meth:`search` call.  Since corroboration
-            drives confidence, a run missing a source scores lower than a
-            full-source run; check this (or ``df.attrs["sources_available"]``)
-            before comparing results across runs.
+            filled in on the first [`search`][provesid.search.Search.search]
+            call.  Since corroboration drives confidence, a run missing a
+            source scores lower than a full-source run; check this (or
+            ``df.attrs["sources_available"]``) before comparing results across
+            runs.
         sources_unavailable (list[str]): Source keys that failed to initialise.
         online_fallback (bool): Whether queries no offline source answers are
-            retried online.  :attr:`sources_available` lists offline sources
-            only; the online ones are reported per row and in ``df.attrs``.
+            retried online.  [`sources_available`][provesid.search.Search]
+            lists offline sources only; the online ones are reported per row
+            and in ``df.attrs``.
 
     Examples:
         >>> from provesid import Search
@@ -501,14 +511,16 @@ class Search:
         ["cas", "name", "smiles", "inchi", "inchikey", "dtxsid", "formula"]
     )
 
-    #: Every source the resolver knows how to query.  What each one can be
-    #: asked is the lookup table in :mod:`provesid.sources`.
     _ALL_SOURCE_KEYS: List[str] = SOURCE_KEYS
+    """Every source the resolver knows how to query.  What each one can be
+    asked is the lookup table in [`provesid.sources`][provesid.sources].
+    """
 
-    #: Sources queried unless ``use_zeropm=True`` re-adds ZeroPM.  ZeroPM is a
-    #: regulatory-inventory harvest rather than a curated compound database, so
-    #: its rows are kept out of the default corroboration vote.
     _DEFAULT_SOURCE_KEYS: List[str] = ["chebi", "comptox", "pubchem", "chembl"]
+    """Sources queried unless ``use_zeropm=True`` re-adds ZeroPM.  ZeroPM is a
+    regulatory-inventory harvest rather than a curated compound database, so
+    its rows are kept out of the default corroboration vote.
+    """
 
     _SOURCE_DISPLAY: Dict[str, str] = SOURCE_DISPLAY
 
@@ -518,13 +530,6 @@ class Search:
          "token_set_ratio", "QRatio"]
     )
 
-    #: Named settings for the arguments that decide what counts as a match
-    #: and what is returned.  ``Search(..., preset=name)`` starts from one of
-    #: these, and any of its keys passed explicitly overrides the preset's
-    #: value.  ``"balanced"`` is the default and holds the constructor's
-    #: defaults, so it is also the one place those defaults are written down.
-    #: A preset is a name to cite: "resolved with ``Search('cas',
-    #: preset='strict')``" says everything :attr:`settings` would.
     PRESETS: Dict[str, Dict[str, Any]] = {
         "balanced": {
             "fuzzy": False,
@@ -542,6 +547,15 @@ class Search:
             "min_source_support": 0,
         },
     }
+    """Named settings for the arguments that decide what counts as a match
+    and what is returned.  ``Search(..., preset=name)`` starts from one of
+    these, and any of its keys passed explicitly overrides the preset's
+    value.  ``"balanced"`` is the default and holds the constructor's
+    defaults, so it is also the one place those defaults are written down.
+    A preset is a name to cite: "resolved with ``Search('cas',
+    preset='strict')``" says everything
+    [`settings`][provesid.search.Search.settings] would.
+    """
     # Precision first: only exact matches, and only structures two
     # independent databases agree on.
     PRESETS["strict"] = {
@@ -560,10 +574,11 @@ class Search:
         "n_hits": "all",
     }
 
-    #: What to do about offline datasets that are not on disk.  ``"present"``
-    #: is the default: a laptop should not spend ~32 GB on a first CAS lookup
-    #: because a source client happens to default to ``auto_download=True``.
     DATASET_POLICIES: frozenset = frozenset(["present", "auto", "required"])
+    """What to do about offline datasets that are not on disk.  ``"present"``
+    is the default: a laptop should not spend ~32 GB on a first CAS lookup
+    because a source client happens to default to ``auto_download=True``.
+    """
 
     def __init__(
         self,
@@ -606,7 +621,7 @@ class Search:
                 ``"name"``, ``"smiles"``, ``"inchi"``, ``"inchikey"``,
                 ``"dtxsid"``, ``"formula"``.  Defaults to ``"cas"``.
             preset: Named starting point for the matching and output
-                settings, one of :attr:`PRESETS`:
+                settings, one of [`PRESETS`][provesid.search.Search.PRESETS]:
 
                 ``"balanced"``
                     **The default.**  Exact matching only, uncorroborated hits
@@ -626,7 +641,7 @@ class Search:
                 takes the preset's value; passing one overrides the preset
                 for that argument alone, so ``Search("name",
                 preset="strict", n_hits=3)`` is strict with three hits.  The
-                values in force are :attr:`settings`.
+                values in force are [`settings`][provesid.search.Search.settings].
             strip_salts: Strip salt/solvent fragments and populate
                 ``parent_smiles`` / ``parent_inchikey`` columns.
             fuzzy: *Preset.*  Enable fuzzy name matching when an exact name
@@ -640,11 +655,11 @@ class Search:
                 Balanced: ``False``.
             show_progress: Display a tqdm progress bar during batch queries.
             salt_smarts: Additional SMARTS patterns passed to
-                :func:`strip_salts` when ``strip_salts=True``.
+                [`strip_salts`][provesid.search.strip_salts] when ``strip_salts=True``.
             n_hits: *Preset.*  Default number of ranked hits to return per
                 query.  Either a positive integer or the literal ``"all"``.
                 Balanced: ``1`` (one row per query).  Can be overridden
-                per-call in :meth:`search`.
+                per-call in [`search`][provesid.search.Search.search].
             min_confidence: *Preset.*  Drop hits whose confidence is below
                 this value before truncating to ``n_hits``.  Balanced: ``0.0``.
             min_source_support: *Preset.*  Minimum number of independent
@@ -657,7 +672,8 @@ class Search:
                 queries.  Requires a Java runtime; falls back to plain name
                 matching (with a one-time warning) when unavailable.  Defaults
                 to ``False``.
-            opsin_jar_fpath: ``jar_fpath`` passed to :class:`~provesid.PYOPSIN`.
+            opsin_jar_fpath: ``jar_fpath`` passed to
+                [`PYOPSIN`][provesid.opsin.PYOPSIN].
             use_zeropm: *Preset.*  Include the ZeroPM inventory among the
                 queried sources.  Balanced and strict: ``False``; recall:
                 ``True``.  ZeroPM aggregates regulatory inventories
@@ -666,7 +682,7 @@ class Search:
                 weight in the corroboration vote.  Set to ``True`` to restore
                 the old five-source behaviour — chiefly worthwhile for fuzzy
                 name queries, since ZeroPM is the only source that does true
-                fuzzy *retrieval* (see :meth:`_candidate_pool_from_name`).
+                fuzzy *retrieval* (see `_candidate_pool_from_name`).
                 While ``False``, a ``zeropm`` client passed to the constructor
                 is ignored.
             top_k_per_source: *Preset.*  Number of candidate rows pulled from
@@ -682,7 +698,7 @@ class Search:
                 ``partial_ratio``: their partial-ratio term scores a short
                 name highly whenever it appears anywhere inside the query, so
                 ``fuzzy_score_cutoff`` stops discriminating (see
-                :meth:`_name_score`).
+                `_name_score`).
             consensus_compat_threshold: *Preset.*  Minimum candidate
                 similarity for a candidate to be merged with the consensus
                 anchor.  Balanced: ``0.35``.
@@ -726,35 +742,41 @@ class Search:
                     compacted.  This was the behaviour before the dataset
                     manager landed, and it happened without asking.
                 ``"required"``
-                    Raise :class:`~provesid.datasets.MissingDatasetError` in
-                    the constructor, naming every missing dataset and the
+                    Raise
+                    [`MissingDatasetError`][provesid.datasets.MissingDatasetError]
+                    in the constructor, naming every missing dataset and the
                     exact ``provesid.datasets.fetch`` call that installs it.
-                    Use this when a run on fewer sources would be worse than
-                    no run at all --- confidence scores are not comparable
-                    across different source sets.
+                    Use this when a run on fewer sources would be worse than no
+                    run at all --- confidence scores are not comparable across
+                    different source sets.
 
                 Install datasets deliberately with
-                :func:`provesid.datasets.fetch`, and see what a download would
-                cost with :func:`provesid.datasets.plan`.
+                [`provesid.datasets.fetch`][provesid.datasets.fetch], and see
+                what a download would cost with
+                [`provesid.datasets.plan`][provesid.datasets.plan].
             data_dir: Optional shared data root used when lazily initialising
                 source clients.
             redownload: If True, lazily initialised source clients force a
                 fresh dataset download.  Requires ``datasets="auto"``, since
                 the other two policies do not download at all.
-            chebi: Pre-initialised :class:`~provesid.ChebiSDF` client.  When
-                ``None`` the client is created lazily on first use.
-            comptox: Pre-initialised :class:`~provesid.CompToxID` client.
-            pubchem: Pre-initialised :class:`~provesid.PubChemID` client.
-            zeropm: Pre-initialised :class:`~provesid.ZeroPM` client.  Only
+            chebi: Pre-initialised [`ChebiSDF`][provesid.chebi_sdf.ChebiSDF]
+                client.  When ``None`` the client is created lazily on first
+                use.
+            comptox: Pre-initialised [`CompToxID`][provesid.comptox.CompToxID] client.
+            pubchem: Pre-initialised
+                [`PubChemID`][provesid.pubchem_id.PubChemID] client.
+            zeropm: Pre-initialised [`ZeroPM`][provesid.zeropm.ZeroPM] client.  Only
                 used when ``use_zeropm=True``.
-            chembl: Pre-initialised :class:`~provesid.CheMBL` client.
+            chembl: Pre-initialised [`CheMBL`][provesid.chembl.CheMBL] client.
 
         Raises:
             ValueError: If ``identifier_type`` is not one of the supported
-                values, ``preset`` is not a key of :attr:`PRESETS`, or
-                ``datasets`` is not one of
-                :data:`DATASET_POLICIES`, or ``redownload=True`` was combined
-                with a policy that does not download.
+                values, ``preset`` is not a key of
+                [`PRESETS`][provesid.search.Search.PRESETS], or ``datasets`` is
+                not one of
+                [`DATASET_POLICIES`][provesid.search.Search.DATASET_POLICIES],
+                or ``redownload=True`` was combined with a policy that does not
+                download.
             provesid.datasets.MissingDatasetError: If ``datasets="required"``
                 and a dataset a queried source needs is not on disk.
         """
@@ -905,11 +927,13 @@ class Search:
 
     @property
     def settings(self) -> Dict[str, Any]:
-        """The matching and output settings in force, keyed as :attr:`PRESETS`.
+        """The matching and output settings in force, keyed as
+        [`PRESETS`][provesid.search.Search.PRESETS].
 
         The preset's values with any explicit constructor argument applied, as
-        this instance will use them.  :meth:`search` records the same dict,
-        with its own per-call overrides applied, in ``df.attrs["settings"]``.
+        this instance will use them.  [`search`][provesid.search.Search.search]
+        records the same dict, with its own per-call overrides applied, in
+        ``df.attrs["settings"]``.
 
         Returns:
             A new dict with one entry per key of ``PRESETS["balanced"]``.
@@ -928,8 +952,9 @@ class Search:
         """The ``df.attrs`` entries that say how a result frame was produced.
 
         Args:
-            **run_overrides: Per-call values of :attr:`settings` keys, as
-                :meth:`search` resolved them.
+            **run_overrides: Per-call values of
+                [`settings`][provesid.search.Search.settings] keys, as
+                [`search`][provesid.search.Search.search] resolved them.
 
         Returns:
             Dict of the preset, the settings in force for the call, the
@@ -949,13 +974,13 @@ class Search:
     def _datasets_needed(self) -> List[str]:
         """Dataset names this instance would have to open on disk.
 
-        The queried sources (:attr:`_SOURCE_KEYS`, which excludes ZeroPM unless
+        The queried sources (`_SOURCE_KEYS`, which excludes ZeroPM unless
         ``use_zeropm=True``) minus any whose client the caller constructed and
         passed in --- that client has already found its data, wherever it put
         it, so demanding a copy in the shared data directory would be wrong.
 
         Returns:
-            Dataset names, in :attr:`_SOURCE_KEYS` order.
+            Dataset names, in `_SOURCE_KEYS` order.
         """
         return [key for key in self._SOURCE_KEYS if self._clients[key] is None]
 
@@ -965,16 +990,17 @@ class Search:
         Client construction is idempotent — it only runs once per Search
         instance.  Individual clients that fail to initialise are set to ``None``
         and a warning is logged; the search continues with the remaining sources
-        and :attr:`sources_available` / :attr:`sources_unavailable` record which
-        ones, so a three-source run stays distinguishable from a four-source one.
+        and [`sources_available`][provesid.search.Search] /
+        [`sources_unavailable`][provesid.search.Search] record which ones, so a
+        three-source run stays distinguishable from a four-source one.
 
-        Only the sources in :attr:`_SOURCE_KEYS` are constructed, so ZeroPM's
+        Only the sources in `_SOURCE_KEYS` are constructed, so ZeroPM's
         (large) database is never even opened unless ``use_zeropm=True``.
 
         Whether a missing dataset is downloaded here is the ``datasets``
         policy's decision, and by default it is not: the clients are
         constructed with ``auto_download=False``, a missing one is reported
-        with the size and the :func:`~provesid.datasets.fetch` call that would
+        with the size and the [`fetch`][provesid.datasets.fetch] call that would
         install it, and the search runs on the sources that are present.
         """
         if self._closed:
@@ -1051,7 +1077,7 @@ class Search:
     def _ensure_online_clients(self) -> None:
         """Build the web-service clients, on the first query that needs them.
 
-        Not in :meth:`_ensure_clients`, because a run whose every query is
+        Not in `_ensure_clients`, because a run whose every query is
         answered offline should not construct them at all.  Nothing is
         contacted here; the clients only open a connection when asked.
         """
@@ -1074,18 +1100,19 @@ class Search:
     def close(self) -> None:
         """Close the source clients this instance constructed.
 
-        A :class:`Search` may hold four SQLite databases open — CompTox,
-        PubChemID, ChEMBL and, with ``use_zeropm=True``, ZeroPM — totalling
-        several gigabytes of mapped file.  Until this method existed there was
-        no way to hand them back short of dropping the ``Search`` and waiting
-        for the collector, which on Windows meant the files stayed locked.
+        A [`Search`][provesid.search.Search] may hold four SQLite databases
+        open — CompTox, PubChemID, ChEMBL and, with ``use_zeropm=True``, ZeroPM
+        — totalling several gigabytes of mapped file.  Until this method
+        existed there was no way to hand them back short of dropping the
+        ``Search`` and waiting for the collector, which on Windows meant the
+        files stayed locked.
 
         Only clients this instance built are closed.  One passed to the
         constructor belongs to the caller, who may still be using it, and
         closing it here would be closing someone else's database.
 
-        Idempotent.  After it returns, :meth:`search` raises
-        :class:`~provesid.sqlite_client.DatabaseClosedError` rather than
+        Idempotent.  After it returns, [`search`][provesid.search.Search.search] raises
+        [`DatabaseClosedError`][provesid.sqlite_client.DatabaseClosedError] rather than
         quietly running against whatever is left.
 
         Examples:
@@ -1117,7 +1144,7 @@ class Search:
         """Return the resolver, so ``with Search(...) as s`` binds it.
 
         Returns:
-            Search: ``self``.
+            (Search): ``self``.
         """
         return self
 
@@ -1135,7 +1162,7 @@ class Search:
             traceback: Traceback, or None.
 
         Returns:
-            bool: False --- an exception raised in the block propagates.
+            (bool): False --- an exception raised in the block propagates.
         """
         self.close()
         return False
@@ -1165,7 +1192,7 @@ class Search:
         """Lazily create the PYOPSIN client; disable for the session on failure.
 
         Returns:
-            A :class:`~provesid.PYOPSIN` instance, or ``None`` when OPSIN is
+            A [`PYOPSIN`][provesid.opsin.PYOPSIN] instance, or ``None`` when OPSIN is
             disabled or unavailable (e.g. no Java runtime).
         """
         if not self._opsin_available:
@@ -1231,10 +1258,10 @@ class Search:
 
                 - A single string — returns a one-row DataFrame.
                 - A list of strings — one row per query.
-                - A :class:`pandas.DataFrame` — the column given by ``column``
+                - A `pandas.DataFrame` — the column given by ``column``
                   is used as the query list.  All other columns are preserved
                   in the output (broadcast across the hit rows of each query).
-                - A file path (:class:`pathlib.Path` or string ending in
+                - A file path (`pathlib.Path` or string ending in
                   ``.csv`` / ``.parquet``) — read into a DataFrame first;
                   ``column`` must be provided.
 
@@ -1249,24 +1276,24 @@ class Search:
                 used.
 
         Returns:
-            DataFrame with columns defined in :data:`OUTPUT_COLUMNS`.  When
-            ``n_hits == 1`` (the default) there is one row per query; otherwise
-            up to ``n_hits`` ranked rows per query, ordered by descending
-            confidence with a ``hit_rank`` column (0 = best).
+            DataFrame with columns defined in
+            [`OUTPUT_COLUMNS`][provesid.search.OUTPUT_COLUMNS].  When ``n_hits
+            == 1`` (the default) there is one row per query; otherwise up to
+            ``n_hits`` ranked rows per query, ordered by descending confidence
+            with a ``hit_rank`` column (0 = best).
 
             ``df.attrs["preset"]`` names the preset the instance was built
             from and ``df.attrs["settings"]`` holds the settings this call
-            ran with (:attr:`settings` plus this call's ``n_hits``,
-            ``min_confidence`` and ``min_source_support``), so a saved
-            frame says how it was made.
+            ran with ([`settings`][provesid.search.Search.settings] plus this
+            call's ``n_hits``, ``min_confidence`` and ``min_source_support``),
+            so a saved frame says how it was made.
             ``df.attrs["sources_available"]`` and
             ``df.attrs["sources_unavailable"]`` record which offline sources
-            backed the run (see :attr:`sources_available`).  With
-            ``online_fallback=True``, ``df.attrs["online_fallbacks"]`` counts
-            the queries no offline source answered, which were therefore
-            asked online, and ``df.attrs["online_resolved"]`` those of them
-            the online services answered.  Both are 0 when the fallback is
-            off.
+            backed the run (see [`sources_available`][provesid.search.Search]).
+             With ``online_fallback=True``, ``df.attrs["online_fallbacks"]``
+            counts the queries no offline source answered, which were therefore
+            asked online, and ``df.attrs["online_resolved"]`` those of them the
+            online services answered.  Both are 0 when the fallback is off.
 
         Raises:
             ValueError: If a DataFrame/file input is given but ``column`` is
@@ -1381,12 +1408,14 @@ class Search:
                 per hit.
 
         Returns:
-            A copy of ``df`` with the :data:`OUTPUT_COLUMNS` added under
+            A copy of ``df`` with the
+            [`OUTPUT_COLUMNS`][provesid.search.OUTPUT_COLUMNS] added under
             ``prefix``, in the original row order and with the original index.
             When ``n_hits`` yields more than one row per query the index is a
             fresh ``RangeIndex``, since rows no longer correspond one-to-one.
-            ``df.attrs`` carries the same provenance :meth:`search` records:
-            the preset and settings, which offline sources backed the run and, with
+            ``df.attrs`` carries the same provenance
+            [`search`][provesid.search.Search.search] records: the preset and
+            settings, which offline sources backed the run and, with
             ``online_fallback=True``, how many queries went online.
 
         Raises:
@@ -1466,7 +1495,7 @@ class Search:
         """Convert the ``queries`` argument to a plain list of strings.
 
         Args:
-            queries: Raw input from :meth:`search`.
+            queries: Raw input from [`search`][provesid.search.Search.search].
             column: Column name for DataFrame/file inputs.
 
         Returns:
@@ -1520,7 +1549,7 @@ class Search:
         Each resolver returns ``(base_template, pool, opsin_anchor)``; this
         method clusters the pool, ranks the clusters, and truncates to
         ``n_hits``.  An empty pool is where the online fallback happens, so
-        that no resolver has to know about it (see :meth:`_online_pool`).
+        that no resolver has to know about it (see `_online_pool`).
 
         Args:
             query: A single identifier string.
@@ -1530,7 +1559,8 @@ class Search:
                 databases before truncation.
 
         Returns:
-            List of result dicts matching :data:`OUTPUT_COLUMNS` (length 1 when
+            List of result dicts matching
+            [`OUTPUT_COLUMNS`][provesid.search.OUTPUT_COLUMNS] (length 1 when
             ``n_hits == 1``).
         """
         dispatch = {
@@ -1564,7 +1594,8 @@ class Search:
             foundby: The identifier type used for the search.
 
         Returns:
-            Dict with all :data:`OUTPUT_COLUMNS` keys present.
+            Dict with all [`OUTPUT_COLUMNS`][provesid.search.OUTPUT_COLUMNS]
+            keys present.
         """
         return {
             "query": query,
@@ -1612,7 +1643,7 @@ class Search:
             source_key: Originating source key (e.g. ``"chebi"``, ``"opsin"``).
             origin_rank: Rank position within the source's result list (0-based).
             match_method: How the candidate was found (key into
-                :data:`_BASE_CONFIDENCE`).
+                `_BASE_CONFIDENCE`).
             query_match_score: How well the candidate matches the query in
                 [0, 1].
 
@@ -1637,16 +1668,17 @@ class Search:
         """Ask every available source one question from the lookup table.
 
         This is the only place a source is queried.  Each source that has a
-        client and a row for ``kind`` in :data:`provesid.sources.LOOKUPS` is
-        asked in turn.  One that raises is logged and left out, so a broken
-        database costs its own vote rather than the query.
+        client and a row for ``kind`` in
+        [`provesid.sources.LOOKUPS`][provesid.sources.LOOKUPS] is asked in
+        turn.  One that raises is logged and left out, so a broken database
+        costs its own vote rather than the query.
 
         Args:
-            kind: Lookup kind, a key of :data:`~provesid.sources.LOOKUPS`,
+            kind: Lookup kind, a key of [`LOOKUPS`][provesid.sources.LOOKUPS],
                 such as ``"cas"`` or ``"fuzzy_name"``.
             value: The identifier to look up.
             label: Name for a ZeroPM candidate, when it should not be
-                ``value`` (see :class:`~provesid.sources.Query`).
+                ``value`` (see [`Query`][provesid.sources.Query]).
             k: Candidates to take from each source.
             sources: Restrict the question to these source keys.  Defaults
                 to every queried source.
@@ -1684,11 +1716,11 @@ class Search:
     ) -> List[Dict[str, Any]]:
         """Flatten per-source hits into a tagged candidate pool.
 
-        Candidates are pooled in :attr:`_SOURCE_KEYS` order, then the online
+        Candidates are pooled in `_SOURCE_KEYS` order, then the online
         services', and, within a source, in the order the source ranked them.
 
         Args:
-            hits: Source key -> candidates, as :meth:`_collect` returns.
+            hits: Source key -> candidates, as `_collect` returns.
             match_method: Match method to tag each candidate with.
             score: The ``query_match_score`` of every candidate: a number
                 (1.0 for exact-identifier matches), or a function of the
@@ -1709,11 +1741,12 @@ class Search:
 
         Compares the query against the candidate ``name``, ``IUPAC_name`` and
         each individual synonym using the configured fuzzy scorer (rapidfuzz)
-        when available, falling back to :func:`text_similarity`.
+        when available, falling back to
+        [`text_similarity`][provesid.tools.text_similarity].
 
         Note:
             This is a ranking signal, not evidence of an exact match — use
-            :func:`_matches_name_exactly` for that. The default scorer is
+            `_matches_name_exactly` for that. The default scorer is
             ``ratio``; scorers with a partial-ratio term (``WRatio``,
             ``partial_ratio``) score a short name highly whenever it appears
             anywhere inside the query (``WRatio("caffiene", "ne") == 90``),
@@ -2152,6 +2185,7 @@ class Search:
 
         Returns:
             Tuple of:
+
             - Source key -> candidates (the best match per source at or
               above threshold).
             - Best Tanimoto score observed, or ``None`` if RDKit is unavailable.
@@ -2309,7 +2343,7 @@ class Search:
         For exact-identifier methods ``query_score`` is 1.0, which collapses the
         middle term to 1.0.
 
-        The ``support_factor`` (:data:`_SUPPORT_FACTOR`) is what keeps an
+        The ``support_factor`` (`_SUPPORT_FACTOR`) is what keeps an
         uncorroborated hit from winning on provenance alone.  ``consensus_score``
         measures *how well* the sources that answered agree, not *how many*
         answered, and a lone source agrees with itself perfectly — so before this
@@ -2318,14 +2352,15 @@ class Search:
         returned the wrong compound.
 
         A ``consensus_score`` of exactly 0.0 short-circuits to 0.0 rather than
-        following the formula. :func:`~provesid.tools.compute_consensus` only
-        returns 0.0 when there were no candidates at all — one source scores 1.0,
-        and even two fully disagreeing sources score 0.5 — so a zero consensus
+        following the formula.
+        [`compute_consensus`][provesid.tools.compute_consensus] only returns
+        0.0 when there were no candidates at all — one source scores 1.0, and
+        even two fully disagreeing sources score 0.5 — so a zero consensus
         means nothing matched, and the formula's floor of ``0.5 × base`` would
         report a no-match row as half-confident.
 
         Args:
-            match_method: One of the keys in :data:`_BASE_CONFIDENCE`.
+            match_method: One of the keys in `_BASE_CONFIDENCE`.
             consensus_score: Cross-source consensus agreement in [0, 1].
             fuzzy_score: rapidfuzz similarity in [0, 1]; used when
                 ``match_method == "fuzzy_name"``, scaled by the ``exact_name``
@@ -2425,7 +2460,7 @@ class Search:
 
         # Rank: OPSIN match first, then confidence, support, query agreement,
         # and (lower) origin rank as a final tie-break.  Corroboration is folded
-        # into ``confidence`` itself (see :data:`_SUPPORT_FACTOR`), so
+        # into ``confidence`` itself (see ``_SUPPORT_FACTOR``), so
         # ``n_source_support`` here only breaks ties between equally confident
         # clusters.
         hits.sort(
@@ -2637,8 +2672,8 @@ def mw_within(
     the hit's structure is within ``tolerance`` of the weight computed from the
     row's own ``reference_column``. It additionally *reports* — without requiring
     — agreement of the canonical SMILES and, when ``name_column`` is given, of
-    the name, so :func:`resolve_cascade` can record how much evidence backed
-    each row in its ``validated_by`` column.
+    the name, so [`resolve_cascade`][provesid.search.resolve_cascade] can
+    record how much evidence backed each row in its ``validated_by`` column.
 
     Args:
         tolerance: Maximum absolute difference in Da. Defaults to ``0.5``.
@@ -2649,8 +2684,9 @@ def mw_within(
 
     Returns:
         A callable ``(hit, row) -> list[str]`` suitable for
-        :func:`resolve_cascade`'s ``accept`` argument: the names of the checks
-        that passed, or an empty list to reject the hit.
+        [`resolve_cascade`][provesid.search.resolve_cascade]'s ``accept``
+        argument: the names of the checks that passed, or an empty list to
+        reject the hit.
 
     Examples:
         >>> accept = mw_within(0.5, reference_column="SMILES", name_column="name")
@@ -2701,21 +2737,23 @@ def resolve_cascade(
 
     Experimental datasets are annotated unevenly — some rows have a CAS number,
     some only a name, some only a structure. This runs several
-    :class:`Search` instances in order, passing to each stage only the rows that
-    are still unresolved, so every row is resolved by the most reliable
-    identifier it actually has.
+    [`Search`][provesid.search.Search] instances in order, passing to each
+    stage only the rows that are still unresolved, so every row is resolved by
+    the most reliable identifier it actually has.
 
     Each hit is checked with ``accept`` before it counts as resolved. A hit that
     fails leaves its row pending for the next stage, which is what stops a
-    confident-but-wrong match from ending the cascade. Use :func:`mw_within` for
-    the usual molecular-weight check.
+    confident-but-wrong match from ending the cascade. Use
+    [`mw_within`][provesid.search.mw_within] for the usual molecular-weight
+    check.
 
     Args:
         df: Input DataFrame. Returned unmodified; the result is a copy.
         stages: Ordered list of ``(label, search, column)`` triples. ``label``
-            names the stage in the output, ``search`` is a :class:`Search`
-            instance, and ``column`` is the column it reads. Rows with an empty
-            value in ``column`` skip that stage.
+            names the stage in the output, ``search`` is a
+            [`Search`][provesid.search.Search] instance, and ``column`` is the
+            column it reads. Rows with an empty value in ``column`` skip that
+            stage.
         accept: Optional ``(hit, row) -> bool | list[str]`` predicate, where
             ``hit`` is the Search result row and ``row`` the input row, both as
             dicts. Return ``True``, or the names of the checks that passed (they
@@ -2724,17 +2762,18 @@ def resolve_cascade(
 
             Both dicts come from DataFrame rows, so a missing field is ``NaN``
             rather than ``None`` — and ``bool(NaN)`` is ``True``. Test emptiness
-            with :func:`pandas.isna` (or reuse :func:`mw_within`) rather than
-            truthiness.
+            with `pandas.isna` (or reuse
+            [`mw_within`][provesid.search.mw_within]) rather than truthiness.
         fallback_column: Column holding a SMILES from which to derive identifiers
             for rows no stage resolved. Those rows get ``resolved_by="rdkit"``.
             When ``None``, unresolved rows are left empty.
         prefix: Prepended to every added column. Defaults to ``"provesid_"``.
 
     Returns:
-        A copy of ``df`` with the :data:`OUTPUT_COLUMNS` added under ``prefix``,
-        plus ``<prefix>resolved_by`` (the stage that resolved the row,
-        ``"rdkit"``, or ``"none"``) and ``<prefix>validated_by``.
+        A copy of ``df`` with the
+        [`OUTPUT_COLUMNS`][provesid.search.OUTPUT_COLUMNS] added under
+        ``prefix``, plus ``<prefix>resolved_by`` (the stage that resolved the
+        row, ``"rdkit"``, or ``"none"``) and ``<prefix>validated_by``.
 
     Raises:
         KeyError: If a stage names a column that is not in ``df``.
@@ -3024,8 +3063,9 @@ def _any_candidate(hits: Hits) -> bool:
 def _first_smiles_from_candidates(hits: Hits) -> Optional[str]:
     """Return the first non-missing SMILES among each source's top candidate.
 
-    Priority order is :data:`provesid.sources.SOURCE_KEYS`: chebi, comptox,
-    pubchem, zeropm, chembl.
+    Priority order is
+    [`provesid.sources.SOURCE_KEYS`][provesid.sources.SOURCE_KEYS]: chebi,
+    comptox, pubchem, zeropm, chembl.
 
     Args:
         hits: Source key -> candidates, as ``Search._collect`` returns.

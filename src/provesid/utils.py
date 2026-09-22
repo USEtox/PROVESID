@@ -29,7 +29,7 @@ def check_CASRN(cas_rn: str):
         cas_rn: The candidate CAS number.
 
     Returns:
-        bool: True when the format is right and the check digit agrees.
+        (bool): True when the format is right and the check digit agrees.
 
     Examples:
         >>> check_CASRN("50-78-2")
@@ -66,10 +66,10 @@ def data_path():
 
     This holds the small files that ship with PROVESID (the REACH workbook,
     the CAS Common Chemistry Swagger file). The large offline databases live
-    under :func:`user_dataset_path` instead.
+    under [`user_dataset_path`][provesid.utils.user_dataset_path] instead.
 
     Returns:
-        str: Absolute path to ``provesid/data``.
+        (str): Absolute path to ``provesid/data``.
 
     Examples:
         >>> os.path.basename(data_path())
@@ -81,7 +81,7 @@ def data_path():
 def user_dataset_path(*parts: str, ensure_exists: bool = True) -> str:
     """Return the OS-specific persistent dataset directory for PROVESID.
 
-    The default root comes from :mod:`platformdirs` and resolves to a
+    The default root comes from `platformdirs` and resolves to a
     per-user data directory that is shared across virtual environments
     on the same machine.
 
@@ -114,16 +114,17 @@ def user_dataset_path(*parts: str, ensure_exists: bool = True) -> str:
 def user_cache_path(*parts: str, ensure_exists: bool = True) -> str:
     """Return the OS-specific persistent cache directory for PROVESID.
 
-    This is where :mod:`provesid.cache` keeps API responses. It is deliberately
-    *not* the system temp directory: most Linux distributions clear ``/tmp`` on
-    boot, which silently threw away every cached response between sessions even
-    though the caching layer advertises itself as persistent. The root comes
-    from :mod:`platformdirs` and resolves to a per-user cache directory shared
-    across virtual environments on the same machine.
+    This is where [`provesid.cache`][provesid.cache] keeps API responses. It is
+    deliberately *not* the system temp directory: most Linux distributions
+    clear ``/tmp`` on boot, which silently threw away every cached response
+    between sessions even though the caching layer advertises itself as
+    persistent. The root comes from `platformdirs` and resolves to a per-user
+    cache directory shared across virtual environments on the same machine.
 
     Cached responses are disposable --- unlike the datasets under
-    :func:`user_dataset_path`, everything here can be re-fetched --- which is
-    why the two live under different roots and can be cleaned independently.
+    [`user_dataset_path`][provesid.utils.user_dataset_path], everything here
+    can be re-fetched --- which is why the two live under different roots and
+    can be cleaned independently.
 
     Power users can override the root directory by setting
     ``PROVESID_CACHE_DIR``.

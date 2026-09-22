@@ -1,19 +1,21 @@
-"""Candidate records and the consensus vote behind :class:`~provesid.Search`.
+"""Candidate records and the consensus vote behind [`Search`][provesid.search.Search].
 
 A *candidate* is one source's answer about one compound, normalised into a plain
 dict so that a ChEBI row, a CompTox row and a ZeroPM row can be compared without
-caring where each came from. :func:`make_candidate` builds one; the
-``candidate_from_*`` adapters build one from a particular source's row shape.
+caring where each came from. [`make_candidate`][provesid.tools.make_candidate]
+builds one; the ``candidate_from_*`` adapters build one from a particular
+source's row shape.
 
-:func:`compute_consensus` is the vote: it scores every candidate against every
-other and returns the source whose answer the others corroborate best, together
-with per-source agreement scores. That is what :class:`~provesid.Search` turns
-into the ``confidence`` column and what ``min_source_support`` filters on.
+[`compute_consensus`][provesid.tools.compute_consensus] is the vote: it scores
+every candidate against every other and returns the source whose answer the
+others corroborate best, together with per-source agreement scores. That is
+what [`Search`][provesid.search.Search] turns into the ``confidence`` column
+and what ``min_source_support`` filters on.
 
 The rest are the small predicates and converters those two need — missing-value
 handling, CAS extraction, RDKit round-trips. They are public because
-:mod:`provesid.search` imports them across the module boundary, not because
-callers are expected to reach for them directly.
+[`provesid.search`][provesid.search] imports them across the module boundary,
+not because callers are expected to reach for them directly.
 """
 
 from typing import List, Optional, Dict, Any, Tuple
@@ -76,8 +78,8 @@ def pick_first(*values: Any) -> Any:
         *values: Candidate values, most preferred first.
 
     Returns:
-        The first value for which :func:`is_missing` is False, or None when
-        every argument is missing.
+        The first value for which [`is_missing`][provesid.tools.is_missing] is
+        False, or None when every argument is missing.
 
     Examples:
         >>> pick_first(None, float("nan"), "aspirin", "ASA")
@@ -148,9 +150,9 @@ def text_similarity(a: Optional[str], b: Optional[str]) -> float:
     """Score how alike two names are, ignoring case and surrounding space.
 
     A cheap ``difflib`` ratio, used only as a weak signal in
-    :func:`candidate_similarity`: names corroborate a match but never decide
-    one, because two sources routinely use different names for the same
-    structure.
+    [`candidate_similarity`][provesid.tools.candidate_similarity]: names
+    corroborate a match but never decide one, because two sources routinely use
+    different names for the same structure.
 
     Args:
         a: One name, or None.
@@ -277,11 +279,12 @@ def inchikey_from_smiles(smiles: Optional[str]) -> Optional[str]:
 def first_cas(cas_values: List[str]) -> Optional[str]:
     """Pick one CAS number out of a candidate's list.
 
-    The list from :func:`extract_cas_values` is sorted, so this is stable
-    across runs rather than dependent on row order.
+    The list from [`extract_cas_values`][provesid.tools.extract_cas_values] is
+    sorted, so this is stable across runs rather than dependent on row order.
 
     Args:
-        cas_values: CAS numbers, as returned by :func:`extract_cas_values`.
+        cas_values: CAS numbers, as returned by
+            [`extract_cas_values`][provesid.tools.extract_cas_values].
 
     Returns:
         The first CAS number, or None when the list is empty.
@@ -334,7 +337,8 @@ def make_candidate(
         dtxsid: The DSSTox identifier, for sources that carry one.
         molecular_mass: The mass the source states; falls back to the mass
             RDKit computes from ``smiles``.
-        synonyms: Synonyms, already flattened by :func:`normalize_synonyms`.
+        synonyms: Synonyms, already flattened by
+            [`normalize_synonyms`][provesid.tools.normalize_synonyms].
         cas_candidates: Every CAS the row mentions, deduplicated and sorted.
 
     Returns:
@@ -477,10 +481,11 @@ def candidate_compatible_with_consensus(
         candidate: The candidate under consideration, or None.
         consensus: The consensus candidate to measure against, or None when
             no consensus was reached.
-        threshold: Minimum :func:`candidate_similarity` required. The default
-            of 0.35 is permissive by design: it rejects a different compound
-            without rejecting a sparse source that agrees on what little it
-            states.
+        threshold: Minimum
+            [`candidate_similarity`][provesid.tools.candidate_similarity]
+            required. The default of 0.35 is permissive by design: it rejects a
+            different compound without rejecting a sparse source that agrees on
+            what little it states.
 
     Returns:
         True when the candidate agrees with the consensus closely enough, when
@@ -550,12 +555,13 @@ def compute_consensus(candidates: Dict[str, Optional[Dict[str, Any]]]) -> Tuple[
     """Hold the vote: which source's answer do the others corroborate?
 
     Every candidate is scored against every other with
-    :func:`candidate_similarity` and given the mean of those scores as its
-    support. The winner is the best-supported source — but among sources
-    within 0.05 of the top score, the more reputable one wins instead. That
-    tie-break matters because support is an average over *comparable* fields:
-    a source stating almost nothing can agree perfectly on that little and
-    score higher than a richer source that agrees about far more.
+    [`candidate_similarity`][provesid.tools.candidate_similarity] and given the
+    mean of those scores as its support. The winner is the best-supported
+    source — but among sources within 0.05 of the top score, the more reputable
+    one wins instead. That tie-break matters because support is an average over
+    *comparable* fields: a source stating almost nothing can agree perfectly on
+    that little and score higher than a richer source that agrees about far
+    more.
 
     Reputation order is ChEBI, CompTox, PubChemID, ZeroPM, ChEMBL; a source
     not on that list sorts last.
@@ -620,11 +626,11 @@ def candidate_from_chebi_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """Adapt one ChEBI SDF row into a candidate record.
 
     Args:
-        row: A row as :class:`~provesid.ChebiSDF` returns it.
+        row: A row as [`ChebiSDF`][provesid.chebi_sdf.ChebiSDF] returns it.
 
     Returns:
         The candidate record. ChEBI states no mass, so the mass comes from
-        RDKit via :func:`make_candidate`.
+        RDKit via [`make_candidate`][provesid.tools.make_candidate].
 
     Examples:
         >>> from provesid import ChebiSDF
@@ -650,7 +656,7 @@ def candidate_from_comptox_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """Adapt one CompTox row into a candidate record.
 
     Args:
-        row: A row as :class:`~provesid.CompToxID` returns it.
+        row: A row as [`CompToxID`][provesid.comptox.CompToxID] returns it.
 
     Returns:
         The candidate record, carrying the DTXSID and preferring the average
@@ -681,7 +687,7 @@ def candidate_from_pubchem_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """Adapt one PubChem row into a candidate record.
 
     Args:
-        row: A row as :class:`~provesid.PubChemID` returns it.
+        row: A row as [`PubChemID`][provesid.pubchem_id.PubChemID] returns it.
 
     Returns:
         The candidate record.
@@ -772,7 +778,7 @@ def candidate_from_zeropm_smiles(smiles_query: str, zeropm: ZeroPM) -> Optional[
 
     Args:
         smiles_query: The structure to look up, as SMILES.
-        zeropm: An initialised :class:`~provesid.ZeroPM` client.
+        zeropm: An initialised [`ZeroPM`][provesid.zeropm.ZeroPM] client.
 
     Returns:
         The candidate record. When the CAS numbers resolve to no rows, a
@@ -832,7 +838,7 @@ def candidate_from_chembl_row(row: Dict[str, Any], chembl: Optional[CheMBL] = No
     """Adapt one ChEMBL row into a candidate record.
 
     Args:
-        row: A row as :class:`~provesid.CheMBL` returns it.
+        row: A row as [`CheMBL`][provesid.chembl.CheMBL] returns it.
         chembl: An optional client, used to fetch the molecular mass, which
             lives in a properties table rather than in the row. Without it the
             mass falls back to RDKit. A failed fetch is swallowed: the
@@ -875,17 +881,19 @@ def candidate_from_pubchem_online(
 ) -> Dict[str, Any]:
     """Adapt one PUG-REST property row into a candidate record.
 
-    The online counterpart of :func:`candidate_from_pubchem_row`. It is kept
-    apart from it, under its own source name, so that a result the network
-    supplied can never be mistaken for one the local database did.
+    The online counterpart of
+    [`candidate_from_pubchem_row`][provesid.tools.candidate_from_pubchem_row].
+    It is kept apart from it, under its own source name, so that a result the
+    network supplied can never be mistaken for one the local database did.
 
     Args:
-        row: One row of :meth:`~provesid.PubChemAPI.get_properties_for_cids`,
+        row: One row of
+            [`get_properties_for_cids`][provesid.pubchem.PubChemAPI.get_properties_for_cids],
             asked for ``Title``, ``IUPACName``, ``MolecularFormula``,
             ``SMILES``, ``InChI``, ``InChIKey`` and ``MolecularWeight``.
         synonyms: The compound's synonyms from
-            :meth:`~provesid.PubChemAPI.get_compound_synonyms`, which is where
-            PubChem keeps its CAS numbers.
+            [`get_compound_synonyms`][provesid.pubchem.PubChemAPI.get_compound_synonyms],
+            which is where PubChem keeps its CAS numbers.
 
     Returns:
         The candidate record, with source ``"PubChem (online)"``.

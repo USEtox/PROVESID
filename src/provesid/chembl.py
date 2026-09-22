@@ -6,6 +6,7 @@ structures, and properties. ChEMBL is a manually curated database of bioactive m
 with drug-like properties maintained by EMBL-EBI.
 
 Database tables accessed:
+
 - molecule_dictionary: Primary compound information (ChEMBL ID, names, max_phase, drug
                        classifications, approval status, administration routes)
 - molecule_hierarchy: Parent-salt-metabolite relationships for compounds and pro-drugs
@@ -18,8 +19,9 @@ Database tables accessed:
 
 Those eight tables are the whole of what PROVESID reads.  A full ChEMBL release
 is ~30 GB across 74 tables, the rest of which is bioactivity data this package
-never opens, so :meth:`CheMBL.compact` builds an extract holding only the eight
--- about 2.4 GiB, with identical results.  See ``CheMBL.compact`` for details.
+never opens, so [`CheMBL.compact`][provesid.chembl.CheMBL.compact] builds an
+extract holding only the eight -- about 2.4 GiB, with identical results.  See
+``CheMBL.compact`` for details.
 
 A first download builds that extract on the way in and keeps only it
 (``CheMBL(source="sqlite")``, the default), so a machine that has never had
@@ -132,7 +134,7 @@ class CheMBL(SQLiteClient):
         The acquisition route this instance was constructed with.
     is_compact : bool
         True when the open database is a PROVESID extract built by
-        :meth:`compact` rather than a full ChEMBL release.
+        [`compact`][provesid.chembl.CheMBL.compact] rather than a full ChEMBL release.
     provenance : dict or None
         What the extract was built from -- release, source file, build time,
         PROVESID version and per-table row counts.  None for a full release.
@@ -157,9 +159,9 @@ class CheMBL(SQLiteClient):
     compressed and ~30 GB once extracted. Initial setup downloads and extracts it
     from the EMBL-EBI FTP server.
 
-    Most of that is never read.  :meth:`compact` builds a ~2.4 GiB extract holding
-    only the eight tables this class queries, answering identically, and a first
-    download builds it on the way in::
+    Most of that is never read.  [`compact`][provesid.chembl.CheMBL.compact]
+    builds a ~2.4 GiB extract holding only the eight tables this class queries,
+    answering identically, and a first download builds it on the way in::
 
         CheMBL()                             # downloads 5.8 GB, installs 2.4 GiB
         CheMBL(source="mysql")               # downloads 2.1 GB, installs 2.4 GiB
@@ -167,76 +169,76 @@ class CheMBL(SQLiteClient):
         CheMBL.compact(remove_source=True)   # shrink a release already on disk
 
     Only the download route is affected: a release already on disk is opened as
-    it is, and shrinking it is :meth:`compact`'s job rather than something a
-    constructor should do to 27.7 GB unasked.  A later ``CheMBL()`` opens the
-    extract in preference to a full release of the same number.
+    it is, and shrinking it is [`compact`][provesid.chembl.CheMBL.compact]'s
+    job rather than something a constructor should do to 27.7 GB unasked.  A
+    later ``CheMBL()`` opens the extract in preference to a full release of the
+    same number.
 
     ``latest/`` is a moving directory: it holds only the current release, so the
     archive name changes with every ChEMBL release.  The version is therefore
     resolved from the directory listing rather than pinned, with
-    :data:`DEFAULT_DB_URL` as the fallback when the listing cannot be read.
+    `DEFAULT_DB_URL` as the fallback when the listing cannot be read.
 
     Connection handling comes from
-    :class:`~provesid.sqlite_client.SQLiteClient`: use the class as a context
-    manager, or call :meth:`~provesid.sqlite_client.SQLiteClient.close` when
+    [`SQLiteClient`][provesid.sqlite_client.SQLiteClient]: use the class as a context
+    manager, or call [`close`][provesid.sqlite_client.SQLiteClient.close] when
     finished, and query it from as many threads as you like --- each gets its
     own connection.
     """
 
     LATEST_DIR_URL = "https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/"
 
-    #: Release used when the ``latest/`` listing cannot be read.
     FALLBACK_RELEASE = 37
+    """Release used when the ``latest/`` listing cannot be read."""
 
     DEFAULT_DB_URL = f"{LATEST_DIR_URL}chembl_{FALLBACK_RELEASE}_sqlite.tar.gz"
 
     # ── Acquisition ───────────────────────────────────────────────────────────
 
-    #: How a missing database is acquired, and what is kept afterwards.
-    #:
-    #: ``sqlite`` downloads the 5.8 GB release archive, extracts the 27.7 GiB
-    #: database, builds the extract from it and deletes the release; ``full``
-    #: stops after the extraction and keeps all 74 tables.  Both transfer the
-    #: same bytes -- the choice is what stays on disk, not what is fetched.
-    #:
-    #: ``mysql`` downloads ChEMBL's 2.1 GB MySQL dump instead and reads the
-    #: extract's eight tables straight out of it (:meth:`build_from_mysql_dump`),
-    #: so the 27.7 GiB release is never written at all.  It ends with the same
-    #: extract as ``sqlite``, for less than half the transfer and a seventh of
-    #: the free disk.
     SOURCES: Tuple[str, ...] = ("sqlite", "mysql", "full")
+    """How a missing database is acquired, and what is kept afterwards.
 
-    #: Which of ChEMBL's archives each route downloads: the ``NN`` in
-    #: ``chembl_NN_<format>.tar.gz``.
+    ``sqlite`` downloads the 5.8 GB release archive, extracts the 27.7 GiB
+    database, builds the extract from it and deletes the release; ``full``
+    stops after the extraction and keeps all 74 tables.  Both transfer the
+    same bytes -- the choice is what stays on disk, not what is fetched.
+
+    ``mysql`` downloads ChEMBL's 2.1 GB MySQL dump instead and reads the
+    extract's eight tables straight out of it
+    ([`build_from_mysql_dump`][provesid.chembl.CheMBL.build_from_mysql_dump]),
+    so the 27.7 GiB release is never written at all.  It ends with the same
+    extract as ``sqlite``, for less than half the transfer and a seventh of the
+    free disk.
+    """
+
     _ARCHIVE_FORMATS: Dict[str, str] = {
         "sqlite": "sqlite", "full": "sqlite", "mysql": "mysql",
     }
+    """Which of ChEMBL's archives each route downloads: the ``NN`` in
+    ``chembl_NN_<format>.tar.gz``.
+    """
 
-    #: A full release smaller than this is not worth suggesting :meth:`compact`
-    #: for -- and in the tests, the miniature databases are far below it.
     _COMPACT_HINT_BYTES = 1024 ** 3
+    """A full release smaller than this is not worth suggesting
+    [`compact`][provesid.chembl.CheMBL.compact] for -- and in the tests, the
+    miniature databases are far below it.
+    """
 
     # ── Compaction ────────────────────────────────────────────────────────────
 
-    #: Filename marker distinguishing a PROVESID extract from a full release:
-    #: ``chembl_37.db`` is the 30 GB original, ``chembl_37_provesid.db`` the
-    #: extract :meth:`compact` builds from it.
     COMPACT_SUFFIX = "_provesid"
+    """Filename marker distinguishing a PROVESID extract from a full release:
+    ``chembl_37.db`` is the 30 GB original, ``chembl_37_provesid.db`` the
+    extract [`compact`][provesid.chembl.CheMBL.compact] builds from it.
+    """
 
-    #: Bumped whenever :data:`COMPACT_TABLES` or the kept columns change, so an
-    #: extract built by an older PROVESID can be recognised as incomplete
-    #: instead of failing later with ``no such table``.
     COMPACT_SCHEMA_VERSION = 1
+    """Bumped whenever
+    [`COMPACT_TABLES`][provesid.chembl.CheMBL.COMPACT_TABLES] or the kept
+    columns change, so an extract built by an older PROVESID can be recognised
+    as incomplete instead of failing later with ``no such table``.
+    """
 
-    #: The only tables this package reads, with the columns kept for each.
-    #:
-    #: ``columns=None`` keeps every column.  ``where`` restricts the rows: the
-    #: ChEMBL id lookup carries an entry for every entity type (assays, targets,
-    #: documents), and :meth:`chembl_id_to_molregno` only ever asks about
-    #: compounds.  ``molfile`` is deliberately absent from
-    #: ``compound_structures``: it is a quarter of the whole database, nothing in
-    #: PROVESID consumes it, and a MOL block is reconstructible from the SMILES
-    #: with RDKit.
     COMPACT_TABLES: Dict[str, Dict[str, Any]] = {
         "molecule_dictionary": {"columns": None, "where": None},
         "compound_structures": {
@@ -261,15 +263,18 @@ class CheMBL(SQLiteClient):
         "pesticide_classification": {"columns": None, "where": None},
         "pesticide_class_mapping": {"columns": None, "where": None},
     }
+    """The only tables this package reads, with the columns kept for each.
 
-    #: Indexes built on the extract, one per lookup the package performs.
-    #:
-    #: ChEMBL's own indexes are not copied: most of them serve range queries on
-    #: ``compound_properties`` (``alogp``, ``psa``, ``rtb``, …) that this package
-    #: never issues.  The two ``lower(...)`` expression indexes are new, and are
-    #: what makes :meth:`search_by_name` an index lookup rather than a scan of
-    #: all 2.9 M rows: 743 ms per exact lookup on a full release, 10 µs here.
-    #: They cost a few tens of MB.
+    ``columns=None`` keeps every column.  ``where`` restricts the rows: the
+    ChEMBL id lookup carries an entry for every entity type (assays, targets,
+    documents), and
+    [`chembl_id_to_molregno`][provesid.chembl.CheMBL.chembl_id_to_molregno]
+    only ever asks about compounds.  ``molfile`` is deliberately absent from
+    ``compound_structures``: it is a quarter of the whole database, nothing in
+    PROVESID consumes it, and a MOL block is reconstructible from the SMILES
+    with RDKit.
+    """
+
     COMPACT_INDEXES: Tuple[Tuple[str, str], ...] = (
         ("ix_lookup_chembl_id", "chembl_id_lookup(chembl_id)"),
         ("ix_md_molregno", "molecule_dictionary(molregno)"),
@@ -287,13 +292,23 @@ class CheMBL(SQLiteClient):
         ("ix_pcm_molregno", "pesticide_class_mapping(molregno)"),
         ("ix_pcm_class", "pesticide_class_mapping(pest_class_id)"),
     )
+    """Indexes built on the extract, one per lookup the package performs.
 
-    #: Table recording where an extract came from; absent in a full release.
+    ChEMBL's own indexes are not copied: most of them serve range queries on
+    ``compound_properties`` (``alogp``, ``psa``, ``rtb``, …) that this package
+    never issues.  The two ``lower(...)`` expression indexes are new, and are
+    what makes [`search_by_name`][provesid.chembl.CheMBL.search_by_name] an
+    index lookup rather than a scan of all 2.9 M rows: 743 ms per exact lookup
+    on a full release, 10 µs here. They cost a few tens of MB.
+    """
+
     PROVENANCE_TABLE = "provesid_provenance"
+    """Table recording where an extract came from; absent in a full release."""
 
-    #: How many compounds :meth:`_verify_compact` re-reads from both databases
-    #: before an extract is trusted enough to delete its source.
     _VERIFY_SAMPLE = 500
+    """How many compounds `_verify_compact` re-reads from both databases
+    before an extract is trusted enough to delete its source.
+    """
 
     def __init__(
         self,
@@ -332,16 +347,16 @@ class CheMBL(SQLiteClient):
             original is deleted, so installing ChEMBL costs 2.4 GiB but needs
             33.4 GiB free on the way.  ``'mysql'`` downloads the 2.1 GB MySQL
             dump and builds the same extract from it directly
-            (:meth:`build_from_mysql_dump`), needing ~4.5 GiB free.  With
-            ``'full'`` the whole release is kept.  Only consulted when a
-            download actually happens.
+            ([`build_from_mysql_dump`][provesid.chembl.CheMBL.build_from_mysql_dump]),
+            needing ~4.5 GiB free.  With ``'full'`` the whole release is kept.
+             Only consulted when a download actually happens.
 
         Raises
         ------
         FileNotFoundError
             If database not found and auto_download is False
         ValueError
-            If ``source`` is not one of :data:`SOURCES`.
+            If ``source`` is not one of [`SOURCES`][provesid.chembl.CheMBL.SOURCES].
         ChEMBLError
             If database connection or validation fails
         """
@@ -420,7 +435,7 @@ class CheMBL(SQLiteClient):
 
         # Connect to the database.  One connection per thread, released by
         # close() or by leaving a ``with`` block --- see
-        # :class:`~provesid.sqlite_client.SQLiteClient`.
+        # ``SQLiteClient``.
         try:
             self._open_database(self.db_path)
             self.logger.info(f"Connected to ChEMBL database at {self.db_path}")
@@ -450,7 +465,7 @@ class CheMBL(SQLiteClient):
         Raises
         ------
         ValueError
-            If the name is not in :data:`SOURCES`.
+            If the name is not in [`SOURCES`][provesid.chembl.CheMBL.SOURCES].
         """
         if source in cls.SOURCES:
             return source
@@ -462,12 +477,13 @@ class CheMBL(SQLiteClient):
 
     def _suggest_compacting_a_full_release(self) -> None:
         """
-        Mention :meth:`compact` when a large full release has been opened.
+        Mention [`compact`][provesid.chembl.CheMBL.compact] when a large full
+        release has been opened.
 
         The constructor will not shrink a database the user already has --
         deleting 27 GB is asked for, not assumed -- so the only thing left to
         do about it is to say that the option exists, once, where the user is
-        already looking.  Silent below :data:`_COMPACT_HINT_BYTES`, since
+        already looking.  Silent below `_COMPACT_HINT_BYTES`, since
         there is then nothing worth reclaiming.
         """
         try:
@@ -489,8 +505,9 @@ class CheMBL(SQLiteClient):
 
         An extract is a subset of ChEMBL, so a PROVESID that later reads a ninth
         table would meet ``no such table`` with no hint that the database is
-        merely old.  Comparing the stored :data:`COMPACT_SCHEMA_VERSION` turns
-        that into an instruction.
+        merely old.  Comparing the stored
+        [`COMPACT_SCHEMA_VERSION`][provesid.chembl.CheMBL.COMPACT_SCHEMA_VERSION]
+        turns that into an instruction.
 
         Notes
         -----
@@ -536,9 +553,9 @@ class CheMBL(SQLiteClient):
         -------
         str
             URL of the newest archive, or the same archive of
-            :data:`FALLBACK_RELEASE` when the listing cannot be read or names
-            no archive.  Never raises — a stale pin is better than a hard
-            failure.
+            [`FALLBACK_RELEASE`][provesid.chembl.CheMBL.FALLBACK_RELEASE] when
+            the listing cannot be read or names no archive.  Never raises — a
+            stale pin is better than a hard failure.
 
         Examples
         --------
@@ -597,10 +614,10 @@ class CheMBL(SQLiteClient):
 
         "Best" is the highest release number, and at equal release numbers the
         PROVESID extract in preference to the full database.  Once
-        :meth:`compact` has run, a plain ``CheMBL()`` should open the 2.6 GB
-        extract rather than the 30 GB original that may still sit beside it --
-        they answer identically, and one of them costs a tenth of the page
-        cache.
+        [`compact`][provesid.chembl.CheMBL.compact] has run, a plain
+        ``CheMBL()`` should open the 2.6 GB extract rather than the 30 GB
+        original that may still sit beside it -- they answer identically, and
+        one of them costs a tenth of the page cache.
 
         Returns
         -------
@@ -628,10 +645,11 @@ class CheMBL(SQLiteClient):
         """
         Report whether a SQLite file is a PROVESID ChEMBL extract.
 
-        An extract carries a :data:`PROVENANCE_TABLE`; a full ChEMBL release
-        does not.  The check opens the file read-only and never raises for a
-        missing or unreadable path — a file that cannot be read is, for this
-        purpose, not an extract.
+        An extract carries a
+        [`PROVENANCE_TABLE`][provesid.chembl.CheMBL.PROVENANCE_TABLE]; a full
+        ChEMBL release does not.  The check opens the file read-only and never
+        raises for a missing or unreadable path — a file that cannot be read
+        is, for this purpose, not an extract.
 
         Parameters
         ----------
@@ -641,7 +659,8 @@ class CheMBL(SQLiteClient):
         Returns
         -------
         bool
-            True if the file is an extract built by :meth:`compact`.
+            True if the file is an extract built by
+            [`compact`][provesid.chembl.CheMBL.compact].
 
         Examples
         --------
@@ -670,7 +689,8 @@ class CheMBL(SQLiteClient):
     @classmethod
     def read_provenance(cls, db_path: str) -> Optional[Dict[str, str]]:
         """
-        Read the provenance record written by :meth:`compact`.
+        Read the provenance record written by
+        [`compact`][provesid.chembl.CheMBL.compact].
 
         Parameters
         ----------
@@ -707,7 +727,8 @@ class CheMBL(SQLiteClient):
 
         ``/data/chembl_37.db`` becomes ``/data/chembl_37_provesid.db``, so the
         extract sits beside the release it came from and still carries the
-        release number that :class:`CheMBL` parses out of the filename.
+        release number that [`CheMBL`][provesid.chembl.CheMBL] parses out of
+        the filename.
 
         Parameters
         ----------
@@ -743,12 +764,13 @@ class CheMBL(SQLiteClient):
         Build a small ChEMBL extract holding only the tables PROVESID reads.
 
         A full ChEMBL release is about 30 GB across 74 tables.  This package
-        opens eight of them (:data:`COMPACT_TABLES`) and reads no bioactivity
-        data at all, so almost the whole file is dead weight.  The extract
-        copies those eight tables, drops the ``molfile`` column -- a quarter of
-        the entire database on its own, and consumed nowhere -- keeps only the
-        ``COMPOUND`` rows of ``chembl_id_lookup``, and rebuilds just the indexes
-        the package's own queries need.
+        opens eight of them
+        ([`COMPACT_TABLES`][provesid.chembl.CheMBL.COMPACT_TABLES]) and reads
+        no bioactivity data at all, so almost the whole file is dead weight.
+         The extract copies those eight tables, drops the ``molfile`` column --
+        a quarter of the entire database on its own, and consumed nowhere --
+        keeps only the ``COMPOUND`` rows of ``chembl_id_lookup``, and rebuilds
+        just the indexes the package's own queries need.
 
         Measured on ChEMBL 36: **29.74 GB to 2.60 GB in 31 seconds**, with every
         public method of this class returning the same compounds.
@@ -764,17 +786,19 @@ class CheMBL(SQLiteClient):
             ``chembl_*.db`` in ``data_dir`` that is not already an extract.
         dest_path : str, optional
             Where to write the extract.  Defaults to
-            :meth:`compact_path_for` of the source, i.e. ``chembl_37.db``
-            produces ``chembl_37_provesid.db`` beside it.
+            [`compact_path_for`][provesid.chembl.CheMBL.compact_path_for] of
+            the source, i.e. ``chembl_37.db`` produces
+            ``chembl_37_provesid.db`` beside it.
         data_dir : str, optional
             Directory searched for the source and used for the default
             destination.  Defaults to the shared PROVESID dataset directory.
         keep_inchi : bool, optional
             Keep the ``standard_inchi`` column and its index (default: True).
-            Dropping it saves a further ~1.0 GB, but :meth:`search_by_inchi`
-            then has no column to match and ``Search`` loses the InChI it
-            currently reads straight from ChEMBL.  Leave this alone unless disk
-            is genuinely short.
+            Dropping it saves a further ~1.0 GB, but
+            [`search_by_inchi`][provesid.chembl.CheMBL.search_by_inchi] then
+            has no column to match and ``Search`` loses the InChI it currently
+            reads straight from ChEMBL.  Leave this alone unless disk is
+            genuinely short.
         remove_source : bool, optional
             Delete the full database once the extract verifies (default:
             False).  This is the step that reclaims the ~27 GB; it is off by
@@ -809,7 +833,7 @@ class CheMBL(SQLiteClient):
         '/data/chembl_37_provesid.db'
 
         A later ``CheMBL()`` picks up the extract automatically, because
-        :meth:`_find_local_database` prefers it over a full release of the same
+        `_find_local_database` prefers it over a full release of the same
         number.
 
         Notes
@@ -884,7 +908,8 @@ class CheMBL(SQLiteClient):
         cls, source_path: Optional[str], data_dir: Optional[str]
     ) -> str:
         """
-        Find the full ChEMBL database :meth:`compact` should read.
+        Find the full ChEMBL database
+        [`compact`][provesid.chembl.CheMBL.compact] should read.
 
         Parameters
         ----------
@@ -931,7 +956,8 @@ class CheMBL(SQLiteClient):
     @classmethod
     def _compact_table_spec(cls, keep_inchi: bool) -> Dict[str, Dict[str, Any]]:
         """
-        Return :data:`COMPACT_TABLES` with ``keep_inchi`` applied.
+        Return [`COMPACT_TABLES`][provesid.chembl.CheMBL.COMPACT_TABLES] with
+        ``keep_inchi`` applied.
 
         Parameters
         ----------
@@ -967,7 +993,7 @@ class CheMBL(SQLiteClient):
         source_path : str
             Full ChEMBL database.
         tables : dict
-            Table specification from :meth:`_compact_table_spec`.
+            Table specification from `_compact_table_spec`.
 
         Raises
         ------
@@ -1025,7 +1051,7 @@ class CheMBL(SQLiteClient):
         dest_path : str
             File to create.  Must not already exist.
         tables : dict
-            Table specification from :meth:`_compact_table_spec`.
+            Table specification from `_compact_table_spec`.
         keep_inchi : bool
             Recorded in the provenance table.
 
@@ -1072,7 +1098,8 @@ class CheMBL(SQLiteClient):
         Finish an extract whose tables are filled: indexes, statistics, VACUUM.
 
         Shared by both ways of building an extract -- from a SQLite release
-        (:meth:`compact`) and from a MySQL dump (:meth:`build_from_mysql_dump`)
+        ([`compact`][provesid.chembl.CheMBL.compact]) and from a MySQL dump
+        ([`build_from_mysql_dump`][provesid.chembl.CheMBL.build_from_mysql_dump])
         -- so that the two cannot drift apart in anything a query would notice.
 
         Parameters
@@ -1111,9 +1138,10 @@ class CheMBL(SQLiteClient):
 
         An extract is a *subset*, so it goes stale differently from a copy: a
         later PROVESID that needs a ninth table has to be able to say so rather
-        than fail with ``no such table``.  :data:`COMPACT_SCHEMA_VERSION` is what
-        makes that possible, and the rest of the record makes a database on disk
-        able to answer where it came from.
+        than fail with ``no such table``.
+         [`COMPACT_SCHEMA_VERSION`][provesid.chembl.CheMBL.COMPACT_SCHEMA_VERSION]
+        is what makes that possible, and the rest of the record makes a
+        database on disk able to answer where it came from.
 
         Parameters
         ----------
@@ -1129,7 +1157,9 @@ class CheMBL(SQLiteClient):
             Whether ``standard_inchi`` was kept.
         source_format : {'sqlite', 'mysql'}, optional
             What ``source_path`` is: a ChEMBL SQLite release (default), or the
-            MySQL dump archive :meth:`build_from_mysql_dump` read.
+            MySQL dump archive
+            [`build_from_mysql_dump`][provesid.chembl.CheMBL.build_from_mysql_dump]
+            read.
         """
         from . import __version__
 
@@ -1179,7 +1209,7 @@ class CheMBL(SQLiteClient):
         Returns
         -------
         list of int
-            Up to :data:`_VERIFY_SAMPLE` molregnos that exist in
+            Up to `_VERIFY_SAMPLE` molregnos that exist in
             ``compound_structures``.  Fewer when the table is smaller than that,
             in which case every row is returned.
         """
@@ -1303,11 +1333,13 @@ class CheMBL(SQLiteClient):
         """
         Build the PROVESID extract straight from ChEMBL's MySQL dump.
 
-        The same extract as :meth:`compact` -- the eight tables in
-        :data:`COMPACT_TABLES`, the same columns, the same indexes -- read out
-        of ``chembl_NN_mysql.tar.gz`` as it is decompressed, rather than out of
-        a 27.7 GiB SQLite release that first has to be written to disk.  The
-        other 66 tables stream past unparsed.
+        The same extract as [`compact`][provesid.chembl.CheMBL.compact] -- the
+        eight tables in
+        [`COMPACT_TABLES`][provesid.chembl.CheMBL.COMPACT_TABLES], the same
+        columns, the same indexes -- read out of ``chembl_NN_mysql.tar.gz`` as
+        it is decompressed, rather than out of a 27.7 GiB SQLite release that
+        first has to be written to disk.  The other 66 tables stream past
+        unparsed.
 
         ================  ================  =====================
         route             download          free disk at peak
@@ -1318,9 +1350,10 @@ class CheMBL(SQLiteClient):
 
         Column types are taken from the dump's ``CREATE TABLE`` statements and
         mapped to the affinity SQLite would give them
-        (:func:`provesid.mysqldump.sqlite_affinity`), so every value is stored
-        the way :meth:`compact` stores it: a ``max_phase`` of ``4.0`` becomes
-        the integer 4 in both.
+        ([`provesid.mysqldump.sqlite_affinity`][provesid.mysqldump.sqlite_affinity]),
+        so every value is stored the way
+        [`compact`][provesid.chembl.CheMBL.compact] stores it: a ``max_phase``
+        of ``4.0`` becomes the integer 4 in both.
 
         Parameters
         ----------
@@ -1330,10 +1363,10 @@ class CheMBL(SQLiteClient):
         dest_path : str, optional
             Where to write the extract.  Defaults to
             ``chembl_NN_provesid.db`` beside the archive, the name
-            :meth:`compact` would give the same release.
+            [`compact`][provesid.chembl.CheMBL.compact] would give the same release.
         keep_inchi : bool, optional
             Keep the ``standard_inchi`` column and its index (default: True).
-            See :meth:`compact`.
+            See [`compact`][provesid.chembl.CheMBL.compact].
         remove_source : bool, optional
             Delete the archive as soon as it has been read (default: False).
             That is before the indexes are built and the file is vacuumed,
@@ -1357,8 +1390,9 @@ class CheMBL(SQLiteClient):
             If the archive holds no ``.dmp`` or ``.sql`` file, if it cannot be
             decompressed, if a table or column the extract needs is missing, if
             one of the eight tables has no rows, or if a line of a needed table
-            cannot be parsed (:class:`provesid.mysqldump.DumpFormatError`).  A
-            failed build removes the partial extract.
+            cannot be parsed
+            ([`provesid.mysqldump.DumpFormatError`][provesid.mysqldump.DumpFormatError]).
+             A failed build removes the partial extract.
 
         Examples
         --------
@@ -1373,11 +1407,12 @@ class CheMBL(SQLiteClient):
         Notes
         -----
         There is no source database to check the result against, so the
-        verification :meth:`compact` performs is replaced by SQLite's
-        ``quick_check``, the row counts, and the requirement that all eight
-        tables were found and none is empty.  Equivalence with the ``sqlite``
-        route is a property of the parser and was measured once, on real data,
-        with :meth:`extract_digest`.
+        verification [`compact`][provesid.chembl.CheMBL.compact] performs is
+        replaced by SQLite's ``quick_check``, the row counts, and the
+        requirement that all eight tables were found and none is empty.
+         Equivalence with the ``sqlite`` route is a property of the parser and
+        was measured once, on real data, with
+        [`extract_digest`][provesid.chembl.CheMBL.extract_digest].
         """
         logger = logging.getLogger(__name__)
 
@@ -1447,7 +1482,7 @@ class CheMBL(SQLiteClient):
         The archive is opened in ``tarfile``'s streaming mode (``r|gz``), so it
         is decompressed once, front to back, and nothing is written but the
         rows kept.  Each wanted ``CREATE TABLE`` creates its table
-        (:meth:`_create_table_from_dump`); each ``INSERT`` is projected and
+        (`_create_table_from_dump`); each ``INSERT`` is projected and
         filtered by the statement that call returns.
 
         Parameters
@@ -1457,7 +1492,7 @@ class CheMBL(SQLiteClient):
         dump_path : str
             ``chembl_NN_mysql.tar.gz``.
         tables : dict
-            Table specification from :meth:`_compact_table_spec`.
+            Table specification from `_compact_table_spec`.
 
         Returns
         -------
@@ -1562,7 +1597,8 @@ class CheMBL(SQLiteClient):
             The ``INSERT`` statement that takes one dump row, in the dump's
             column order, and stores the kept columns of it if it passes the
             filter.  Projection and filter are left to SQLite, which reuses the
-            same ``where`` text :meth:`compact` applies to a release.
+            same ``where`` text [`compact`][provesid.chembl.CheMBL.compact]
+            applies to a release.
 
         Raises
         ------
@@ -1645,14 +1681,16 @@ class CheMBL(SQLiteClient):
         Parameters
         ----------
         db_path : str
-            A database holding the tables of :data:`COMPACT_TABLES` -- an
+            A database holding the tables of
+            [`COMPACT_TABLES`][provesid.chembl.CheMBL.COMPACT_TABLES] -- an
             extract, or a full release.
 
         Returns
         -------
         dict
             ``{table: (row_count, hex_digest)}`` for each table in
-            :data:`COMPACT_TABLES` present in the file.
+            [`COMPACT_TABLES`][provesid.chembl.CheMBL.COMPACT_TABLES] present
+            in the file.
 
         Examples
         --------
@@ -1706,15 +1744,16 @@ class CheMBL(SQLiteClient):
         the molecule_dictionary table.
 
         With ``source="sqlite"`` (the default) the release is then compacted
-        into the PROVESID extract (:meth:`compact`) and the full database is
-        deleted, leaving ~2.4 GiB on disk and moving ``db_path`` onto the
-        extract.  The two together never need more room than the extraction
-        already did: the archive is deleted before the extract is built.
+        into the PROVESID extract ([`compact`][provesid.chembl.CheMBL.compact])
+        and the full database is deleted, leaving ~2.4 GiB on disk and moving
+        ``db_path`` onto the extract.  The two together never need more room
+        than the extraction already did: the archive is deleted before the
+        extract is built.
 
         With ``source="mysql"`` none of that happens: the 2.1 GB MySQL dump is
         downloaded instead and the same extract is read straight out of it
-        (:meth:`build_from_mysql_dump`), so there is no release to extract,
-        validate or delete.
+        ([`build_from_mysql_dump`][provesid.chembl.CheMBL.build_from_mysql_dump]),
+        so there is no release to extract, validate or delete.
 
         The download is resumable. An interrupted transfer leaves a ``.part``
         file beside the archive and the next call continues from it, which
@@ -1740,7 +1779,8 @@ class CheMBL(SQLiteClient):
         A compaction that fails after a successful download does *not* raise:
         the full release is in place by then and answers every query, so the
         failure costs disk rather than function.  It is logged as a warning
-        naming :meth:`compact`, and ``db_path`` stays on the full release.
+        naming [`compact`][provesid.chembl.CheMBL.compact], and ``db_path``
+        stays on the full release.
 
         Examples
         --------
@@ -1832,10 +1872,11 @@ class CheMBL(SQLiteClient):
         Download ChEMBL's MySQL dump and build the extract from it.
 
         The whole of ``source="mysql"``.  The dump is downloaded to disk rather
-        than parsed straight off the socket, because :func:`download_file` can
-        resume it: an interruption at 90% of 2.1 GB should cost the last 10%,
-        not the whole transfer again.  That costs 2.1 GB of transient disk,
-        against the 33.4 GiB the ``sqlite`` route needs.
+        than parsed straight off the socket, because
+        [`download_file`][provesid.datasets.download_file] can resume it: an
+        interruption at 90% of 2.1 GB should cost the last 10%, not the whole
+        transfer again.  That costs 2.1 GB of transient disk, against the 33.4
+        GiB the ``sqlite`` route needs.
 
         The archive is deleted as soon as it has been read, and on any failure
         to build from it.  On success ``db_path`` moves onto the extract.
@@ -1889,8 +1930,8 @@ class CheMBL(SQLiteClient):
         write the 27.7 GiB database before anything can be read out of it, so
         the saving is made at the end rather than avoided at the start. The
         extract is verified against the release before the release is deleted
-        (:meth:`compact`), so the file that survives is the one that was
-        checked.
+        ([`compact`][provesid.chembl.CheMBL.compact]), so the file that
+        survives is the one that was checked.
 
         ``force=True`` is passed deliberately: a re-download means the caller
         asked for this release again, and an extract left over from a previous
@@ -2114,10 +2155,10 @@ class CheMBL(SQLiteClient):
         ``molecule_dictionary`` on every call, at a measured 743 ms per exact
         lookup. Each arm of the ``UNION`` is independently indexable, and on a
         database carrying the ``lower(...)`` expression indexes that
-        :meth:`compact` builds (``ix_md_pref_lower``, ``ix_ms_syn_lower``) an
-        exact lookup costs about 10 µs — some 77 000× faster. A full ChEMBL
-        release has no such indexes and still scans, but it scans two small
-        queries instead of a join.
+        [`compact`][provesid.chembl.CheMBL.compact] builds
+        (``ix_md_pref_lower``, ``ix_ms_syn_lower``) an exact lookup costs about
+        10 µs — some 77 000× faster. A full ChEMBL release has no such indexes
+        and still scans, but it scans two small queries instead of a join.
 
         ``exact=False`` cannot use those indexes either way: a leading-wildcard
         ``LIKE`` is a scan by construction.
@@ -2297,6 +2338,7 @@ class CheMBL(SQLiteClient):
         -------
         dict or None
             Dictionary with compound information including:
+
             - molregno, chembl_id, pref_name, max_phase, therapeutic_flag,
               molecule_type
             - canonical_smiles, standard_inchi, standard_inchi_key
@@ -2306,8 +2348,9 @@ class CheMBL(SQLiteClient):
 
             No ``molfile`` is returned.  It is a quarter of a full ChEMBL
             database on its own, nothing in PROVESID consumed it, and it is
-            absent from the extract :meth:`compact` builds.  Build a MOL block
-            from ``canonical_smiles`` with RDKit when you need one.
+            absent from the extract [`compact`][provesid.chembl.CheMBL.compact]
+            builds.  Build a MOL block from ``canonical_smiles`` with RDKit
+            when you need one.
 
         Examples
         --------
@@ -2375,6 +2418,7 @@ class CheMBL(SQLiteClient):
         -------
         dict or None
             Dictionary with properties including:
+
             - mw_freebase: Molecular weight
             - alogp: Calculated LogP
             - hba: Hydrogen bond acceptors
@@ -2424,6 +2468,7 @@ class CheMBL(SQLiteClient):
         -------
         dict or None
             Dictionary with molecule_dictionary fields including:
+
             - molregno: Internal Primary Key
             - pref_name: Preferred name for the molecule
             - chembl_id: ChEMBL identifier
@@ -2530,6 +2575,7 @@ class CheMBL(SQLiteClient):
         -------
         dict or None
             Dictionary with hierarchy information including:
+
             - molregno: The compound's molregno (has associated data)
             - parent_molregno: Parent compound after removing salts. If same as molregno,
                              no salt component or couldn't be processed
@@ -2611,6 +2657,7 @@ class CheMBL(SQLiteClient):
         -------
         list of dict
             List of dictionaries containing pesticide classification information:
+
             - mol_pest_id: Primary key for the mapping
             - pest_class_id: ID of the pesticide classification
             - molregno: Molecule registry number
@@ -2682,6 +2729,7 @@ class CheMBL(SQLiteClient):
         -------
         dict or None
             Dictionary with pesticide classification details:
+
             - pest_class_id: Primary key
             - compound_name: Name used in FRAC/HRAC/IRAC classification. Use with
                            ref_id and ref_url to identify row in source file
@@ -2772,6 +2820,7 @@ class CheMBL(SQLiteClient):
         -------
         list of dict
             List of matching pesticide classifications with fields:
+
             - pest_class_id: Primary key
             - compound_name: Name in classification
             - mec_id: Mechanism ID
@@ -2800,6 +2849,7 @@ class CheMBL(SQLiteClient):
         Notes
         -----
         Valid ref_type values:
+
         - 'FRAC': Fungicide Resistance Action Committee
         - 'HRAC': Herbicide Resistance Action Committee
         - 'IRAC': Insecticide Resistance Action Committee

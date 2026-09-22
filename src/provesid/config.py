@@ -5,7 +5,7 @@ Provides persistent storage for API keys and user preferences.
 The keys live in ``config.json`` under ``$XDG_CONFIG_HOME/provesid`` (by
 default ``~/.config/provesid``), or ``%APPDATA%\\PROVESID`` on Windows, as
 plain text. Only CAS Common Chemistry needs one today:
-:class:`~provesid.cascommonchem.CASCommonChem` reads it when no key or key
+[`CASCommonChem`][provesid.cascommonchem.CASCommonChem] reads it when no key or key
 file is passed, and before the ``CCC_API_KEY`` and ``CAS_API_KEY``
 environment variables --- so a stored key wins over the environment.
 
@@ -27,7 +27,8 @@ class ConfigManager:
     Manages persistent configuration for PROVESID.
 
     Every read goes to the file, so a key set in another process is seen at
-    once. Use :func:`get_config_manager` for the shared instance.
+    once. Use [`get_config_manager`][provesid.config.get_config_manager] for
+    the shared instance.
 
     Examples:
         >>> manager = ConfigManager()
@@ -74,7 +75,7 @@ class ConfigManager:
         Load configuration from file.
 
         Returns:
-            dict: The file's contents; empty when there is no file or it cannot
+            (dict): The file's contents; empty when there is no file or it cannot
             be read (the latter logged).
 
         Examples:
@@ -185,7 +186,7 @@ class ConfigManager:
         List all services with configured API keys.
 
         Returns:
-            list: Service names, in the order they were first stored.
+            (list): Service names, in the order they were first stored.
 
         Examples:
             >>> manager = ConfigManager()
@@ -204,7 +205,7 @@ class ConfigManager:
         Get information about the configuration.
 
         Returns:
-            dict: ``config_directory``, ``config_file``, ``config_exists`` and
+            (dict): ``config_directory``, ``config_file``, ``config_exists`` and
             ``configured_services``. The keys themselves are not included.
 
         Examples:
@@ -229,7 +230,7 @@ def get_config_manager() -> ConfigManager:
     Built on first call; the same object every time after.
 
     Returns:
-        ConfigManager: The shared instance.
+        (ConfigManager): The shared instance.
 
     Examples:
         >>> get_config_manager() is get_config_manager()
@@ -268,7 +269,7 @@ def get_cas_api_key() -> Optional[str]:
     Get the stored CAS API key.
 
     Only the config file is read; the ``CAS_API_KEY`` environment variable,
-    which :class:`~provesid.cascommonchem.CASCommonChem` consults after this
+    which [`CASCommonChem`][provesid.cascommonchem.CASCommonChem] consults after this
     file, is not.
 
     Returns:

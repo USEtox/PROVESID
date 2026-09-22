@@ -8,11 +8,13 @@ A caller that wants to compare two compounds has to turn that back into numbers,
 and doing it per call site is how PROVESID ended up with two parsers that
 disagreed with each other.
 
-This module holds the only one. :func:`parse_value` takes the string and the
-heading it was found under, and returns a :class:`ParsedValue` carrying the
-number (or the range), the unit as written, the same quantity in SI units, the
-temperature the measurement was made at, and any comparison operator or
-qualitative term that replaced the number.
+This module holds the only one.
+[`parse_value`][provesid.pubchemview_parse.parse_value] takes the string and
+the heading it was found under, and returns a
+[`ParsedValue`][provesid.pubchemview_parse.ParsedValue] carrying the number (or
+the range), the unit as written, the same quantity in SI units, the temperature
+the measurement was made at, and any comparison operator or qualitative term
+that replaced the number.
 
 Nothing here makes a network request, so it can be tested against real strings
 without touching PubChem.
@@ -35,10 +37,6 @@ from typing import Dict, Optional, Tuple
 # Units
 # ---------------------------------------------------------------------------
 
-#: Spellings that mean the same unit, mapped to the one this module reports.
-#: PubChem's depositors write the same unit half a dozen ways, and a caller
-#: grouping by unit should not see ``mmHg``, ``mm Hg`` and ``torr`` as three
-#: different things.
 UNIT_ALIASES: Dict[str, str] = {
     # temperature. Single letters are handled by _clean_unit against a
     # whole-token pattern, never by this table: an entry for 'c' would turn the
@@ -76,16 +74,12 @@ UNIT_ALIASES: Dict[str, str] = {
     # surface tension
     'dyn/cm': 'dyn/cm', 'mn/m': 'mN/m', 'n/m': 'N/m',
 }
+"""Spellings that mean the same unit, mapped to the one this module reports.
+PubChem's depositors write the same unit half a dozen ways, and a caller
+grouping by unit should not see ``mmHg``, ``mm Hg`` and ``torr`` as three
+different things.
+"""
 
-#: Conversion of a reported unit to the SI unit this module reports alongside
-#: it, as ``(si_unit, scale, offset)`` with ``si = value * scale + offset``.
-#: The offset is what makes a temperature range need its ends converted
-#: separately rather than scaled.
-#:
-#: Deliberately absent: ``%``, ``ppm``, ``ppb`` and the ``w/w`` and ``v/v``
-#: variants. They are compositions, not concentrations, and turning one into
-#: kg/m³ needs a density this module does not have. A guess there would be
-#: worse than the honest ``None`` a caller can test for.
 UNIT_TO_SI: Dict[str, Tuple[str, float, float]] = {
     # temperature -> kelvin
     '°C': ('K', 1.0, 273.15),
@@ -133,34 +127,45 @@ UNIT_TO_SI: Dict[str, Tuple[str, float, float]] = {
     'mN/m': ('N/m', 1e-3, 0.0),
     'N/m': ('N/m', 1.0, 0.0),
 }
+"""Conversion of a reported unit to the SI unit this module reports alongside
+it, as ``(si_unit, scale, offset)`` with ``si = value * scale + offset``.
+The offset is what makes a temperature range need its ends converted
+separately rather than scaled.
 
-#: Headings whose bare numbers are degrees Celsius. PubChem's depositors often
-#: leave the unit off a melting point, and a melting point without a unit is
-#: not ambiguous in practice.
+Deliberately absent: ``%``, ``ppm``, ``ppb`` and the ``w/w`` and ``v/v``
+variants. They are compositions, not concentrations, and turning one into
+kg/m³ needs a density this module does not have. A guess there would be
+worse than the honest ``None`` a caller can test for.
+"""
+
 CELSIUS_HEADINGS = (
     'melting point', 'boiling point', 'flash point', 'autoignition',
     'decomposition', 'freezing point', 'sublimation',
 )
+"""Headings whose bare numbers are degrees Celsius. PubChem's depositors often
+leave the unit off a melting point, and a melting point without a unit is
+not ambiguous in practice.
+"""
 
-#: Headings whose values are dimensionless, so that a bare number is a complete
-#: answer rather than a value missing its unit.
 DIMENSIONLESS_HEADINGS = (
     'logp', 'log p', 'kow', 'dissociation constant', 'ph', 'refractive index',
     'relative density', 'specific gravity', 'logs', 'pka',
 )
+"""Headings whose values are dimensionless, so that a bare number is a complete
+answer rather than a value missing its unit.
+"""
 
-#: Words that stand in place of a number. PubChem records "insoluble" as often
-#: as it records a solubility, and dropping the row loses the information that
-#: somebody measured it and found it negligible.
 QUALITATIVE_TERMS = (
     'practically insoluble', 'very slightly soluble', 'slightly soluble',
     'sparingly soluble', 'freely soluble', 'very soluble', 'readily soluble',
     'miscible', 'immiscible', 'insoluble', 'soluble', 'negligible',
     'decomposes', 'stable', 'not applicable',
 )
+"""Words that stand in place of a number. PubChem records "insoluble" as often
+as it records a solubility, and dropping the row loses the information that
+somebody measured it and found it negligible.
+"""
 
-#: Comparison operators, longest spelling first so that "greater than or equal
-#: to" is not read as "greater than".
 _OPERATORS = (
     ('greater than or equal to', '>='),
     ('less than or equal to', '<='),
@@ -170,6 +175,9 @@ _OPERATORS = (
     ('>=', '>='), ('<=', '<='), ('≥', '>='), ('≤', '<='),
     ('>', '>'), ('<', '<'), ('ca.', '~'), ('approx.', '~'), ('~', '~'),
 )
+"""Comparison operators, longest spelling first so that "greater than or equal
+to" is not read as "greater than".
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -191,13 +199,17 @@ class ParsedValue:
             ``value_max`` without special-casing ranges.
         value_max: High end of the reported quantity.
         unit: The unit as PubChem wrote it, with the spelling normalised
-            through :data:`UNIT_ALIASES` — ``torr`` and ``mm Hg`` both report as
-            ``mmHg``. None when the quantity is dimensionless or no unit was
-            found.
-        value_si: ``value`` expressed in :attr:`unit_si`. None when there is no
-            single value, or when the unit has no unambiguous SI equivalent.
-        value_min_si: ``value_min`` expressed in :attr:`unit_si`.
-        value_max_si: ``value_max`` expressed in :attr:`unit_si`.
+            through [`UNIT_ALIASES`][provesid.pubchemview_parse.UNIT_ALIASES] —
+            ``torr`` and ``mm Hg`` both report as ``mmHg``. None when the
+            quantity is dimensionless or no unit was found.
+        value_si: ``value`` expressed in
+            [`unit_si`][provesid.pubchemview_parse.ParsedValue]. None when
+            there is no single value, or when the unit has no unambiguous SI
+            equivalent.
+        value_min_si: ``value_min`` expressed in
+            [`unit_si`][provesid.pubchemview_parse.ParsedValue].
+        value_max_si: ``value_max`` expressed in
+            [`unit_si`][provesid.pubchemview_parse.ParsedValue].
         unit_si: The SI unit the ``*_si`` fields are expressed in: ``K``,
             ``Pa``, ``kg/m³``, ``mol/m³``, ``Pa·s``, ``m²/s`` or ``N/m``. None
             for a dimensionless quantity and for units that cannot be converted
@@ -274,56 +286,61 @@ class ParsedValue:
 # Parsing
 # ---------------------------------------------------------------------------
 
-#: A number, including scientific notation. PubChem's ``X10`` notation is
-#: rewritten to ``e`` before this is applied, so it need not be handled here.
 _NUMBER = r'[-+]?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?'
+"""A number, including scientific notation. PubChem's ``X10`` notation is
+rewritten to ``e`` before this is applied, so it need not be handled here.
+"""
 
-#: Temperature units, which are the only ones written as a single letter. The
-#: lookahead is what stops the ``c`` of ``cP`` being read as Celsius.
 _TEMPERATURE_UNIT = r'°\s*[CFK]\b|deg(?:rees?)?\s*[CF]\b|[CFK](?![A-Za-zµμ])'
+"""Temperature units, which are the only ones written as a single letter. The
+lookahead is what stops the ``c`` of ``cP`` being read as Celsius.
+"""
 
-#: Every spelling this module recognises, longest first so that ``g/cm³``
-#: wins over ``g`` and ``mm Hg`` over ``mm``. Regex alternation is first-match,
-#: not longest-match, so the ordering is what makes the pattern correct.
 _KNOWN_UNIT_SPELLINGS = sorted(
     set(UNIT_ALIASES) | set(UNIT_ALIASES.values()) | set(UNIT_TO_SI),
     key=len, reverse=True)
+"""Every spelling this module recognises, longest first so that ``g/cm³``
+wins over ``g`` and ``mm Hg`` over ``mm``. Regex alternation is first-match,
+not longest-match, so the ordering is what makes the pattern correct.
+"""
 
-#: A unit token: a known spelling, or — so that an unrecognised unit is
-#: still reported as written rather than dropped — a generic run of
-#: unit-ish characters.
-#: The known spellings match case-insensitively, so ``mm Hg``, ``MM HG`` and
-#: ``mmhg`` all resolve; the scoped flag keeps that leniency away from
-#: _TEMPERATURE_UNIT, where a case-insensitive single ``c`` would start reading
-#: stray letters as Celsius.
 _UNIT = (r'(?:' + _TEMPERATURE_UNIT + r'|(?:(?i:'
          + r'|'.join(re.escape(spelling) for spelling in _KNOWN_UNIT_SPELLINGS)
          # A known spelling has to end where the token ends, or the 'pa' of
          # 'parts' is read as pascals.
          + r'))(?![A-Za-zµμ])|[A-Za-zµμ%][A-Za-zµμ%0-9/·²³]{0,11})')
+"""A unit token: a known spelling, or — so that an unrecognised unit is
+still reported as written rather than dropped — a generic run of
+unit-ish characters.
+The known spellings match case-insensitively, so ``mm Hg``, ``MM HG`` and
+``mmhg`` all resolve; the scoped flag keeps that leniency away from
+_TEMPERATURE_UNIT, where a case-insensitive single ``c`` would start reading
+stray letters as Celsius.
+"""
 
 _RANGE_SEPARATOR = r'\s*(?:to|-|–|—)\s*'
 
-#: ``at 25 °C``, ``@ 25 C``.
 _TEMPERATURE_CLAUSE = re.compile(
     r'(?:at|@)\s*(' + _NUMBER + r')\s*°?\s*([CFK])\b', re.IGNORECASE)
+"""``at 25 °C``, ``@ 25 C``."""
 
-#: ``(77 °F): 0.3%`` — a parenthesised temperature used as a label for the
-#: value that follows. The trailing colon is what distinguishes it from a
-#: parenthesised value such as ``(135 °C)``, so it is required.
 _TEMPERATURE_LABEL = re.compile(
     r'\(\s*(' + _NUMBER + r')\s*°?\s*([CFK])\s*\)\s*:', re.IGNORECASE)
+"""``(77 °F): 0.3%`` — a parenthesised temperature used as a label for the
+value that follows. The trailing colon is what distinguishes it from a
+parenthesised value such as ``(135 °C)``, so it is required.
+"""
 
-#: Both spellings of a temperature stated as a condition, tried in order.
 _TEMPERATURE_CONDITIONS = (_TEMPERATURE_CLAUSE, _TEMPERATURE_LABEL)
+"""Both spellings of a temperature stated as a condition, tried in order."""
 
-#: A pressure stated as a condition rather than as the value.
 _PRESSURE_CLAUSE = re.compile(
     r'(?:at|@)\s*(' + _NUMBER + r')\s*(mm\s?Hg|torr|kPa|Pa|atm|bar|psi)\b',
     re.IGNORECASE)
+"""A pressure stated as a condition rather than as the value."""
 
-#: ``/Estimated/``, ``/from tables/`` — PubChem's own convention for a note.
 _SLASH_NOTE = re.compile(r'/([^/]{2,60})/')
+"""``/Estimated/``, ``/from tables/`` — PubChem's own convention for a note."""
 
 
 def _normalise_text(text: str) -> str:
@@ -496,8 +513,9 @@ def _find_conditions(text: str) -> Optional[str]:
     Collect the qualifying text that is neither the value nor the temperature.
 
     The temperature is reported separately, in
-    :attr:`ParsedValue.temperature_c`, so it is not repeated here; a pressure a
-    measurement was taken at has no field of its own and lands here.
+    [`ParsedValue.temperature_c`][provesid.pubchemview_parse.ParsedValue], so
+    it is not repeated here; a pressure a measurement was taken at has no field
+    of its own and lands here.
 
     Args:
         text: Value string.
@@ -528,7 +546,7 @@ def _parse_numbers(text: str, heading: Optional[str]) -> Tuple[
     rather than the 20 of its own condition.
 
     Args:
-        text: Value string, already normalised by :func:`_normalise_text`.
+        text: Value string, already normalised by `_normalise_text`.
         heading: The section heading, used to decide what a bare number means.
 
     Returns:
@@ -598,7 +616,8 @@ def parse_value(text: Optional[str], heading: Optional[str] = None) -> ParsedVal
 
     Args:
         text: The value string, as PubChem returned it. None or empty gives a
-            :class:`ParsedValue` carrying nothing but the (empty) text.
+            [`ParsedValue`][provesid.pubchemview_parse.ParsedValue] carrying
+            nothing but the (empty) text.
         heading: The PUG-View heading the value was found under, e.g.
             ``"Melting Point"``. Used for two decisions a string alone cannot
             settle: a bare number under a temperature heading is degrees
@@ -607,10 +626,11 @@ def parse_value(text: Optional[str], heading: Optional[str] = None) -> ParsedVal
             stands. Passing None is safe and simply declines both hints.
 
     Returns:
-        A :class:`ParsedValue`. It always carries ``text``; every other field is
-        None when the string did not state it. Nothing is invented: an
-        unrecognised unit is reported as written with no SI conversion, and a
-        string with no number gives ``value is None`` rather than a zero.
+        A [`ParsedValue`][provesid.pubchemview_parse.ParsedValue]. It always
+        carries ``text``; every other field is None when the string did not
+        state it. Nothing is invented: an unrecognised unit is reported as
+        written with no SI conversion, and a string with no number gives
+        ``value is None`` rather than a zero.
 
     Examples:
         >>> parse_value("138-140 °C", "Melting Point").value_max_si

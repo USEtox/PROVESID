@@ -37,22 +37,26 @@ from .datasets import download_file
 from .sqlite_client import SQLiteClient
 from .utils import user_dataset_path
 
-#: The table :meth:`CompToxID.build_name_index` adds to the database: one row
-#: per distinct name of each chemical, keyed by :func:`name_key`.
 NAME_INDEX_TABLE = "chemical_names"
+"""The table
+[`CompToxID.build_name_index`][provesid.comptox.CompToxID.build_name_index]
+adds to the database: one row per distinct name of each chemical, keyed by
+[`name_key`][provesid.comptox.name_key].
+"""
 
-#: The shape of a CAS Registry Number, for inputs that must be one.
 _CAS_NUMBER = re.compile(r"\d{2,7}-\d{2}-\d")
+"""The shape of a CAS Registry Number, for inputs that must be one."""
 
-#: Where a name came from, in the order an exact lookup ranks its matches: a
-#: chemical *called* the query outranks one that merely lists it as a synonym.
 NAME_KINDS = {"preferred": 0, "iupac": 1, "identifier": 2}
+"""Where a name came from, in the order an exact lookup ranks its matches: a
+chemical *called* the query outranks one that merely lists it as a synonym.
+"""
 
 
 def name_key(name: str) -> str:
     """The form a name is indexed and looked up under: stripped and lower-cased.
 
-    Python's :meth:`str.lower` rather than SQLite's ``lower()``, which folds
+    Python's `str.lower` rather than SQLite's ``lower()``, which folds
     ASCII only; the same function builds the index and reads it, so the two
     always agree.
 
@@ -70,16 +74,17 @@ def name_key(name: str) -> str:
 
 
 def _build_name_index(connection: sqlite3.Connection) -> int:
-    """Create and fill :data:`NAME_INDEX_TABLE` in one transaction.
+    """Create and fill [`NAME_INDEX_TABLE`][provesid.comptox.NAME_INDEX_TABLE]
+    in one transaction.
 
     Every chemical contributes its ``PREFERRED_NAME``, its ``IUPAC_NAME`` and
     each ``|``-separated token of ``IDENTIFIER`` --- synonyms, but also former
     CAS numbers, InChIKeys and registry codes --- once per distinct key, tagged
-    with the first :data:`NAME_KINDS` it appeared under.  The table is
-    ``WITHOUT ROWID`` with the key leading its primary key, so the text is
-    stored once and the lookup is a single B-tree search: on the 2025 release,
-    5.1 M rows, ~290 MiB and ~20 s to build.  A separate index over an
-    ordinary table measured 540 MiB.
+    with the first [`NAME_KINDS`][provesid.comptox.NAME_KINDS] it appeared
+    under.  The table is ``WITHOUT ROWID`` with the key leading its primary
+    key, so the text is stored once and the lookup is a single B-tree search:
+    on the 2025 release, 5.1 M rows, ~290 MiB and ~20 s to build.  A separate
+    index over an ordinary table measured 540 MiB.
 
     ``BEGIN IMMEDIATE`` takes the write lock before the existence check, so of
     two processes building at once the second waits and then finds the table
@@ -148,8 +153,8 @@ class CompToxID(SQLiteClient):
     The database file is automatically downloaded on first use when missing.
 
     Inherits its connection handling from
-    :class:`~provesid.sqlite_client.SQLiteClient`: use it as a context
-    manager, or call :meth:`~provesid.sqlite_client.SQLiteClient.close` when
+    [`SQLiteClient`][provesid.sqlite_client.SQLiteClient]: use it as a context
+    manager, or call [`close`][provesid.sqlite_client.SQLiteClient.close] when
     finished, and query it from as many threads as you like --- each gets its
     own connection.
 
@@ -238,7 +243,7 @@ class CompToxID(SQLiteClient):
 
         # Connect to the database.  One connection per thread, released by
         # close() or by leaving a ``with`` block --- see
-        # :class:`~provesid.sqlite_client.SQLiteClient`.
+        # ``SQLiteClient``.
         self._open_database(self.db_path)
 
         # Verify the database has the expected table
@@ -261,7 +266,7 @@ class CompToxID(SQLiteClient):
             force (bool, optional): If True, overwrite existing database file.
 
         Returns:
-            str: Path to the downloaded database file.
+            (str): Path to the downloaded database file.
 
         Raises:
             FileExistsError: If the database already exists and `force` is False.
@@ -329,10 +334,11 @@ class CompToxID(SQLiteClient):
 
     @property
     def has_name_index(self) -> bool:
-        """Whether the database holds the name index (see :meth:`build_name_index`).
+        """Whether the database holds the name index (see
+        [`build_name_index`][provesid.comptox.CompToxID.build_name_index]).
 
         Returns:
-            True when :data:`NAME_INDEX_TABLE` exists.
+            True when [`NAME_INDEX_TABLE`][provesid.comptox.NAME_INDEX_TABLE] exists.
 
         Examples:
             >>> isinstance(CompToxID().has_name_index, bool)
@@ -349,17 +355,22 @@ class CompToxID(SQLiteClient):
         The downloaded database indexes ``PREFERRED_NAME`` only; the synonyms,
         former CAS numbers and registry codes sit together in the
         ``|``-separated ``IDENTIFIER`` column, which only a full scan can read.
-        This adds a table, :data:`NAME_INDEX_TABLE`, with one row per distinct
-        name of each chemical (compared by :func:`name_key`), and
-        :meth:`search_by_name` with ``exact=True`` uses it from then on.
+        This adds a table,
+        [`NAME_INDEX_TABLE`][provesid.comptox.NAME_INDEX_TABLE], with one row
+        per distinct name of each chemical (compared by
+        [`name_key`][provesid.comptox.name_key]), and
+        [`search_by_name`][provesid.comptox.CompToxID.search_by_name] with
+        ``exact=True`` uses it from then on.
 
-        It is built automatically after :meth:`download_database`, and by the
-        first exact :meth:`search_by_name` on a database downloaded before the
-        index existed.  Call it yourself to pay the ~20 s at a time of your
-        choosing.  Building it again is a no-op.
+        It is built automatically after
+        [`download_database`][provesid.comptox.CompToxID.download_database],
+        and by the first exact
+        [`search_by_name`][provesid.comptox.CompToxID.search_by_name] on a
+        database downloaded before the index existed.  Call it yourself to pay
+        the ~20 s at a time of your choosing.  Building it again is a no-op.
 
         Returns:
-            int: The number of rows in the index (5.1 M on the 2025 release).
+            (int): The number of rows in the index (5.1 M on the 2025 release).
 
         Raises:
             sqlite3.OperationalError: If the database file is read-only.
@@ -463,7 +474,7 @@ class CompToxID(SQLiteClient):
             dtxsid (str): DSSTox Substance ID (e.g., "DTXSID7020001")
 
         Returns:
-            dict: Every column of the ``chemicals`` row --- ``DTXSID``,
+            (dict): Every column of the ``chemicals`` row --- ``DTXSID``,
             ``DTXCID``, ``PREFERRED_NAME``, ``CASRN``, ``INCHIKEY``,
             ``IUPAC_NAME``, ``SMILES``, ``MS_READY_SMILES``,
             ``QSAR_READY_SMILES``, ``MOLECULAR_FORMULA``, ``AVERAGE_MASS``,
@@ -502,9 +513,12 @@ class CompToxID(SQLiteClient):
             casrn (str): CAS Registry Number (e.g., "50-78-2")
 
         Returns:
-            dict: The :meth:`get_by_dtxsid` record, or None if not found. Only
+            (dict): The
+                [`get_by_dtxsid`][provesid.comptox.CompToxID.get_by_dtxsid]
+                record, or None if not found. Only
             the chemical's own ``CASRN`` matches; for a retired or alternate
-            number see :meth:`get_by_alternate_casrn`.
+            number see
+            [`get_by_alternate_casrn`][provesid.comptox.CompToxID.get_by_alternate_casrn].
 
         Examples:
             >>> CompToxID().get_by_casrn("50-78-2")["DTXSID"]
@@ -533,22 +547,25 @@ class CompToxID(SQLiteClient):
         CAS deletes and merges registry numbers, and old datasets still carry
         the numbers it retired. CompTox keeps them, together with alternate
         numbers, among a chemical's ``IDENTIFIER`` tokens, where
-        :meth:`get_by_casrn` does not look. For example, atrazine is
-        ``1912-24-9`` but also lists ``39400-72-1``. This method reads the name
-        index (see :meth:`build_name_index`) for such a number.
+        [`get_by_casrn`][provesid.comptox.CompToxID.get_by_casrn] does not
+        look. For example, atrazine is ``1912-24-9`` but also lists
+        ``39400-72-1``. This method reads the name index (see
+        [`build_name_index`][provesid.comptox.CompToxID.build_name_index]) for
+        such a number.
 
         It answers only when **exactly one** chemical lists the number.
         Of the 83,933 numbers CompTox holds only in ``IDENTIFIER``, four are
         listed by two unrelated chemicals, and picking one of the two would
-        be a guess. Call :meth:`get_by_casrn` first: a number that is some
-        chemical's own ``CASRN`` belongs to that chemical, whatever else
-        lists it.
+        be a guess. Call
+        [`get_by_casrn`][provesid.comptox.CompToxID.get_by_casrn] first: a
+        number that is some chemical's own ``CASRN`` belongs to that chemical,
+        whatever else lists it.
 
         Args:
             casrn (str): CAS Registry Number (e.g., "39400-72-1")
 
         Returns:
-            dict: Chemical information, or None if ``casrn`` is not shaped
+            (dict): Chemical information, or None if ``casrn`` is not shaped
             like a CAS number, no chemical lists it, more than one does, or the
             name index is unavailable (a read-only database that predates it).
 
@@ -594,7 +611,9 @@ class CompToxID(SQLiteClient):
             inchikey (str): Standard InChIKey (27 characters)
 
         Returns:
-            dict: The :meth:`get_by_dtxsid` record, or None if not found
+            (dict): The
+                [`get_by_dtxsid`][provesid.comptox.CompToxID.get_by_dtxsid]
+                record, or None if not found
 
         Examples:
             >>> CompToxID().get_by_inchikey("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")["DTXSID"]
@@ -625,7 +644,9 @@ class CompToxID(SQLiteClient):
                 own: another valid SMILES for the same structure finds nothing
 
         Returns:
-            dict: The :meth:`get_by_dtxsid` record, or None if not found
+            (dict): The
+                [`get_by_dtxsid`][provesid.comptox.CompToxID.get_by_dtxsid]
+                record, or None if not found
 
         Examples:
             >>> db = CompToxID()
@@ -655,11 +676,14 @@ class CompToxID(SQLiteClient):
         Get chemical information by preferred name (exact match).
 
         Args:
-            name (str): Preferred name, case included. :meth:`search_by_name`
+            name (str): Preferred name, case included.
+                [`search_by_name`][provesid.comptox.CompToxID.search_by_name]
                 with ``exact=True`` matches any name, ignoring case.
 
         Returns:
-            dict: The :meth:`get_by_dtxsid` record, or None if not found
+            (dict): The
+                [`get_by_dtxsid`][provesid.comptox.CompToxID.get_by_dtxsid]
+                record, or None if not found
 
         Examples:
             >>> db = CompToxID()
@@ -690,7 +714,9 @@ class CompToxID(SQLiteClient):
             dtxcid (str): DSSTox Compound ID (e.g., "DTXCID101")
 
         Returns:
-            dict: The :meth:`get_by_dtxsid` record, or None if not found
+            (dict): The
+                [`get_by_dtxsid`][provesid.comptox.CompToxID.get_by_dtxsid]
+                record, or None if not found
 
         Examples:
             >>> CompToxID().get_by_dtxcid("DTXCID50108")["PREFERRED_NAME"]
@@ -724,9 +750,10 @@ class CompToxID(SQLiteClient):
         *called* the query come first, then those whose IUPAC name it is, then
         those that list it as a synonym; ties keep the database's order.  This
         reads the name index, which the first exact call builds if the database
-        predates it (see :meth:`build_name_index`); on a read-only file without
-        one, only preferred names are matched, case-sensitively, as before the
-        index existed.
+        predates it (see
+        [`build_name_index`][provesid.comptox.CompToxID.build_name_index]); on
+        a read-only file without one, only preferred names are matched,
+        case-sensitively, as before the index existed.
 
         With ``exact=False`` the query is matched as a substring, first of the
         preferred name and then of ``IDENTIFIER``.  That is a full scan, about
@@ -739,7 +766,7 @@ class CompToxID(SQLiteClient):
             limit (int): Maximum number of results to return
 
         Returns:
-            list: List of matching chemicals
+            (list): List of matching chemicals
 
         Examples:
             >>> with CompToxID() as db:                     # doctest: +SKIP
@@ -817,7 +844,8 @@ class CompToxID(SQLiteClient):
             limit (int): Maximum number of results to return
 
         Returns:
-            list: :meth:`get_by_dtxsid` records, in database order
+            (list): [`get_by_dtxsid`][provesid.comptox.CompToxID.get_by_dtxsid]
+                records, in database order
 
         Examples:
             >>> [r["PREFERRED_NAME"] for r in CompToxID().search_by_formula("C9H8O4", limit=2)]
@@ -990,7 +1018,8 @@ class CompToxID(SQLiteClient):
         Convert SMILES to CAS Registry Number.
 
         Args:
-            smiles: SMILES, matched as a string; see :meth:`get_by_smiles`.
+            smiles: SMILES, matched as a string; see
+                [`get_by_smiles`][provesid.comptox.CompToxID.get_by_smiles].
 
         Returns:
             The CAS number, or None if not found.
@@ -1008,7 +1037,8 @@ class CompToxID(SQLiteClient):
         Convert SMILES to DTXSID.
 
         Args:
-            smiles: SMILES, matched as a string; see :meth:`get_by_smiles`.
+            smiles: SMILES, matched as a string; see
+                [`get_by_smiles`][provesid.comptox.CompToxID.get_by_smiles].
 
         Returns:
             The DTXSID, or None if not found.
@@ -1031,7 +1061,7 @@ class CompToxID(SQLiteClient):
             casrn_list (list): List of CAS numbers
 
         Returns:
-            dict: Mapping of CAS -> DTXSID (None if not found)
+            (dict): Mapping of CAS -> DTXSID (None if not found)
 
         Examples:
             >>> CompToxID().batch_casrn_to_dtxsid(["50-78-2", "0-00-0"])
@@ -1052,7 +1082,7 @@ class CompToxID(SQLiteClient):
             casrn_list (list): List of CAS numbers
 
         Returns:
-            dict: Mapping of CAS -> InChIKey (None if not found)
+            (dict): Mapping of CAS -> InChIKey (None if not found)
 
         Examples:
             >>> CompToxID().batch_casrn_to_inchikey(["50-78-2", "0-00-0"])
@@ -1073,7 +1103,7 @@ class CompToxID(SQLiteClient):
             inchikey_list (list): List of InChIKeys
 
         Returns:
-            dict: Mapping of InChIKey -> CAS (None if not found)
+            (dict): Mapping of InChIKey -> CAS (None if not found)
 
         Examples:
             >>> CompToxID().batch_inchikey_to_casrn(

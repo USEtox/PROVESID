@@ -147,6 +147,9 @@ plugins:
             show_object_full_path: false
             show_category_heading: true
             members_order: source
+            # Constants are documented in their docstrings; their values
+            # (DATASETS, LOOKUPS, PRESETS) would fill the heading.
+            show_attribute_values: false
 
 extra:
   social:

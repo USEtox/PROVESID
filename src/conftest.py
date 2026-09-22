@@ -26,6 +26,13 @@ os.environ.setdefault(
     "PROVESID_CACHE_DIR", os.path.join(tempfile.gettempdir(), "provesid_doctest_cache")
 )
 
+# The provesid.config examples store and remove an API key. Point them at a
+# throwaway directory, unconditionally: an earlier example that ran against
+# ~/.config/provesid replaced a real CAS key with its placeholder.
+_CONFIG_SANDBOX = tempfile.mkdtemp(prefix="provesid_doctest_config_")
+os.environ["XDG_CONFIG_HOME"] = _CONFIG_SANDBOX
+os.environ["APPDATA"] = _CONFIG_SANDBOX
+
 # The offline databases each module's examples read.
 _DATASETS_BY_MODULE = {
     "provesid.pubchem_id": ["pubchem"],

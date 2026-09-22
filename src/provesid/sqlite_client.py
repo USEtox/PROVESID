@@ -58,9 +58,12 @@ Example:
     True
 
     >>> from concurrent.futures import ThreadPoolExecutor
+    >>> cas_numbers = ["50-00-0", "64-17-5", "50-78-2"]
     >>> with PubChemID() as db:                      # doctest: +SKIP
     ...     with ThreadPoolExecutor(8) as pool:
     ...         rows = list(pool.map(db.get_by_cas, cas_numbers))
+    >>> [row["cid"] for row in rows]                 # doctest: +SKIP
+    [712, 702, 2244]
 """
 
 import logging
@@ -82,6 +85,15 @@ class DatabaseClosedError(RuntimeError):
     existing calling code still catches it, and carries the class name and
     the database path so the message says which client was closed and which
     file it was reading.
+
+    Example:
+        >>> client = SQLiteClient()
+        >>> _ = client._open_database(":memory:")
+        >>> client.close()
+        >>> client.conn
+        Traceback (most recent call last):
+        ...
+        provesid.sqlite_client.DatabaseClosedError: SQLiteClient was closed; its connection to :memory: is gone. Construct a new client to query it again.
     """
 
 
@@ -103,11 +115,20 @@ class SQLiteClient:
         closed (bool): True once :meth:`close` has run.
 
     Example:
-        >>> class Tiny(SQLiteClient):                    # doctest: +SKIP
+        >>> class Tiny(SQLiteClient):
         ...     def __init__(self, path):
         ...         self._open_database(path)
         ...     def count(self):
         ...         return self.conn.execute("SELECT COUNT(*) FROM t").fetchone()[0]
+        >>> import os, sqlite3, tempfile
+        >>> path = os.path.join(tempfile.mkdtemp(), "demo.db")
+        >>> sqlite3.connect(path).executescript("CREATE TABLE t (x); INSERT INTO t VALUES (1), (2);")  # doctest: +ELLIPSIS
+        <sqlite3.Cursor object at ...>
+        >>> with Tiny(path) as tiny:
+        ...     tiny.count()
+        2
+        >>> tiny.closed
+        True
     """
 
     #: Seconds a connection waits for a write lock before raising
@@ -191,8 +212,12 @@ class SQLiteClient:
 
         Example:
             >>> import sqlite3
-            >>> client = object.__new__(MyClient)        # doctest: +SKIP
+            >>> client = object.__new__(SQLiteClient)    # skips any __init__
             >>> client._adopt_connection(sqlite3.connect(":memory:"))
+            >>> client.conn.execute("SELECT 1 + 1").fetchone()
+            (2,)
+            >>> client.db_file
+            '<adopted connection>'
         """
         self._db_file = db_path
         self._row_factory = None
@@ -269,6 +294,16 @@ class SQLiteClient:
 
         Raises:
             DatabaseClosedError: If the client has been closed.
+
+        Example:
+            >>> import os, sqlite3, tempfile
+            >>> path = os.path.join(tempfile.mkdtemp(), "demo.db")
+            >>> sqlite3.connect(path).executescript("CREATE TABLE t (x); INSERT INTO t VALUES (1), (2);")  # doctest: +ELLIPSIS
+            <sqlite3.Cursor object at ...>
+            >>> client = SQLiteClient()
+            >>> _ = client._open_database(path)
+            >>> client.conn.execute("SELECT COUNT(*) FROM t").fetchone()[0]
+            2
         """
         self._check_open()
         connection = getattr(self._thread_state, "conn", None)
@@ -289,6 +324,18 @@ class SQLiteClient:
 
         Raises:
             DatabaseClosedError: If the client has been closed.
+
+        Example:
+            >>> import os, sqlite3, tempfile
+            >>> path = os.path.join(tempfile.mkdtemp(), "demo.db")
+            >>> sqlite3.connect(path).executescript("CREATE TABLE t (x); INSERT INTO t VALUES (1), (2);")  # doctest: +ELLIPSIS
+            <sqlite3.Cursor object at ...>
+            >>> client = SQLiteClient()
+            >>> _ = client._open_database(path)
+            >>> cursor = client.cursor
+            >>> _ = cursor.execute("SELECT x FROM t ORDER BY x")
+            >>> cursor.fetchone()["x"]
+            1
         """
         self.conn  # opens this thread's connection and cursor together
         cursor = getattr(self._thread_state, "cursor", None)
@@ -309,6 +356,14 @@ class SQLiteClient:
             bool: True after :meth:`close`, False while the client is usable.
             True as well for a client whose constructor failed before it
             reached :meth:`_open_database`, since such an object owns nothing.
+
+        Example:
+            >>> client = SQLiteClient()
+            >>> client.closed                  # never opened anything
+            True
+            >>> _ = client._open_database(":memory:")
+            >>> client.closed
+            False
         """
         return getattr(self, "_closed", True)
 
@@ -318,6 +373,14 @@ class SQLiteClient:
 
         Returns:
             str | None: The path passed to :meth:`_open_database`.
+
+        Example:
+            >>> client = SQLiteClient()
+            >>> client.db_file is None
+            True
+            >>> _ = client._open_database(":memory:")
+            >>> client.db_file
+            ':memory:'
         """
         return getattr(self, "_db_file", None)
 
@@ -340,10 +403,12 @@ class SQLiteClient:
         finish --- makes ``with`` unable to guarantee anything.
 
         Example:
-            >>> db = PubChemID()                         # doctest: +SKIP
-            >>> db.close()
-            >>> db.closed
+            >>> client = SQLiteClient()
+            >>> _ = client._open_database(":memory:")
+            >>> client.close()
+            >>> client.closed
             True
+            >>> client.close()                 # idempotent
         """
         if getattr(self, "_closed", True):
             return

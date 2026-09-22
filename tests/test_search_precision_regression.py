@@ -198,9 +198,12 @@ def test_name_resolution_has_zero_wrong_hits(comptox, synonym_sample):
 ASPIRIN_SKELETON = "BSYNRYMUTXBXSQ"
 CAFFEINE_SKELETON = "RYYVLZVUVIJVGH"
 
-# (query, expected skeleton) -- common misspellings of well-known compounds.
+# (query, expected skeleton) -- misspellings of well-known compounds that no
+# database lists.  "asprin" used to be the first of these, but CompTox records
+# it as a synonym of aspirin, and since the CompTox name index (plan §25) an
+# exact lookup finds it: see test_a_listed_misspelling_is_an_exact_match.
 MISSPELLINGS = [
-    ("asprin", ASPIRIN_SKELETON),
+    ("aspirn", ASPIRIN_SKELETON),
     ("caffiene", CAFFEINE_SKELETON),
 ]
 
@@ -305,9 +308,9 @@ def test_misspelling_is_not_labelled_an_exact_match(
 def test_misspelling_scores_below_correct_spelling(all_sources_available):
     """The correctly spelled name must be the more confident of the two."""
     s = Search("name", fuzzy=True, show_progress=False)
-    res = s.search(["asprin", "aspirin"]).set_index("query")
+    res = s.search(["aspirn", "aspirin"]).set_index("query")
 
-    typo, correct = res.loc["asprin"], res.loc["aspirin"]
+    typo, correct = res.loc["aspirn"], res.loc["aspirin"]
     assert _skeleton(typo["InChIKey"]) == _skeleton(correct["InChIKey"])
     assert typo["confidence"] < correct["confidence"], (
         f"typo confidence {typo['confidence']} >= "
@@ -337,7 +340,21 @@ def test_nonsense_name_resolves_to_nothing(all_sources_available):
 @pytest.mark.slow
 def test_typo_needs_fuzzy_enabled(all_sources_available):
     """Without ``fuzzy=True`` a typo must return nothing, not a guess."""
-    row = Search("name", show_progress=False).search("asprin").iloc[0]
+    row = Search("name", show_progress=False).search("aspirn").iloc[0]
     assert not isinstance(row["InChIKey"], str), (
         f"non-fuzzy search matched {row['name']!r} for a misspelling"
     )
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_a_listed_misspelling_is_an_exact_match(all_sources_available):
+    """A misspelling a curated database lists is a name, and matches exactly.
+
+    CompTox carries "Asprin" among aspirin's synonyms.  Finding it without
+    ``fuzzy=True`` is the name index working, not a guess: the match is
+    against a name the database gives the compound.
+    """
+    row = Search("name", show_progress=False).search("asprin").iloc[0]
+    assert _skeleton(row["InChIKey"]) == ASPIRIN_SKELETON
+    assert row["match_method"] == "exact_name"

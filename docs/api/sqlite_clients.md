@@ -1,7 +1,7 @@
 # SQLite Clients
 
 Four PROVESID clients read a local SQLite database: `PubChemID` (2.2 GB),
-`CompToxID` (856 MB), `ZeroPM` (460 MB) and `CheMBL` (2.4 GiB as a PROVESID
+`CompToxID` (856 MB, 1.1 GiB once its name index is built), `ZeroPM` (460 MB) and `CheMBL` (2.4 GiB as a PROVESID
 extract, 27.7 GiB as a full release). They inherit their connection handling
 from one mixin, so all four close the same way, work in a `with` block, and
 can be queried from several threads at once.
@@ -141,3 +141,26 @@ builds the instance with `object.__new__` — calls `_adopt_connection` instead,
 which registers the connection so `close()` still reaches it.
 
 ::: provesid.sqlite_client
+
+## CompTox's name index
+
+The CompTox download indexes `PREFERRED_NAME` only. Its synonyms, former CAS
+numbers and registry codes are stored together in one `|`-separated
+`IDENTIFIER` column, and only a full scan can read that. `CompToxID` therefore
+adds a table, `chemical_names`, holding one row per distinct name of each
+chemical, so that `search_by_name(name, exact=True)` matches any of them,
+case-insensitively, in about 40 µs:
+
+```python
+from provesid import CompToxID
+
+with CompToxID() as db:
+    db.search_by_name("Acetaldoxime", exact=True)[0]["PREFERRED_NAME"]  # 'Acetaldehyde oxime'
+    db.search_by_name("39400-72-1", exact=True)[0]["PREFERRED_NAME"]    # 'Atrazine' (a retired CAS)
+```
+
+The table is built straight after a download. A database downloaded before
+the index existed gets it on its first exact name lookup, which takes about
+20 s once and adds 290 MiB; call `db.build_name_index()` to pay that at a time
+of your choosing. On a read-only file, exact lookups fall back to preferred
+names alone, with one warning.

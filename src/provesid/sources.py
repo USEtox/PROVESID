@@ -431,11 +431,9 @@ LOOKUPS: Dict[str, Dict[str, Lookup]] = {
             c.search_by_name(q.value, exact=True) or c.search_by_synonym(q.value, exact=True),
             q.k,
         ),
+        # Every name CompTox holds, synonyms included, via its name index.
         "comptox": lambda c, q: _top(
-            candidate_from_comptox_row,
-            c.search_by_name(q.value, exact=True, limit=q.k)
-            or [row for row in [c.get_by_name(q.value)] if row],
-            q.k,
+            candidate_from_comptox_row, c.search_by_name(q.value, exact=True, limit=q.k), q.k
         ),
         "pubchem": lambda c, q: _top(
             candidate_from_pubchem_row, c.search_by_name(q.value, exact=True, limit=q.k), q.k

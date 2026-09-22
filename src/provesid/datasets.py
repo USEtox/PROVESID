@@ -570,7 +570,8 @@ PUBCHEM_FTP_LARGEST_FILE = 7_361_682_757
 #: the others already found, then ZeroPM, which is off by default.
 #:
 #: Sizes were measured on 2026-09-20 from the copies on a machine that had all
-#: five: ChEBI SDF 879.7 MiB plus a 74.5 MiB index, CompTox 816.6 MiB, PubChem
+#: five: ChEBI SDF 879.7 MiB plus a 74.5 MiB index, CompTox 816.6 MiB plus a
+#: 290.3 MiB name index, PubChem
 #: as the FTP build leaves it (see ``PUBCHEM_FTP_RESIDENT``), ChEMBL 36 2.42 GiB as the extract an install now keeps (27.7 GiB
 #: as the full release it is built from, out of a 5.8 GB archive), ZeroPM
 #: 438.7 MiB. They
@@ -606,8 +607,12 @@ DATASETS: Dict[str, Dataset] = {
         patterns=("comptox_chemicals.db",),
         extras=("comptox_chemicals.db.part", "comptox_chemicals.db.part.source"),
         download_bytes=856293376,
-        resident_bytes=856293376,
+        # The download plus the name index CompToxID builds into it (290 MiB),
+        # measured 2026-09-22.
+        resident_bytes=1160740864,
         source="Zenodo record 18833587",
+        note="a name index (~20 s to build, 290 MiB) is added to the file "
+             "after the download, so exact name lookups find synonyms",
     ),
     "chebi": Dataset(
         name="chebi",
@@ -978,7 +983,7 @@ def status(names: Optional[Union[str, Iterable[str]]] = None,
         >>> datasets.status()[["dataset", "present", "size"]]   # doctest: +SKIP
           dataset  present      size
         0 pubchem     True   2.2 GiB
-        1 comptox     True   816.6 MiB
+        1 comptox     True     1.1 GiB
         2   chebi     True   954.2 MiB
         3  chembl    False         0 B
         4  zeropm     True   438.7 MiB

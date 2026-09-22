@@ -3287,8 +3287,7 @@ CompTox.
 
 ### 24.5 Still open
 
-- §24.3, the CompTox synonym index. It is the largest recall gap measured
-  so far on names, and it affects the default preset.
+- ~~§24.3, the CompTox synonym index.~~ **Done, §25.**
 - §19.8's descriptor columns were marked "with step 15's presets". They
   are not a preset matter: they add output columns and change no matching
   setting. They belong with `strip_salts` and `return_alternatives`, as an
@@ -3297,3 +3296,139 @@ CompTox.
   measured them afterwards. No sample has yet tested whether, for example,
   `cluster_by_skeleton=False` belongs in `strict`.
 - §23.5, §4.13 and §22.6 are unchanged.
+
+---
+
+## 25. Landed on 2026-09-22 — the CompTox name index (§24.3)
+
+This was done ahead of step 16, because §24.3 showed it was the largest
+recall gap in the default preset. It uses the approach §12 took for ChEMBL:
+a lookup that had to scan gets an index to search instead.
+
+### 25.1 What landed
+
+- `CompToxID.build_name_index()` adds a table, `chemical_names`, to
+  `comptox_chemicals.db`. It is keyed `(name_key, kind, chemical_rowid)`,
+  `WITHOUT ROWID`, with one row per distinct name of each chemical. The
+  names are its `PREFERRED_NAME`, its `IUPAC_NAME` and every `|`-separated
+  token of `IDENTIFIER`. `kind` records where each name came from (0
+  preferred, 1 IUPAC, 2 identifier; `NAME_KINDS`). `name_key` is
+  `str.strip().lower()`, applied in Python on both the build and the lookup
+  side, so it folds non-ASCII case where SQLite's `lower()` would not.
+- `search_by_name(name, exact=True)` reads that table. It is now
+  case-insensitive, matches synonyms, IUPAC names and retired CAS numbers,
+  and orders results by `kind` and then by database row. A chemical *called*
+  the query therefore comes before one that only lists it. `exact=False` is
+  unchanged: a substring scan of about 3 s. `get_by_name` still means the
+  preferred name only.
+- **When it is built.** `download_database` builds it straight after the
+  download. On a database downloaded before this change, the first exact
+  lookup builds it and logs one WARNING (~20 s). `has_name_index` reports
+  whether it exists. On a read-only file the build fails once, is logged
+  once, and exact lookups fall back to the old case-sensitive
+  `PREFERRED_NAME = ?`. `BEGIN IMMEDIATE` takes the write lock before the
+  existence check, so two processes cannot both build it. A lock on the
+  instance does the same for two threads.
+- `sources.py`'s CompTox `name` cell no longer has its
+  `or get_by_name(...)` fallback. That ran the same `PREFERRED_NAME = ?`
+  query as the old exact path, so it could never add anything.
+- The `comptox` registry entry reports 1.1 GiB resident, with a note, and
+  `Search`'s docstrings say ~6.7 GiB installed instead of ~6.5.
+- `tests/test_comptox_name_index.py` (22 tests, on a three-chemical
+  database), `examples/comptox/name_index_demo.py`, and a section in
+  `docs/api/sqlite_clients.md`.
+
+### 25.2 Layout, measured
+
+On the installed release (1 246 399 chemicals), the index has 5 128 983
+names:
+
+| layout | added | build |
+|---|---:|---:|
+| ordinary table plus index on `name_key` | 540 MiB | 9 s |
+| **`WITHOUT ROWID`, key-first primary key** | **290 MiB** | **22 s** |
+| same, with a 64-bit hash for the key | 100 MiB | 24 s |
+
+The hash layout saves 190 MiB, about 3 % of a full install. In exchange,
+every hit would need a second check against the row's names, and the
+table could not be read with plain SQL. Per the readability principle, the
+text key was kept. An exact lookup takes 30–110 µs.
+
+### 25.3 Before and after, on the four default databases
+
+The samples are §24.2's, plus 200 preferred names. "Before" is this code
+with the index forced off, which is exactly the old lookup. "After" is an
+indexed copy of the same file.
+
+| sample | preset | before (right / wrong / none) | after | answers changed |
+|---|---|---|---|---|
+| CAS | balanced | 200 / 0 / 0 | 200 / 0 / 0 | 0 |
+| CAS | strict | 199 / 0 / 1 | 199 / 0 / 1 | 0 |
+| preferred name | balanced | 200 / 0 / 0 | 200 / 0 / 0 | 0 |
+| preferred name | strict | 189 / 0 / 11 | 189 / 0 / 11 | 0 |
+| synonym | balanced | 28 / 1 / 171 | **200 / 0 / 0** | 172, all to right |
+| synonym | strict | 2 / 0 / 198 | 28 / 0 / 172 | 26, all to right |
+| typo | balanced | 0 / 3 / 197 | 0 / 3 / 197 | 0 |
+| typo | strict | 0 / 1 / 199 | 0 / 1 / 199 | 0 |
+
+No answer went from right to wrong, and nothing outside synonym queries
+moved. The one synonym that had been answered wrongly is now answered
+correctly: exact CompTox candidates now outrank whatever the other sources
+had matched loosely. Timing is unchanged, because the other three sources
+dominate a name query.
+
+The sample is still CompTox's own synonyms, so 200/200 flatters the
+change. A synonym only another source holds is unaffected. What the table
+shows reliably is that nothing regressed.
+
+### 25.4 Validation
+
+- `tests/test_comptox_name_index.py`: 22 passed. They cover the key, the
+  row count and kinds, idempotence, the lazy build and its WARNING,
+  substring lookups not triggering a build, four threads building once, the
+  read-only fallback warning once, synonym, case, IUPAC and retired-CAS
+  matches, ranking, `limit`, parsed identifiers, `get_by_name`'s meaning,
+  and the `sources.py` cell.
+- `tests/test_dataset_manager.py`: 43 passed with the new registry size.
+- `examples/comptox/name_index_demo.py` was run against the indexed copy,
+  not the default path, so that running the demo would not build the index
+  into the user's database as a side effect of validation.
+- `pytest tests/`: 1476 passed, 34 skipped, 2 failed (8 min 48 s). The run
+  was also the lazy path's first real use. `conftest.py` points the suite
+  at the git-ignored copy in `src/provesid/data/`, and the first exact name
+  lookup built the index there (856 MB → 1.16 GB).
+  - Both failures were `test_search_precision_regression.py` treating
+    `asprin` as a typo that no database lists. CompTox lists it among
+    aspirin's synonyms, so an exact lookup now finds aspirin, correctly and
+    correctly labelled `exact_name`. The two tests now use `aspirn`, which no
+    source lists and which fuzzy matching still resolves to aspirin. A new
+    test, `test_a_listed_misspelling_is_an_exact_match`, pins the `asprin`
+    behaviour. The file: 11 passed.
+  - Suite total: **1479 passed, 34 skipped, 0 failed**.
+- `ruff check --select F,E9` is clean on the new and changed files, apart
+  from an unused `Union` import in `comptox.py` that was already there. The
+  new `name_key` doctest passes. The module docstring's example, which reads
+  `result['preferred_name']`, was already failing and is left for step 17.
+  `mkdocs build --strict` is clean.
+
+### 25.5 Still open
+
+- **Retired CAS numbers, offline.** The index already maps `39400-72-1` to
+  atrazine. §23.4 found that all 8 retired numbers it tried missed offline,
+  and that only CACTUS resolved them. Consulting the index from the `cas`
+  cell when `get_by_casrn` misses would answer them without the network.
+  That changes CAS output, so it is its own step, with a check that no
+  current number moves.
+- **A synonym shared by several substances.** A generic synonym like `ASA`
+  now reaches every chemical that lists it, ranked by `kind` and row order.
+  None of the 200 was ambiguous in a way that hurt, but a sample of
+  deliberately generic synonyms has not been run.
+- The installed `~/.local/share/provesid/comptox_chemicals.db` on this
+  machine does not have the index yet. It will be built on the first exact
+  name lookup, or when `CompToxID().build_name_index()` is called. The
+  suite's copy in `src/provesid/data/` has it.
+- Found while choosing a replacement typo: `Search("name", fuzzy=True,
+  use_zeropm=True)` resolves `asprine` to **Fenyramidol**, which is
+  PHENYRAMIDOL, the "Evasprin" compound of the regression this test file
+  was written for. This happened before §25 as well. The fuzzy-name path
+  still lets a substring-sharing synonym outrank the intended compound.

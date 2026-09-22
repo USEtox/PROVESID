@@ -5,7 +5,7 @@ offline databases (ChEBI, CompTox, PubChemID, ChEMBL) with structure-aware
 matching, confidence scoring, fuzzy name search, Tanimoto similarity search,
 InChIKey-skeleton matching, and salt/solvent stripping.
 
-The datasets these sources read are large --- ~21 GiB to download and ~6.5 GiB
+The datasets these sources read are large --- ~21 GiB to download and ~6.7 GiB
 installed, PubChem's being built from 14.3 GiB of FTP files that are deleted as
 they are read, and ChEMBL being compacted from 27.7 GiB to 2.4 GiB as it
 arrives --- and none of them is downloaded on the caller's behalf.  :class:`Search` queries whatever is installed and reports what is
@@ -395,7 +395,7 @@ class Search:
     - **Traceability**: ``source_details`` field records which sources were
       queried, whether they matched, and which output fields they contributed.
     - **No surprise downloads**: the offline datasets are ~21 GiB to fetch and
-      ~6.5 GiB installed, and none of them is fetched on your behalf.  ``Search`` uses what is installed and
+      ~6.7 GiB installed, and none of them is fetched on your behalf.  ``Search`` uses what is installed and
       reports the rest (``datasets="present"``, the default); install them
       deliberately with :func:`provesid.datasets.fetch`.
     - **Presets**: ``preset="balanced"`` (the default), ``"strict"`` or
@@ -700,7 +700,7 @@ class Search:
                     default.**  Nothing is downloaded.
                 ``"auto"``
                     Download whatever is missing, which on a clean machine is
-                    ~21 GiB transferred and ~6.5 GiB installed for the four
+                    ~21 GiB transferred and ~6.7 GiB installed for the four
                     default sources --- but up to ~37 GiB of free disk at the
                     worst moment, while ChEMBL's release is unpacked and
                     compacted.  This was the behaviour before the dataset

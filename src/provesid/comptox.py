@@ -33,12 +33,113 @@ Example:
 import os
 import sqlite3
 import logging
+import threading
 
 from typing import Dict, List, Optional, Any, Union
 
 from .datasets import download_file
 from .sqlite_client import SQLiteClient
 from .utils import user_dataset_path
+
+#: The table :meth:`CompToxID.build_name_index` adds to the database: one row
+#: per distinct name of each chemical, keyed by :func:`name_key`.
+NAME_INDEX_TABLE = "chemical_names"
+
+#: Where a name came from, in the order an exact lookup ranks its matches: a
+#: chemical *called* the query outranks one that merely lists it as a synonym.
+NAME_KINDS = {"preferred": 0, "iupac": 1, "identifier": 2}
+
+
+def name_key(name: str) -> str:
+    """The form a name is indexed and looked up under: stripped and lower-cased.
+
+    Python's :meth:`str.lower` rather than SQLite's ``lower()``, which folds
+    ASCII only; the same function builds the index and reads it, so the two
+    always agree.
+
+    Args:
+        name: A chemical name or other identifier.
+
+    Returns:
+        The lookup key.
+
+    Example:
+        >>> name_key("  Acetylsalicylic Acid ")
+        'acetylsalicylic acid'
+    """
+    return name.strip().lower()
+
+
+def _build_name_index(connection: sqlite3.Connection) -> int:
+    """Create and fill :data:`NAME_INDEX_TABLE` in one transaction.
+
+    Every chemical contributes its ``PREFERRED_NAME``, its ``IUPAC_NAME`` and
+    each ``|``-separated token of ``IDENTIFIER`` --- synonyms, but also former
+    CAS numbers, InChIKeys and registry codes --- once per distinct key, tagged
+    with the first :data:`NAME_KINDS` it appeared under.  The table is
+    ``WITHOUT ROWID`` with the key leading its primary key, so the text is
+    stored once and the lookup is a single B-tree search: on the 2025 release,
+    5.1 M rows, ~290 MiB and ~20 s to build.  A separate index over an
+    ordinary table measured 540 MiB.
+
+    ``BEGIN IMMEDIATE`` takes the write lock before the existence check, so of
+    two processes building at once the second waits and then finds the table
+    there.
+
+    Args:
+        connection: A read-write connection to a CompTox database.
+
+    Returns:
+        The number of rows in the table afterwards.
+
+    Raises:
+        sqlite3.OperationalError: If the database is read-only or stays locked
+            beyond the connection's timeout.
+    """
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (NAME_INDEX_TABLE,),
+        ).fetchone()
+        if not exists:
+            connection.execute(
+                f"""
+                CREATE TABLE {NAME_INDEX_TABLE} (
+                    name_key TEXT NOT NULL,
+                    kind INTEGER NOT NULL,
+                    chemical_rowid INTEGER NOT NULL,
+                    PRIMARY KEY (name_key, kind, chemical_rowid)
+                ) WITHOUT ROWID
+                """
+            )
+
+            def names():
+                chemicals = connection.cursor().execute(
+                    "SELECT rowid, PREFERRED_NAME, IUPAC_NAME, IDENTIFIER FROM chemicals"
+                )
+                for rowid, preferred, iupac, identifier in chemicals:
+                    labelled = [
+                        (NAME_KINDS["preferred"], preferred),
+                        (NAME_KINDS["iupac"], iupac),
+                        *((NAME_KINDS["identifier"], token)
+                          for token in (identifier or "").split("|")),
+                    ]
+                    seen = set()
+                    for kind, name in labelled:
+                        key = name_key(name) if name else ""
+                        if key and key not in seen:
+                            seen.add(key)
+                            yield key, kind, rowid
+
+            connection.executemany(
+                f"INSERT INTO {NAME_INDEX_TABLE} VALUES (?, ?, ?)", names()
+            )
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
+    return connection.execute(f"SELECT COUNT(*) FROM {NAME_INDEX_TABLE}").fetchone()[0]
 
 
 class CompToxID(SQLiteClient):
@@ -93,6 +194,13 @@ class CompToxID(SQLiteClient):
             FileNotFoundError: If database file doesn't exist and auto_download is False.
         """
         self.logger = logging.getLogger(__name__)
+
+        # Whether exact name lookups can use the name index: None until the
+        # first one checks, then True, or False for good when it cannot be
+        # built (a read-only file).  The lock keeps two threads from building
+        # it twice.
+        self._name_index_ready: Optional[bool] = None
+        self._name_index_lock = threading.Lock()
 
         if db_path is None:
             base_dir = data_dir or user_dataset_path()
@@ -199,7 +307,95 @@ class CompToxID(SQLiteClient):
             description="CompTox database",
             log=self.logger,
         )
+
+        # Built now, while the user is already waiting for a download, rather
+        # than on the first name lookup.  A failure here costs nothing that
+        # the lazy build in search_by_name will not retry.
+        self.logger.warning("Building the CompTox name index (~20 s, ~290 MiB).")
+        connection = sqlite3.connect(self.db_path)
+        try:
+            _build_name_index(connection)
+        except sqlite3.Error as exc:
+            self.logger.warning("CompTox name index not built: %s", exc)
+        finally:
+            connection.close()
+        self._name_index_ready = None
         return self.db_path
+
+    @property
+    def has_name_index(self) -> bool:
+        """Whether the database holds the name index (see :meth:`build_name_index`).
+
+        Returns:
+            True when :data:`NAME_INDEX_TABLE` exists.
+        """
+        return self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (NAME_INDEX_TABLE,),
+        ).fetchone() is not None
+
+    def build_name_index(self) -> int:
+        """Index every name of every chemical, so that exact lookups find synonyms.
+
+        The downloaded database indexes ``PREFERRED_NAME`` only; the synonyms,
+        former CAS numbers and registry codes sit together in the
+        ``|``-separated ``IDENTIFIER`` column, which only a full scan can read.
+        This adds a table, :data:`NAME_INDEX_TABLE`, with one row per distinct
+        name of each chemical (compared by :func:`name_key`), and
+        :meth:`search_by_name` with ``exact=True`` uses it from then on.
+
+        It is built automatically after :meth:`download_database`, and by the
+        first exact :meth:`search_by_name` on a database downloaded before the
+        index existed.  Call it yourself to pay the ~20 s at a time of your
+        choosing.  Building it again is a no-op.
+
+        Returns:
+            int: The number of rows in the index (5.1 M on the 2025 release).
+
+        Raises:
+            sqlite3.OperationalError: If the database file is read-only.
+
+        Example:
+            >>> with CompToxID() as db:                     # doctest: +SKIP
+            ...     db.build_name_index()
+            5128983
+        """
+        with self._name_index_lock:
+            rows = _build_name_index(self.conn)
+            self._name_index_ready = True
+        return rows
+
+    def _ensure_name_index(self) -> bool:
+        """Make sure the name index exists, building it once if it does not.
+
+        Returns:
+            True when exact lookups can use the index; False when it is missing
+            and cannot be built, in which case they fall back to
+            ``PREFERRED_NAME`` alone.  The failure is logged once.
+        """
+        if self._name_index_ready is not None:
+            return self._name_index_ready
+        with self._name_index_lock:
+            if self._name_index_ready is None:
+                if self.has_name_index:
+                    self._name_index_ready = True
+                else:
+                    self.logger.warning(
+                        "Building the CompTox name index, once, so exact name "
+                        "lookups find synonyms (~20 s, ~290 MiB added to %s).",
+                        self.db_path,
+                    )
+                    try:
+                        _build_name_index(self.conn)
+                        self._name_index_ready = True
+                    except sqlite3.OperationalError as exc:
+                        self.logger.warning(
+                            "CompTox name index could not be built (%s); exact "
+                            "name lookups will match preferred names only.",
+                            exc,
+                        )
+                        self._name_index_ready = False
+        return self._name_index_ready
 
     def _verify_database(self):
         """Verify the database has the expected table structure."""
@@ -415,19 +611,49 @@ class CompToxID(SQLiteClient):
         """
         Search chemicals by name or synonym.
 
+        With ``exact=True`` the query is compared, case-insensitively, with
+        every name the database holds for a chemical: its preferred name, its
+        IUPAC name and each synonym or identifier in ``IDENTIFIER``.  Chemicals
+        *called* the query come first, then those whose IUPAC name it is, then
+        those that list it as a synonym; ties keep the database's order.  This
+        reads the name index, which the first exact call builds if the database
+        predates it (see :meth:`build_name_index`); on a read-only file without
+        one, only preferred names are matched, case-sensitively, as before the
+        index existed.
+
+        With ``exact=False`` the query is matched as a substring, first of the
+        preferred name and then of ``IDENTIFIER``.  That is a full scan, about
+        3 s a call.
+
         Args:
             name (str): Chemical name or synonym to search for
-            exact (bool): If True, exact match only. If False, partial match (case-insensitive)
+            exact (bool): If True, exact (case-insensitive) match on any name.
+                If False, partial match (case-insensitive)
             limit (int): Maximum number of results to return
 
         Returns:
             list: List of matching chemicals
+
+        Example:
+            >>> with CompToxID() as db:                     # doctest: +SKIP
+            ...     [r["PREFERRED_NAME"] for r in db.search_by_name("Acetaldoxime", exact=True)]
+            ['Acetaldehyde oxime']
         """
         cursor = self.conn.cursor()
         results = []
 
-        if exact:
-            # Search in preferred name
+        if exact and self._ensure_name_index():
+            cursor.execute(
+                f"""
+                SELECT c.* FROM {NAME_INDEX_TABLE} n
+                JOIN chemicals c ON c.rowid = n.chemical_rowid
+                WHERE n.name_key = ?
+                ORDER BY n.kind, n.chemical_rowid
+                LIMIT ?
+            """,
+                (name_key(name), limit),
+            )
+        elif exact:
             cursor.execute(
                 """
                 SELECT * FROM chemicals WHERE PREFERRED_NAME = ? LIMIT ?

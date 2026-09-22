@@ -1,4 +1,29 @@
-# chemid __init__.py
+"""
+PROVESID: chemical identifiers and properties, offline first.
+
+:class:`Search` resolves CAS numbers, names, SMILES, InChIs, InChIKeys,
+DTXSIDs and formulas against the offline databases that are installed ---
+PubChem's CAS-bearing compounds (:class:`PubChemID`), EPA CompTox
+(:class:`CompToxID`), ChEBI (:class:`ChebiSDF`) and ChEMBL (:class:`CheMBL`),
+with ZeroPM (:class:`ZeroPM`) on request --- and scores each answer by how
+many of them agree. :mod:`provesid.datasets` installs the databases by name;
+nothing is downloaded on your behalf.
+
+The online clients --- :class:`PubChemAPI`, :class:`PubChemView`,
+:class:`NCIChemicalIdentifierResolver`, :class:`ChEBI`, :class:`OPSIN` and
+:class:`CASCommonChem` --- share one transport (:mod:`provesid.http`) that
+paces, retries and caches. :class:`Search` asks two of them only when
+``online_fallback=True`` and no offline source answered.
+
+Example:
+    >>> import provesid
+    >>> provesid.datasets.missing()                 # what Search would lack  # doctest: +SKIP
+    []
+    >>> df = provesid.Search("cas", show_progress=False).search("50-78-2")
+    >>> df.loc[0, "InChIKey"]
+    'BSYNRYMUTXBXSQ-UHFFFAOYSA-N'
+"""
+
 __version__ = "0.7.0"
 
 from .http import (

@@ -73,18 +73,38 @@ class DumpFormatError(ValueError):
     would otherwise be dropped or mangled on its way into a database that is
     then used as a reference.  The message names the table and the character
     offset within the line.
+
+    Example:
+        >>> list(read_statements(["INSERT INTO `compound` VALUES (1);"], tables={"compound"}))
+        Traceback (most recent call last):
+        ...
+        provesid.mysqldump.DumpFormatError: compound: rows found before its CREATE TABLE
     """
 
 
 class Column(NamedTuple):
-    """One column of a ``CREATE TABLE``: its name, and its MySQL type as written."""
+    """
+    One column of a ``CREATE TABLE``: its name, and its MySQL type as written.
+
+    Example:
+        >>> column = Column("molregno", "bigint")
+        >>> column.name, sqlite_affinity(column.type)
+        ('molregno', 'INT')
+    """
 
     name: str
     type: str
 
 
 class CreateTable(NamedTuple):
-    """A ``CREATE TABLE`` statement: the table name and its columns, in order."""
+    """
+    A ``CREATE TABLE`` statement: the table name and its columns, in order.
+
+    Example:
+        >>> table = CreateTable("compound", (Column("molregno", "bigint"),))
+        >>> [column.name for column in table.columns]
+        ['molregno']
+    """
 
     table: str
     columns: Tuple[Column, ...]
@@ -97,6 +117,11 @@ class Insert(NamedTuple):
     ``columns`` is the explicit column list when the statement had one
     (``mysqldump --complete-insert``), and None when the rows follow the
     ``CREATE TABLE`` column order, which is ``mysqldump``'s default.
+
+    Example:
+        >>> insert = Insert("compound", None, parse_values("(1,'aspirin'),(2,NULL);"))
+        >>> insert.rows
+        [(1, 'aspirin'), (2, None)]
     """
 
     table: str
@@ -299,6 +324,16 @@ def read_statements(
         DumpFormatError: If a wanted table's rows arrive before its
             ``CREATE TABLE``, if its column definitions never close, or if an
             ``INSERT`` cannot be parsed (:func:`parse_values`).
+
+    Example:
+        >>> dump = [
+        ...     "CREATE TABLE `other` (", "  `x` int,", ") ENGINE=InnoDB;",
+        ...     "INSERT INTO `other` VALUES (1);",
+        ...     "CREATE TABLE `compound` (", "  `molregno` bigint NOT NULL,", ") ENGINE=InnoDB;",
+        ...     "INSERT INTO `compound` VALUES (1),(2);",
+        ... ]
+        >>> [type(s).__name__ for s in read_statements(dump, tables={"compound"})]
+        ['CreateTable', 'Insert']
     """
     creating: Optional[str] = None
     columns: List[Column] = []

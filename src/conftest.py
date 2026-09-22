@@ -35,8 +35,8 @@ os.environ["APPDATA"] = _CONFIG_SANDBOX
 
 # The offline databases each module's examples read.
 _DATASETS_BY_MODULE = {
+    "provesid": ["pubchem", "comptox", "chebi", "chembl"],
     "provesid.pubchem_id": ["pubchem"],
-    "provesid.pubchem_ftp": ["pubchem"],
     "provesid.comptox": ["comptox"],
     "provesid.chebi_sdf": ["chebi"],
     "provesid.chembl": ["chembl"],

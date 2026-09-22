@@ -327,6 +327,16 @@ def resolve_release(release: str = LATEST, *, base_url: Optional[str] = None,
         ValueError: If ``release`` is none of the three forms.
         DownloadError: If ``"latest"`` was asked for and the listing cannot be
             fetched, or lists no snapshot.
+
+    Example:
+        >>> resolve_release("2026-09-01"), resolve_release("current")
+        ('2026-09-01', 'current')
+        >>> resolve_release()                                  # doctest: +SKIP
+        '2026-09-01'
+        >>> resolve_release("yesterday")
+        Traceback (most recent call last):
+        ...
+        ValueError: release='yesterday' is not a PubChem release. ...
     """
     if release == CURRENT or _RELEASE_PATTERN.match(release or ""):
         return release
@@ -344,7 +354,23 @@ def resolve_release(release: str = LATEST, *, base_url: Optional[str] = None,
 
 
 def release_url(release: str, *, base_url: Optional[str] = None) -> str:
-    """URL of a concrete release's directory: ``Monthly/<date>`` or the root."""
+    """
+    URL of a concrete release's directory: ``Monthly/<date>`` or the root.
+
+    Args:
+        release: ``"current"`` or a snapshot date, as :func:`resolve_release`
+            returns.
+        base_url: PubChem compound root. Defaults to :data:`FTP_ROOT`.
+
+    Returns:
+        The directory URL, without a trailing slash.
+
+    Example:
+        >>> release_url("2026-09-01")
+        'https://ftp.ncbi.nlm.nih.gov/pubchem/Compound/Monthly/2026-09-01'
+        >>> release_url("current")
+        'https://ftp.ncbi.nlm.nih.gov/pubchem/Compound'
+    """
     if release == CURRENT:
         return _root(base_url)
     return f"{_root(base_url)}/Monthly/{release}"
@@ -392,6 +418,12 @@ class SourceFile:
         approx_bytes: Compressed size in the 2026-09-01 snapshot, for the
             estimate a user sees before the build starts. Later snapshots are
             a little larger.
+
+    Example:
+        >>> [source.key for source in SOURCE_FILES]
+        ['identifiers', 'date', 'mass', 'smiles', 'title', 'iupac', 'inchi', 'synonyms']
+        >>> SOURCE_FILES[0].filename
+        'CID-Identifiers.tsv.gz'
     """
 
     key: str

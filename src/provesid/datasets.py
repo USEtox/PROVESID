@@ -113,6 +113,14 @@ class DownloadError(ServiceError):
     The exception is a checksum mismatch, which deletes the partial file: the
     bytes on disk are known to be wrong, so resuming from them would only
     produce the same wrong file again.
+
+    Example:
+        >>> try:                                                 # doctest: +SKIP
+        ...     download_file("https://zenodo.org/records/0/files/missing.db", "/tmp/x.db")
+        ... except DownloadError as exc:
+        ...     print("will resume from", exc)
+        >>> issubclass(DownloadError, ServiceError)
+        True
     """
 
 
@@ -538,6 +546,13 @@ class Dataset:
         source: Where the file comes from, for messages that have to tell a
             user what is about to be fetched.
         note: Anything a user deciding whether to fetch this should know.
+
+    Example:
+        >>> chebi = DATASETS["chebi"]
+        >>> chebi.title, chebi.patterns
+        ('ChEBI SDF', ('chebi.sdf',))
+        >>> human_bytes(DATASETS["chembl"].peak_bytes)
+        '33.4 GiB'
     """
 
     name: str
@@ -684,6 +699,13 @@ class MissingDatasetError(ServiceError):
 
     A :class:`~provesid.http.ServiceError` so that the whole family stays
     catchable through one base, as :class:`DownloadError` is.
+
+    Example:
+        >>> import tempfile
+        >>> require("chembl", tempfile.mkdtemp())
+        Traceback (most recent call last):
+        ...
+        provesid.datasets.MissingDatasetError: 1 dataset(s) missing from ...
     """
 
 
@@ -768,6 +790,12 @@ def data_directory(data_dir: Optional[str] = None) -> str:
 
     Returns:
         Absolute path to the dataset directory.
+
+    Example:
+        >>> data_directory("/data/provesid")
+        '/data/provesid'
+        >>> data_directory() == user_dataset_path()
+        True
     """
     if data_dir is not None:
         return os.path.abspath(os.path.expanduser(str(data_dir)))
@@ -792,6 +820,15 @@ def dataset_files(name: str, data_dir: Optional[str] = None,
 
     Raises:
         KeyError: If ``name`` is not a known dataset.
+
+    Example:
+        >>> import tempfile
+        >>> directory = tempfile.mkdtemp()
+        >>> dataset_files("zeropm", directory)
+        []
+        >>> open(os.path.join(directory, "zeropm-v0-0-4.sqlite"), "w").close()
+        >>> [os.path.basename(path) for path in dataset_files("zeropm", directory)]
+        ['zeropm-v0-0-4.sqlite']
     """
     dataset = DATASETS[name]
     directory = data_directory(data_dir)
@@ -815,9 +852,15 @@ def is_present(name: str, data_dir: Optional[str] = None) -> bool:
 
     Returns:
         True when at least one file matching the dataset's own patterns exists.
+        Only the name is checked; an empty or damaged file counts.
 
     Raises:
         KeyError: If ``name`` is not a known dataset.
+
+    Example:
+        >>> import tempfile
+        >>> is_present("chembl", tempfile.mkdtemp())
+        False
     """
     return bool(dataset_files(name, data_dir, include_extras=False))
 

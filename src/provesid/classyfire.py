@@ -1,3 +1,24 @@
+"""
+The ClassyFire web service (Wishart lab): :class:`ClassyFireAPI`.
+
+.. warning::
+   The service has classified nothing new since February 2023. It still
+   serves queries submitted before then, but a new submission is never
+   processed. For ChEBI classes computed offline use
+   :class:`provesid.taxonomy.ChebifierClassifier`.
+
+This is the last module still calling ``requests`` directly, with no pacing
+and no retry, and its methods return :class:`requests.Response` objects rather
+than parsed data. Plan step 7 replaces it; until then it is documented as it
+is.
+
+Example:
+    >>> from provesid.classyfire import ClassyFireAPI
+    >>> response = ClassyFireAPI.get_query(1)                  # doctest: +SKIP
+    >>> response.json()["classification_status"]               # doctest: +SKIP
+    'Done'
+"""
+
 import requests
 from .cache import cached, clear_cache, get_cache_info
 
@@ -5,56 +26,70 @@ class ClassyFireAPI:
     """
     Class to interact with the ClassyFire API. The class is converted from the original Ruby code
     provided at https://bitbucket.org/wishartlab/classyfire_api/src/master/lib/classyfire_api.rb
-    It is converted to Python by using the requests library, using copilot to help with the conversion.
-    It is then tested by the author (simulkade) to ensure that it works as expected.
-    The following is an example of how to use the ClassyFireAPI class:
-    ```
-    import time
-    import json
-    from data_extract import ClassyFireAPI
-    # SMILES string to be queried
-    smiles = "C1=CC(=CC=C1[N+](=O)[O-])Cl"
 
-    # Submit the query
-    response = ClassyFireAPI.submit_query("Example Query", smiles)
+    Every method is static. Submit a structure with :meth:`submit_query`, poll
+    :meth:`query_status`, then fetch the result with :meth:`get_query`. See
+    the module warning: new submissions are no longer processed.
 
-    # Check if the response is successful
-    if response.status_code == 200:
-        query_result = response.json()
-        query_id = query_result['id']
-        print(f"Query submitted successfully. Query ID: {query_id}")
-
-        # Wait for some time to allow the query to be processed
-        time.sleep(1)  # Adjust the sleep time as needed
-
-        # Retrieve the classification results
-        result_response = ClassyFireAPI.get_query(query_id, format="json")
-
-        if result_response.status_code == 200:
-            classification_results = result_response.json()
-            print("Classification Results:")
-            print(json.dumps(classification_results, indent=2))
-        else:
-            print(f"Failed to retrieve classification results. Status code: {result_response.status_code}")
-    else:
-        print(f"Failed to submit query. Status code: {response.status_code}")
-    ```
+    Example:
+        >>> response = ClassyFireAPI.submit_query(
+        ...     "Example Query", "C1=CC(=CC=C1[N+](=O)[O-])Cl")    # doctest: +SKIP
+        >>> query_id = response.json()["id"]                       # doctest: +SKIP
+        >>> ClassyFireAPI.query_status(query_id).json()            # doctest: +SKIP
     """
     URL = 'http://classyfire.wishartlab.com'
 
     @staticmethod
     def clear_cache():
-        """Clear the cache for all ClassyFireAPI methods"""
+        """
+        Delete every cached ClassyFire response, in memory and on disk.
+
+        Example:
+            >>> ClassyFireAPI.clear_cache()
+            >>> ClassyFireAPI.get_cache_info()['file_count']
+            0
+        """
         clear_cache(service='classyfire')
-    
+
     @staticmethod
     def get_cache_info():
-        """Get information about the current cache state"""
+        """
+        Size and location of the ClassyFire cache.
+
+        Returns:
+            dict: As :func:`provesid.cache.get_cache_info` reports it for
+            ``service='classyfire'``.
+
+        Example:
+            >>> ClassyFireAPI.get_cache_info()['cache_directory'].endswith('classyfire')
+            True
+        """
         return get_cache_info(service='classyfire')
 
     @staticmethod
     @cached(service='classyfire')
     def submit_query(label, input, type='STRUCTURE', use_cache=True):
+        """
+        Submit a structure for classification.
+
+        Args:
+            label: A name for the query, kept by ClassyFire.
+            input: The structure, as SMILES (or several, one per line).
+            type: ClassyFire's ``query_type``; ``"STRUCTURE"`` by default.
+            use_cache: When False, do not read the cache.
+
+        Returns:
+            requests.Response: The service's answer, whose JSON carries the
+            query ``id`` on success. An HTTP error comes back as its response,
+            not raised; a connection failure comes back as None.
+
+        Note:
+            New submissions have not been processed since February 2023.
+
+        Example:
+            >>> response = ClassyFireAPI.submit_query("test", "CCO")  # doctest: +SKIP
+            >>> response.json()["id"]                                  # doctest: +SKIP
+        """
         try:
             response = requests.post(
                 f"{ClassyFireAPI.URL}/queries",
@@ -67,14 +102,29 @@ class ClassyFireAPI:
         except requests.exceptions.RequestException as e:
             return e.response
         return response
-    
+
     @staticmethod
     @cached(service='classyfire')
     def query_status(query_id, use_cache=True):
         """
         Retrieves the status of a query.
-        :param query_id: The ID of the query.
-        :return: response
+
+        Args:
+            query_id: The ID :meth:`submit_query` returned.
+            use_cache: When False, do not read the cache.
+
+        Returns:
+            requests.Response: The status response, or None when the request
+            failed for any reason.
+
+        Note:
+            The status is cached like everything else here, so polling with
+            the cache on sees the first answer forever; poll with
+            ``use_cache=False``.
+
+        Example:
+            >>> ClassyFireAPI.query_status(1, use_cache=False).status_code  # doctest: +SKIP
+            200
         """
         try:
             response = requests.get(
@@ -89,6 +139,27 @@ class ClassyFireAPI:
     @staticmethod
     @cached(service='classyfire')
     def get_query(query_id, format="json", use_cache=True):
+        """
+        Retrieve a query's classification.
+
+        Args:
+            query_id: The query ID.
+            format: ``"json"``, ``"sdf"`` or ``"csv"``.
+            use_cache: When False, do not read the cache.
+
+        Returns:
+            requests.Response: The result in the requested format. An HTTP
+            error comes back as its response, not raised; a connection failure
+            comes back as None.
+
+        Raises:
+            ValueError: If ``format`` is not one of the three.
+
+        Example:
+            >>> result = ClassyFireAPI.get_query(1).json()          # doctest: +SKIP
+            >>> result["classification_status"], result["number_of_elements"]  # doctest: +SKIP
+            ('Done', 655)
+        """
         try:
             if format == "json":
                 response = requests.get(

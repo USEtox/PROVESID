@@ -1,3 +1,23 @@
+"""
+CAS Common Chemistry, online: :class:`CASCommonChem`.
+
+CAS Common Chemistry (https://commonchemistry.cas.org) is CAS's free subset
+of the CAS Registry: about half a million substances with their CAS number,
+names, structure and some experimental properties. Its API (v2.0) needs a
+free API key, sent in the ``X-API-KEY`` header; see
+:meth:`CASCommonChem._load_api_key` for where it is looked for.
+
+The lookups report failure in the dict they return (``found`` False and a
+``status``) rather than raising, and are cached only when they succeed.
+
+Example:
+    >>> from provesid.cascommonchem import CASCommonChem
+    >>> cas = CASCommonChem(api_key="your-cas-api-key")          # doctest: +SKIP
+    >>> result = cas.cas_to_detail("7732-18-5")                  # doctest: +SKIP
+    >>> result["found"], result["rn"]                            # doctest: +SKIP
+    (True, '7732-18-5')
+"""
+
 import os
 import json
 import requests
@@ -83,25 +103,42 @@ class CASCommonChem:
     """
     calling the CAS Common Chemistry API v2.0 to get the information for a given CAS RN
     Requires API key authentication via X-API-KEY header
+
+    The endpoint comes from the Swagger file shipped in the package data
+    directory. Every lookup needs the network.
+
+    Raises:
+        ValueError: At construction, when no API key can be found.
+
+    Example:
+        >>> cas = CASCommonChem(api_key="your-cas-api-key")
+        >>> cas.base_url
+        'https://commonchemistry.cas.org/api'
+        >>> cas.name_to_detail("aspirin")["rn"]              # doctest: +SKIP
+        '50-78-2'
     """
-    def __init__(self, swagger_file_name='commonchemistry-swagger.json', use_cache: bool = True, 
+    def __init__(self, swagger_file_name='commonchemistry-swagger.json', use_cache: bool = True,
                  api_key: str = None, api_key_file: str = None):
         """
         Initialize CAS Common Chemistry API client
-        
+
         Args:
             swagger_file_name: Name of the swagger JSON file
             use_cache: Whether to use cache for lookups
             api_key: Direct API key string (takes precedence over api_key_file)
             api_key_file: Path to file containing API key
+
+        Raises:
+            ValueError: If no API key is found in any of the places
+                :meth:`_load_api_key` looks.
         """
         self.data_folder = CASCommonChem_path
         self.swagger_file_path = os.path.join(self.data_folder, swagger_file_name)
-        
+
         # Load the swagger file
         with open(self.swagger_file_path, 'r') as f:
             self.swagger = json.load(f)
-        
+
         # Set up API configuration
         host = self.swagger["host"]
         schemes = self.swagger["schemes"][0]
@@ -110,7 +147,7 @@ class CASCommonChem:
         self.query_url = ["/detail", "/export", "/search"]
         self.responses = {200: "Success", 400: "Invalid Request", 404: "Invalid Request", 500: "Internal Server Error"}
         self.use_cache = use_cache
-        
+
         # Handle API key - check multiple sources in priority order
         self.api_key = self._load_api_key(api_key, api_key_file)
         if not self.api_key:
@@ -156,12 +193,16 @@ class CASCommonChem:
             >>> cas.responses = {200: "Success", 404: "Invalid Request"}
             >>> cas._failure_status(CASCommonChemError("x", status_code=401))
             'Unauthorized - Check API Key'
+            >>> cas._failure_status(CASCommonChemError("x", status_code=403))
+            'Unauthorized - Check API Key'
             >>> cas._failure_status(CASCommonChemTimeoutError("x"))
             'Timeout'
         """
         if isinstance(exc, CASCommonChemTimeoutError):
             return "Timeout"
-        if exc.status_code == 401:
+        # CAS answers a missing or rejected key with 403 ("API key required"),
+        # checked live on 2026-09-22; 401 is kept in case it ever uses it.
+        if exc.status_code in (401, 403):
             return "Unauthorized - Check API Key"
         if isinstance(exc, CASCommonChemNotFoundError):
             return "Not Found"
@@ -210,7 +251,7 @@ class CASCommonChem:
         # Priority 1: Direct parameter
         if api_key:
             return api_key.strip()
-        
+
         # Priority 2: API key file
         if api_key_file:
             try:
@@ -224,7 +265,7 @@ class CASCommonChem:
                 logging.warning(f"API key file not found: {api_key_file}")
             except Exception as e:
                 logging.warning(f"Error reading API key file {api_key_file}: {e}")
-        
+
         # Priority 3: Persistent configuration
         try:
             config_key = get_cas_api_key()
@@ -232,14 +273,14 @@ class CASCommonChem:
                 return config_key.strip()
         except Exception as e:
             logging.debug(f"Could not load API key from config: {e}")
-        
+
         # Priority 4: Environment variables
         env_key = os.environ.get('CCC_API_KEY') or os.environ.get('CAS_API_KEY')
         if env_key:
             return env_key.strip()
-        
+
         return None
-    
+
     def _get_headers(self) -> dict:
         """Get headers with API key for authentication"""
         return {
@@ -247,19 +288,21 @@ class CASCommonChem:
             'Accept': 'application/json',
             'Content-Type': 'application/json'
         }
-    
+
     @cached(service='cas', skip_if=_lookup_failed)
     def cas_to_detail(self, cas_rn: str, timeout=30):
         """
         Returns a dictionary with the data for a given CAS RN using API v2.0
-        
+
         Args:
             cas_rn: CAS Registry Number (with or without hyphens)
             timeout: Request timeout in seconds
-            
+
         Returns:
             Dictionary with compound details including:
-            - status: Request status
+            - found: True when CAS returned the substance
+            - status: Request status: ``"Success"``, or the failure, e.g.
+              ``"Not Found"``, ``"Timeout"`` or ``"Unauthorized - Check API Key"``
             - canonicalSmile: Canonical SMILES string
             - experimentalProperties: List of experimental properties
             - hasMolfile: Boolean indicating molfile availability
@@ -271,6 +314,17 @@ class CASCommonChem:
             - name: Compound name
             - synonyms: List of synonyms
             - uri: Compound URI
+            The keys are CAS's own, so the set can grow with the API. Nothing
+            is raised: every failure is reported in ``found`` and ``status``,
+            and is not cached.
+
+        Example:
+            >>> cas = CASCommonChem(api_key="your-cas-api-key")
+            >>> result = cas.cas_to_detail("7732-18-5")          # doctest: +SKIP
+            >>> result["found"], result["rn"]                    # doctest: +SKIP
+            (True, '7732-18-5')
+            >>> CASCommonChem(api_key="not-a-key").cas_to_detail("7732-18-5")["status"]  # doctest: +SKIP
+            'Unauthorized - Check API Key'
         """
         url = self.base_url + self.query_url[0] + "?cas_rn=" + cas_rn
         res = self._empty_res()
@@ -296,18 +350,26 @@ class CASCommonChem:
             res[key] = data[key]
         res["found"] = True
         return res
-    
+
     @cached(service='cas', skip_if=_lookup_failed)
     def name_to_detail(self, name: str, timeout=30):
         """
         Returns compound details for a given name or SMILES using API v2.0
-        
+
         Args:
             name: Compound name or SMILES string
             timeout: Request timeout in seconds
-            
+
         Returns:
-            Dictionary with compound details (same as cas_to_detail)
+            Dictionary with compound details (same as cas_to_detail), for the
+            first search hit when there are several (logged). ``status`` is
+            ``"Not found"`` when the search finds nothing. Two requests: a
+            search, then a detail lookup.
+
+        Example:
+            >>> cas = CASCommonChem(api_key="your-cas-api-key")
+            >>> cas.name_to_detail("aspirin")["rn"]              # doctest: +SKIP
+            '50-78-2'
         """
         res = self._empty_res()
         url = self.base_url + self.query_url[2] + "?q=" + requests.utils.quote(name)
@@ -339,20 +401,58 @@ class CASCommonChem:
         # Get CAS RN from first result and fetch details
         cas_rn = res_call["results"][0]["rn"]
         return self.cas_to_detail(cas_rn)
-    
+
     def smiles_to_detail(self, smiles: str, timeout=30):
+        """
+        Look a substance up by SMILES, through CAS's search.
+
+        The same call as :meth:`name_to_detail`: CAS's search accepts a SMILES
+        where it accepts a name.
+
+        Args:
+            smiles: SMILES string.
+            timeout: Request timeout in seconds.
+
+        Returns:
+            Dictionary with compound details, as :meth:`name_to_detail`.
+
+        Example:
+            >>> cas = CASCommonChem(api_key="your-cas-api-key")
+            >>> cas.smiles_to_detail("CCO")["rn"]                # doctest: +SKIP
+            '64-17-5'
+        """
         return self.name_to_detail(smiles, timeout)
-    
+
     def clear_cache(self):
-        """Clear all cached results for CAS Common Chemistry"""
+        """
+        Delete every cached CAS Common Chemistry answer, in memory and on disk.
+
+        The same as ``provesid.clear_cache(service='cas')``.
+
+        Example:
+            >>> cas = CASCommonChem(api_key="your-cas-api-key")
+            >>> cas.clear_cache()
+            >>> cas.get_cache_info()['file_count']
+            0
+        """
         from .cache import clear_cache
         clear_cache(service='cas')
-    
+
     def get_cache_info(self):
-        """Get cache information for CAS Common Chemistry cached methods"""
+        """
+        Size and location of the CAS Common Chemistry cache.
+
+        Returns:
+            dict: As :func:`provesid.cache.get_cache_info` reports it for
+            ``service='cas'``.
+
+        Example:
+            >>> CASCommonChem(api_key="your-cas-api-key").get_cache_info()['cache_directory'].endswith('cas')
+            True
+        """
         from .cache import get_cache_info
         return get_cache_info(service='cas')
-    
+
     @staticmethod
     def _empty_res():
         return {
@@ -374,6 +474,6 @@ class CASCommonChem:
                 "synonyms": [],
                 "uri": ""
             }
-        
-        
-        
+
+
+

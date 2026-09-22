@@ -224,6 +224,12 @@ def inchi_to_smiles(inchi: Optional[str]) -> Optional[str]:
     Returns:
         The SMILES string, or None when the input is missing, RDKit is not
         installed, or RDKit cannot parse the InChI.
+
+    Example:
+        >>> inchi_to_smiles("InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3")
+        'CCO'
+        >>> inchi_to_smiles(None) is None
+        True
     """
     if is_missing(inchi) or not RDKIT_AVAILABLE or Chem is None:
         return None
@@ -249,6 +255,10 @@ def inchikey_from_smiles(smiles: Optional[str]) -> Optional[str]:
     Returns:
         The InChIKey, or None when the input is missing, RDKit is not
         installed, or RDKit cannot parse the SMILES.
+
+    Example:
+        >>> inchikey_from_smiles("OCC")
+        'LFQSCWFLJHTTHZ-UHFFFAOYSA-N'
     """
     if is_missing(smiles) or not RDKIT_AVAILABLE or Chem is None:
         return None
@@ -275,6 +285,16 @@ def first_cas(cas_values: List[str]) -> Optional[str]:
 
     Returns:
         The first CAS number, or None when the list is empty.
+
+    Note:
+        "First" is first as a string, which is not the best number: aspirin's
+        CompTox row sorts the retired ``11126-35-5`` ahead of ``50-78-2``.
+
+    Example:
+        >>> first_cas(extract_cas_values("50-78-2 | 11126-35-5"))
+        '11126-35-5'
+        >>> first_cas([]) is None
+        True
     """
     return cas_values[0] if cas_values else None
 
@@ -466,6 +486,15 @@ def candidate_compatible_with_consensus(
         True when the candidate agrees with the consensus closely enough, when
         it *is* the consensus source, or when there is no consensus to
         contradict. False when the candidate is None.
+
+    Example:
+        >>> aspirin = make_candidate("ChEBI", smiles="CC(=O)Oc1ccccc1C(=O)O")
+        >>> also_aspirin = make_candidate("CompTox", smiles="CC(=O)OC1=C(C=CC=C1)C(O)=O")
+        >>> ethanol = make_candidate("ZeroPM", smiles="CCO")
+        >>> candidate_compatible_with_consensus(also_aspirin, aspirin)
+        True
+        >>> candidate_compatible_with_consensus(ethanol, aspirin)
+        False
     """
     if candidate is None:
         return False
@@ -490,6 +519,14 @@ def apply_candidate_to_result(result: Dict[str, Any], candidate: Optional[Dict[s
 
     Returns:
         None. The mutation is the point.
+
+    Example:
+        >>> result = {"CASRN": "50-78-2", "name": None}
+        >>> apply_candidate_to_result(result, make_candidate(
+        ...     "CompTox", name="Aspirin", smiles="CC(=O)OC1=C(C=CC=C1)C(O)=O",
+        ...     cas_candidates=["11126-35-5"]))
+        >>> result["CASRN"], result["name"], result["source"]
+        ('50-78-2', 'Aspirin', 'CompTox')
     """
     if candidate is None:
         return
@@ -588,6 +625,13 @@ def candidate_from_chebi_row(row: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         The candidate record. ChEBI states no mass, so the mass comes from
         RDKit via :func:`make_candidate`.
+
+    Example:
+        >>> from provesid import ChebiSDF
+        >>> row = ChebiSDF().get_compound_by_id("CHEBI:15365")   # doctest: +SKIP
+        >>> cand = candidate_from_chebi_row(row)                 # doctest: +SKIP
+        >>> cand["name"], cand["CAS_candidates"], round(cand["molecular_mass"], 2)  # doctest: +SKIP
+        ('acetylsalicylic acid', ['50-78-2'], 180.16)
     """
     return make_candidate(
         "ChEBI",
@@ -611,6 +655,12 @@ def candidate_from_comptox_row(row: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         The candidate record, carrying the DTXSID and preferring the average
         mass over the monoisotopic one.
+
+    Example:
+        >>> from provesid import CompToxID
+        >>> cand = candidate_from_comptox_row(CompToxID().get_by_casrn("50-78-2"))  # doctest: +SKIP
+        >>> cand["DTXSID"], cand["molecular_mass"]               # doctest: +SKIP
+        ('DTXSID5020108', 180.159)
     """
     return make_candidate(
         "CompTox",
@@ -635,6 +685,12 @@ def candidate_from_pubchem_row(row: Dict[str, Any]) -> Dict[str, Any]:
 
     Returns:
         The candidate record.
+
+    Example:
+        >>> from provesid import PubChemID
+        >>> cand = candidate_from_pubchem_row(PubChemID().get_by_cid(2244))  # doctest: +SKIP
+        >>> cand["name"], cand["molecular_mass"], cand["CAS_candidates"]     # doctest: +SKIP
+        ('Aspirin', 180.16, ['50-78-2'])
     """
     return make_candidate(
         "PubChemID",
@@ -665,6 +721,15 @@ def candidate_from_zeropm_name_table(name: str, table: pd.DataFrame) -> Optional
 
     Returns:
         The candidate record, or None when the table is empty or None.
+
+    Example:
+        >>> table = pd.DataFrame({"rank": [2, 1],
+        ...                       "inchi": ["InChI=1S/CH4/h1H4", "InChI=1S/CH2O/c1-2/h1H2"],
+        ...                       "inchikey": ["VNWKTOKETHGBQD-UHFFFAOYSA-N", "WSFSSNUMVMOOMR-UHFFFAOYSA-N"],
+        ...                       "cas": ["74-82-8", "50-00-0"]})
+        >>> cand = candidate_from_zeropm_name_table("Formaldehyde", table)
+        >>> cand["SMILES"], cand["InChIKey"], cand["CAS_candidates"]
+        ('C=O', 'WSFSSNUMVMOOMR-UHFFFAOYSA-N', ['50-00-0', '74-82-8'])
     """
     if table is None or table.empty:
         return None
@@ -714,6 +779,16 @@ def candidate_from_zeropm_smiles(smiles_query: str, zeropm: ZeroPM) -> Optional[
         minimal candidate carrying just the query structure and those CAS
         numbers is returned instead — they are still evidence. None when the
         structure resolves to no CAS at all.
+
+        The structure is taken from a row whose InChIKey is the query's, when
+        there is one: the pooled CAS numbers include relatives, and for
+        ``"CCO"`` the first is 13C-labelled ethanol.
+
+    Example:
+        >>> from provesid import ZeroPM
+        >>> cand = candidate_from_zeropm_smiles("CCO", ZeroPM())  # doctest: +SKIP
+        >>> cand["InChIKey"], "64-17-5" in cand["CAS_candidates"]  # doctest: +SKIP
+        ('LFQSCWFLJHTTHZ-UHFFFAOYSA-N', True)
     """
     cas_result = zeropm.get_cas_from_smiles(smiles_query)
     cas_values = extract_cas_values(cas_result)
@@ -730,7 +805,12 @@ def candidate_from_zeropm_smiles(smiles_query: str, zeropm: ZeroPM) -> Optional[
         return make_candidate("ZeroPM", smiles=smiles_query, cas_candidates=cas_values)
 
     combined = pd.concat(tables, ignore_index=True)
-    first = combined.iloc[0]
+    # The CAS numbers come sorted, not ranked, and the first can belong to a
+    # relative of the query: for "CCO" it is 14742-23-5, 13C-labelled ethanol.
+    # Take the structure from a row that is the query, when one is.
+    query_key = inchikey_from_smiles(smiles_query)
+    same_structure = combined[combined["inchikey"] == query_key] if query_key else combined.iloc[0:0]
+    first = same_structure.iloc[0] if not same_structure.empty else combined.iloc[0]
     inchi = first.get("inchi")
     smiles = pick_first(smiles_query, inchi_to_smiles(inchi))
 
@@ -760,6 +840,14 @@ def candidate_from_chembl_row(row: Dict[str, Any], chembl: Optional[CheMBL] = No
 
     Returns:
         The candidate record. ChEMBL states no formula.
+
+    Example:
+        >>> row = {"pref_name": "ASPIRIN", "canonical_smiles": "CC(=O)Oc1ccccc1C(=O)O",
+        ...        "standard_inchi_key": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+        ...        "synonyms": ["Aspirin", "50-78-2"]}
+        >>> cand = candidate_from_chembl_row(row)
+        >>> cand["name"], cand["CAS_candidates"], round(cand["molecular_mass"], 2)
+        ('ASPIRIN', ['50-78-2'], 180.16)
     """
     props = None
     molregno = row.get("molregno")
@@ -874,6 +962,13 @@ def smiles_to_canonical_and_mass(smiles: Optional[str]) -> Tuple[Optional[str], 
         the SMILES is passed through unchanged and the mass is None — an
         uncanonicalised structure still matches an identical string from
         another source.
+
+    Example:
+        >>> smiles, mass = smiles_to_canonical_and_mass("OCC")
+        >>> smiles, round(mass, 3)
+        ('CCO', 46.069)
+        >>> smiles_to_canonical_and_mass("not a smiles")
+        (None, None)
     """
     if is_missing(smiles):
         return None, None

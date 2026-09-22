@@ -30,6 +30,20 @@ os.environ.setdefault(
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_host_hold_leaks():
+    """
+    Forget every host's ``Retry-After`` hold after each test.
+
+    Holds live on process-wide limiters, and a stub that answers 503 with
+    ``Retry-After: 30`` under PubChem's real host would otherwise make every
+    later PubChem test fail at once without asking.
+    """
+    yield
+    from provesid.http import release_holds
+    release_holds()
+
+
 # Pytest markers for test categorization
 def pytest_configure(config):
     """Configure pytest with custom markers."""

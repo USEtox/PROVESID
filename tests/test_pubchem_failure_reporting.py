@@ -559,6 +559,41 @@ def test_pubchem_clients_share_one_pacing_clock():
 
 
 @pytest.mark.unit
+def test_a_throttle_seen_by_pug_rest_stops_pug_view_without_a_request(api, monkeypatch):
+    """
+    The circuit breaker across clients. PubChem's ``Retry-After: 30`` is about
+    the IP, so once PUG-REST has been told it, a PUG-View call fails at once
+    rather than paying a refused request to be told again.
+    """
+    import time as time_module
+
+    import requests
+
+    monkeypatch.setattr(time_module, "sleep", lambda seconds: None)
+
+    class _ThrottledResponse(_FakeResponse):
+        def __init__(self):
+            super().__init__(503, payload={"Fault": {"Code": "PUGREST.ServerBusy"}})
+            self.headers = {"Retry-After": "30"}
+
+    attempts = []
+
+    def throttled(url, timeout=None, headers=None):
+        attempts.append(url)
+        return _ThrottledResponse()
+
+    monkeypatch.setattr(requests, "get", throttled)
+    with pytest.raises(PubChemError):
+        api._make_request("https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/2244/synonyms/JSON")
+    assert len(attempts) == 1
+
+    with pytest.raises(PubChemViewError, match="asked for no requests until"):
+        PubChemView(use_cache=False)._make_request(
+            "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/2244/JSON")
+    assert len(attempts) == 1, "PUG-View asked a host PUG-REST had been told was held"
+
+
+@pytest.mark.unit
 def test_pause_time_is_settable_mid_batch():
     """
     ``pause_time`` was a plain attribute the old rate limiter read live. It is

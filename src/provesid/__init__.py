@@ -7,6 +7,7 @@ from .http import (
     NotFoundError,
     RateLimitError,
     ServiceTimeoutError,
+    release_holds,
 )
 from . import datasets
 from .datasets import (

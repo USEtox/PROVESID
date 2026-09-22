@@ -24,6 +24,7 @@ from provesid.http import (
     ServiceTimeoutError,
     default_classify,
     host_limiter,
+    release_holds,
     retry_after_seconds,
 )
 
@@ -326,16 +327,21 @@ def test_retry_after_as_an_http_date_is_honoured(monkeypatch, sleeps):
 
 
 @pytest.mark.unit
-def test_retry_after_is_capped_by_max_backoff(monkeypatch, sleeps):
-    """A service asking for an hour does not get to stall the caller."""
-    monkeypatch.setattr(
-        requests, "get",
-        _Recorder(_FakeResponse(429, headers={"Retry-After": "3600"}), _FakeResponse(200, text="ok")),
-    )
+def test_a_retry_after_longer_than_max_backoff_gives_up_instead_of_asking_early(monkeypatch, sleeps):
+    """
+    A service asking for an hour does not get to stall the caller --- and does
+    not get asked again after five seconds either, which would only earn a
+    second refusal. The call gives up after the one request.
+    """
+    recorder = _Recorder(_FakeResponse(429, headers={"Retry-After": "3600"}), _FakeResponse(200, text="ok"))
+    monkeypatch.setattr(requests, "get", recorder)
 
-    client = HTTPClient(min_interval=0, max_retries=2, backoff=1.0, max_backoff=5.0)
-    assert client.get_text("https://example.org/x") == "ok"
-    assert sleeps == [5.0]
+    client = HTTPClient(min_interval=0, max_retries=2, backoff=1.0, max_backoff=5.0,
+                        rate_limit_cls=RateLimitError)
+    with pytest.raises(RateLimitError, match="longer than max_backoff=5s"):
+        client.get_text("https://example.org/x")
+    assert sleeps == []
+    assert recorder.count == 1
 
 
 @pytest.mark.unit
@@ -539,6 +545,164 @@ def test_a_bare_limiter_records_even_when_pacing_is_off(sleeps):
     assert limiter.last_request_time == 0.0
     limiter.wait(0.0)
     assert limiter.last_request_time > 0
+    assert sleeps == []
+
+
+# --------------------------------------------------------------------------
+# The circuit breaker: a Retry-After holds the host, not the request
+# --------------------------------------------------------------------------
+
+def _throttled(seconds="30", status=503):
+    return _FakeResponse(status, text="busy", headers={"Retry-After": seconds})
+
+
+@pytest.mark.unit
+def test_a_held_host_fails_at_once_without_a_request(monkeypatch, sleeps):
+    """
+    The point of the breaker. PubChem blocks an IP with ``Retry-After: 30``;
+    the first call learns it at the price of one request, and the next call
+    is told without asking.
+    """
+    recorder = _Recorder(_throttled("30"))
+    monkeypatch.setattr(requests, "get", recorder)
+    client = HTTPClient(min_interval=0, max_retries=3, max_elapsed=10,
+                        rate_limit_cls=RateLimitError,
+                        retry_exhausted_cls=RateLimitError)
+
+    with pytest.raises(RateLimitError, match="retry budget"):
+        client.get("https://example.org/a")
+    assert recorder.count == 1
+
+    with pytest.raises(RateLimitError, match="asked for no requests until") as refused:
+        client.get("https://example.org/b")
+    assert recorder.count == 1, "a held host was asked again"
+    assert sleeps == []
+    assert refused.value.held_until == client.limiter.not_before
+
+
+@pytest.mark.unit
+def test_only_the_breaker_marks_its_refusals_as_held(monkeypatch, sleeps):
+    """
+    ``held_until`` is how a batch tells "the host is still held, as already
+    reported" from a failure worth a warning of its own.
+    """
+    monkeypatch.setattr(requests, "get", _Recorder(_throttled("30")))
+    client = HTTPClient(min_interval=0, max_retries=0, max_backoff=5)
+
+    with pytest.raises(ServiceError) as refused_by_host:
+        client.get("https://example.org/a")
+    assert refused_by_host.value.held_until is None
+
+    with pytest.raises(ServiceError) as refused_by_breaker:
+        client.get("https://example.org/a")
+    assert refused_by_breaker.value.held_until is not None
+
+
+@pytest.mark.unit
+def test_a_plain_exception_class_still_carries_held_until(sleeps):
+    """The attribute is set by hand, so any ``rate_limit_cls`` gets it."""
+    client = HTTPClient(min_interval=0, max_backoff=1, rate_limit_cls=RuntimeError)
+    client.limiter.hold(60)
+    with pytest.raises(RuntimeError) as refused:
+        client.get("https://example.org/x")
+    assert refused.value.held_until == client.limiter.not_before
+
+
+@pytest.mark.unit
+def test_the_hold_binds_every_client_on_the_host(monkeypatch, sleeps):
+    """
+    ``Retry-After`` is information about the host, so a second client aimed at
+    it --- PubChemView beside PubChemAPI --- respects what the first was told.
+    """
+    recorder = _Recorder(_throttled("30"))
+    monkeypatch.setattr(requests, "get", recorder)
+    host = "https://breaker.example.test/api"
+    first = HTTPClient(min_interval=0, max_retries=0, pace_host=host)
+    second = HTTPClient(min_interval=0, max_retries=3, max_backoff=5, pace_host=host,
+                        rate_limit_cls=RateLimitError)
+
+    with pytest.raises(ServiceError):
+        first.get(host)
+    with pytest.raises(RateLimitError, match="breaker.example.test asked for no requests"):
+        second.get(host)
+    assert recorder.count == 1
+
+
+@pytest.mark.unit
+def test_a_hold_on_one_host_does_not_touch_another(monkeypatch, sleeps):
+    """Being throttled by PubChem says nothing about ChEBI."""
+    monkeypatch.setattr(requests, "get", _Recorder(_FakeResponse(200, text="ok")))
+    host_limiter("https://held.example.test").hold(600)
+
+    other = HTTPClient(min_interval=0, pace_host="https://free.example.test")
+    assert other.get_text("https://free.example.test/x") == "ok"
+
+
+@pytest.mark.unit
+def test_a_short_hold_is_waited_out_then_asked(monkeypatch, sleeps):
+    """
+    A hold the client would have waited anyway is waited, not failed: a
+    one-second pause is cheaper than a lost answer.
+    """
+    recorder = _Recorder(_FakeResponse(200, text="ok"))
+    monkeypatch.setattr(requests, "get", recorder)
+    client = HTTPClient(min_interval=0, max_backoff=5)
+    client.limiter.hold(2)
+
+    assert client.get_text("https://example.org/x") == "ok"
+    assert len(sleeps) == 1 and 1.5 < sleeps[0] <= 2
+    assert recorder.count == 1
+
+
+@pytest.mark.unit
+def test_the_hold_wait_counts_against_max_elapsed(monkeypatch, sleeps):
+    """
+    Waiting out a hold is waiting, so it comes out of the same budget a retry
+    would spend. Here the hold fits, and the retry it leaves no room for is
+    declined.
+    """
+    recorder = _Recorder(_FakeResponse(503, text="busy"))
+    monkeypatch.setattr(requests, "get", recorder)
+    client = HTTPClient(min_interval=0, max_retries=3, backoff=4, max_elapsed=10)
+    client.limiter.hold(8)
+
+    with pytest.raises(ServiceError, match="retry budget"):
+        client.get("https://example.org/x")
+    assert recorder.count == 1
+    assert len(sleeps) == 1 and 7.5 < sleeps[0] <= 8
+
+
+@pytest.mark.unit
+def test_a_longer_hold_is_never_shortened():
+    """The host's latest word does not retract what it told another request."""
+    limiter = RateLimiter()
+    limiter.hold(60)
+    limiter.hold(5)
+    assert limiter.held_for() > 55
+    limiter.hold(0)
+    assert limiter.held_for() > 55
+
+
+@pytest.mark.unit
+def test_a_response_without_retry_after_holds_nothing(monkeypatch, sleeps):
+    """A plain 503 is this request's bad luck, not a statement about the host."""
+    monkeypatch.setattr(requests, "get", _Recorder(_FakeResponse(503)))
+    client = HTTPClient(min_interval=0, max_retries=1, backoff=0)
+
+    with pytest.raises(ServiceError):
+        client.get("https://example.org/x")
+    assert client.limiter.held_for() == 0.0
+
+
+@pytest.mark.unit
+def test_release_holds_reopens_every_host(monkeypatch, sleeps):
+    """For a caller who knows better than the header, and for the test suite."""
+    monkeypatch.setattr(requests, "get", _Recorder(_FakeResponse(200, text="ok")))
+    host = "https://released.example.test"
+    host_limiter(host).hold(600)
+
+    release_holds()
+    assert HTTPClient(min_interval=0, pace_host=host).get_text(host) == "ok"
     assert sleeps == []
 
 

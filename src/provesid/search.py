@@ -1642,7 +1642,11 @@ class Search:
             try:
                 hits[key] = lookup(client, query)
             except Exception as exc:
-                log.warning(
+                # A held host was reported once, when the hold was recorded;
+                # a batch should not repeat it for every query that follows.
+                held = getattr(exc, "held_until", None) is not None
+                log.log(
+                    logging.DEBUG if held else logging.WARNING,
                     "%s %s lookup failed for %r: %s",
                     self._SOURCE_DISPLAY[key], kind, value, exc,
                 )

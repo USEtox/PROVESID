@@ -15,6 +15,11 @@ bare 404 for absence. That disagreement is the ``classify`` callback --- a
 function from a response to an :class:`Outcome` --- and it is the only part of
 the policy a caller is expected to supply.
 
+Two things belong to the *host* rather than to any one client, and live on its
+shared :class:`RateLimiter`: the pacing clock, and the circuit breaker. The
+breaker is the time a ``Retry-After`` named, and no client sharing the host
+asks before it.
+
 Example:
     >>> client = HTTPClient(min_interval=0.2, timeout=30)
     >>> client.get_text("https://example.org/thing")   # doctest: +SKIP
@@ -64,6 +69,11 @@ class ServiceError(Exception):
         status_code: As above.
         url: As above.
         response: As above.
+        held_until: The Unix time an earlier ``Retry-After`` holds the host
+            until, when this failure is the circuit breaker refusing to ask
+            at all; None otherwise. A caller running a batch uses it to
+            report a held host once rather than once per query --- the
+            transport has already warned when the hold was recorded.
 
     Example:
         >>> issubclass(NotFoundError, ServiceError)
@@ -82,6 +92,7 @@ class ServiceError(Exception):
         self.status_code = status_code
         self.url = url
         self.response = response
+        self.held_until: Optional[float] = None
 
 
 class NotFoundError(ServiceError):
@@ -235,7 +246,8 @@ def retry_after_seconds(response: requests.Response) -> Optional[float]:
 
 class RateLimiter:
     """
-    The clock a host's requests are paced against.
+    The clock a host's requests are paced against, and the time before which
+    the host has asked not to be asked at all.
 
     A client's ``min_interval`` is its own promise about how fast it will ask.
     The clock it measures that promise against belongs to the *host*, because
@@ -251,9 +263,26 @@ class RateLimiter:
     request *anyone* made to that host. The lock is held across the sleep, so
     threads queue rather than all waking at once.
 
+    A ``Retry-After`` is information about the host in the same way, so it is
+    kept here too, as :attr:`not_before`: the circuit breaker. Before, each
+    call rediscovered a throttle by being refused it; a caller resolving a
+    thousand names against a PubChem that had blocked this IP paid a request
+    per name to learn the same thing a thousand times. Now the first refusal
+    is remembered, and every client aimed at that host either waits it out,
+    when that fits its own retry patience, or fails at once without asking ---
+    see :meth:`HTTPClient.request`.
+
+    Args:
+        host: The host this clock belongs to, for messages. None for a
+            client's private clock.
+
     Attributes:
+        host: As above.
         last_request_time: When any client last asked this host, as a Unix
             timestamp; 0.0 before the first request.
+        not_before: The Unix time before which the host has asked not to be
+            asked; 0.0 when it has asked for nothing. Only ever moves later,
+            until :meth:`release` clears it.
 
     Example:
         >>> limiter = RateLimiter()
@@ -262,15 +291,29 @@ class RateLimiter:
         >>> _ = limiter.wait(0.0)       # pacing off: returns at once
         >>> limiter.last_request_time > 0
         True
+        >>> limiter.hold(30)
+        >>> 29 < limiter.held_for() <= 30
+        True
+        >>> limiter.release()
+        >>> limiter.held_for()
+        0.0
     """
 
-    def __init__(self) -> None:
+    def __init__(self, host: Optional[str] = None) -> None:
+        self.host = host
         self._lock = threading.Lock()
+        # A separate lock, because ``_lock`` is held across the pacing sleep
+        # and recording a refusal should not queue behind somebody's wait.
+        self._hold_lock = threading.Lock()
         self.last_request_time = 0.0
+        self.not_before = 0.0
 
     def wait(self, min_interval: float) -> float:
         """
         Sleep until ``min_interval`` has passed since this host was last asked.
+
+        Pacing only: this does not wait out a :meth:`hold`, because whether a
+        hold is worth waiting for is the caller's decision, not the clock's.
 
         Args:
             min_interval: Seconds the caller promises to leave between
@@ -294,6 +337,61 @@ class RateLimiter:
                     time.sleep(min_interval - elapsed)
             self.last_request_time = time.time()
             return self.last_request_time
+
+    def hold(self, seconds: float) -> None:
+        """
+        Record that the host asked not to be asked again for ``seconds``.
+
+        The hold is the host's full request, not a client's capped wait: a
+        client unwilling to wait that long gives up rather than asking early.
+        A shorter hold never shortens a longer one already in place, because
+        the host's latest word does not retract what it said to another
+        request.
+
+        Args:
+            seconds: How long, from now. 0 or less records nothing.
+
+        Example:
+            >>> limiter = RateLimiter()
+            >>> limiter.hold(60); limiter.hold(5)
+            >>> limiter.held_for() > 50
+            True
+        """
+        if seconds <= 0:
+            return
+        with self._hold_lock:
+            self.not_before = max(self.not_before, time.time() + seconds)
+
+    def held_for(self) -> float:
+        """
+        Return how many seconds remain before the host may be asked again.
+
+        Returns:
+            Seconds until :attr:`not_before`; 0.0 when there is no hold or it
+            has passed.
+
+        Example:
+            >>> RateLimiter().held_for()
+            0.0
+        """
+        return max(0.0, self.not_before - time.time())
+
+    def release(self) -> None:
+        """
+        Forget any hold, so the next request is sent without waiting.
+
+        For a caller who knows better than the header --- a network change, a
+        new API key --- and for tests, which must not leave a hold on a shared
+        host behind them.
+
+        Example:
+            >>> limiter = RateLimiter()
+            >>> limiter.hold(600); limiter.release()
+            >>> limiter.held_for()
+            0.0
+        """
+        with self._hold_lock:
+            self.not_before = 0.0
 
 
 #: Every host a limiter has been asked for, so that clients aimed at the same
@@ -330,8 +428,27 @@ def host_limiter(url_or_host: str) -> RateLimiter:
     with _host_limiters_lock:
         limiter = _host_limiters.get(host)
         if limiter is None:
-            limiter = _host_limiters[host] = RateLimiter()
+            limiter = _host_limiters[host] = RateLimiter(host)
         return limiter
+
+
+def release_holds() -> None:
+    """
+    Forget every host's ``Retry-After`` hold in this process.
+
+    The process-wide form of :meth:`RateLimiter.release`: after it, every
+    client asks its host again on its next call. Pacing clocks are untouched.
+
+    Example:
+        >>> host_limiter("https://held.example.test").hold(600)
+        >>> release_holds()
+        >>> host_limiter("https://held.example.test").held_for()
+        0.0
+    """
+    with _host_limiters_lock:
+        limiters = list(_host_limiters.values())
+    for limiter in limiters:
+        limiter.release()
 
 
 class HTTPClient:
@@ -351,8 +468,9 @@ class HTTPClient:
             at most ``max_retries + 1`` times.
         backoff: Base for the exponential wait, ``backoff * 2 ** attempt``
             seconds. 0 retries immediately, which is what tests want.
-        max_backoff: Ceiling on any single wait, including one a
-            ``Retry-After`` header asks for.
+        max_backoff: Ceiling on any single wait. A ``Retry-After`` longer
+            than this is not cut short: the client gives up instead, because
+            asking a host before the time it named only earns another refusal.
         max_elapsed: Ceiling on the *total* time spent waiting between
             attempts. Retrying stops once the next wait would take the sum past
             it, whatever ``max_retries`` allows. None means ``max_retries`` is
@@ -390,8 +508,9 @@ class HTTPClient:
             host or as the base URL it already holds. Given, the client waits
             ``min_interval`` after the last request *any* client made to that
             host --- the only way to honour a limit expressed per IP, such as
-            PubChem's five per second. Omitted, the client paces alone, which
-            is right for a stub and for a service with no shared budget.
+            PubChem's five per second --- and respects a ``Retry-After`` any
+            of them was sent. Omitted, the client paces alone, which is right
+            for a stub and for a service with no shared budget.
         logger: Logger for the DEBUG line per request and the WARNING per
             retry. Defaults to this module's logger.
 
@@ -515,8 +634,9 @@ class HTTPClient:
         Decide how long to wait before the next attempt.
 
         A ``Retry-After`` the service sent wins over the exponential curve,
-        because it is the service's own estimate. Either way the wait is
-        capped at ``max_backoff``.
+        because it is the service's own estimate, and it is returned whole:
+        whether it is worth waiting for is :meth:`_patience`'s question. The
+        curve is capped at ``max_backoff``.
 
         Args:
             attempt: Zero-based index of the attempt that just failed.
@@ -529,12 +649,78 @@ class HTTPClient:
         if response is not None:
             asked = retry_after_seconds(response)
             if asked is not None:
-                return min(asked, self.max_backoff)
+                return asked
         return min(self.backoff * (2 ** attempt), self.max_backoff)
+
+    def _patience(self, waited: float) -> float:
+        """
+        Return the longest single wait this call is still willing to make.
+
+        Args:
+            waited: Seconds this call has already spent waiting.
+
+        Returns:
+            ``max_backoff``, or what is left of ``max_elapsed`` when that is
+            less.
+        """
+        if self.max_elapsed is None:
+            return self.max_backoff
+        return min(self.max_backoff, self.max_elapsed - waited)
+
+    def _await_hold(self, url: str) -> float:
+        """
+        Respect a ``Retry-After`` the host sent to any client, before asking.
+
+        This is the circuit breaker. A hold that fits this client's patience
+        is waited out, as the retry loop would have waited it; one that does
+        not fails the call at once, without a request, because the host has
+        already said what the request would be told.
+
+        Args:
+            url: The URL about to be requested, for the message.
+
+        Returns:
+            Seconds slept, which count against ``max_elapsed``.
+
+        Raises:
+            rate_limit_cls: The host is held for longer than this client will
+                wait. Its ``held_until`` is the end of the hold.
+        """
+        held = self.limiter.held_for()
+        if held <= 0:
+            return 0.0
+        host = self.limiter.host or urlsplit(url).netloc or url
+        patience = self._patience(0.0)
+        if held > patience:
+            not_before = self.limiter.not_before
+            until = time.strftime("%H:%M:%S", time.localtime(not_before))
+            refusal = self._fail(
+                self.rate_limit_cls,
+                f"{host} asked for no requests until {until} ({held:.0f}s from "
+                f"now), longer than this client waits ({patience:g}s); "
+                f"not asking for {url}",
+                url=url,
+            )
+            # Set by hand so that a plain ``Exception`` subclass passed as
+            # ``rate_limit_cls`` carries it too.
+            refusal.held_until = not_before
+            raise refusal
+        self.logger.warning(f"{host} asked for no requests for another "
+                            f"{held:.1f}s; waiting before {url}")
+        time.sleep(held)
+        return held
 
     def request(self, method: str, url: str, **kwargs: Any) -> requests.Response:
         """
         Make a request, retrying transient failures, and return the response.
+
+        A ``Retry-After`` on any refused attempt is recorded on the host's
+        :class:`RateLimiter`, so it binds every client sharing that host, not
+        only this call. A call that finds the host held waits the hold out when
+        it is no longer than ``max_backoff`` (and ``max_elapsed``), and
+        otherwise raises ``rate_limit_cls`` at once, without a request. That is
+        what makes a throttled host fail in microseconds for the thousandth
+        name rather than cost a refused request per name.
 
         Args:
             method: ``"GET"`` or ``"POST"``.
@@ -549,10 +735,13 @@ class HTTPClient:
             not_found_cls: The service reported the record as absent.
             error_cls: A permanent error.
             timeout_cls: Every attempt timed out or failed to connect.
-            rate_limit_cls: Every attempt was throttled.
+            rate_limit_cls: Every attempt was throttled, or the host is held
+                by an earlier ``Retry-After`` for longer than this client
+                waits.
             retry_exhausted_cls: A transient condition outlived the retry
-                budget, either in attempts or in ``max_elapsed`` seconds.
-                Defaults to ``error_cls``.
+                budget, either in attempts, in ``max_elapsed`` seconds, or
+                because the service asked for a wait longer than
+                ``max_backoff``. Defaults to ``error_cls``.
 
         Every one of those carries the status, the URL and the response on the
         exception when there was a response --- see :class:`ServiceError` --- so
@@ -568,8 +757,9 @@ class HTTPClient:
         last_status: Optional[int] = None
         timed_out = False
         throttled = False
-        waited = 0.0
+        waited = self._await_hold(url)
         out_of_time = False
+        told_to_wait = False
 
         for attempt in range(self.max_retries + 1):
             self.rate_limit()
@@ -615,6 +805,9 @@ class HTTPClient:
 
                 throttled = last_status == 429
                 last_error = f"HTTP {last_status}"
+                # Recorded on the host's clock before deciding anything else,
+                # so that every client learns it even if this one gives up.
+                self.limiter.hold(retry_after_seconds(response) or 0.0)
 
             if attempt == self.max_retries:
                 break
@@ -628,6 +821,15 @@ class HTTPClient:
                     f"{last_error} for {url}; giving up rather than waiting "
                     f"another {wait:.1f}s on top of {waited:.1f}s "
                     f"(max_elapsed={self.max_elapsed:g}s)"
+                )
+                break
+            if wait > self.max_backoff:
+                # Only a Retry-After can exceed the cap. Waiting the cap and
+                # asking anyway would ask before the time the host named.
+                told_to_wait = True
+                self.logger.warning(
+                    f"{last_error} for {url}; the service asked for {wait:.0f}s, "
+                    f"more than max_backoff={self.max_backoff:g}s; giving up"
                 )
                 break
 
@@ -646,6 +848,10 @@ class HTTPClient:
             message = (f"Request to {url} failed; stopped retrying after "
                        f"{waited:.0f}s of its {self.max_elapsed:g}s retry "
                        f"budget: {last_error}")
+        elif told_to_wait:
+            message = (f"Request to {url} failed: {last_error}, and the service "
+                       f"asked for no requests for longer than max_backoff="
+                       f"{self.max_backoff:g}s")
         else:
             attempts = self.max_retries + 1
             message = (f"Request to {url} failed after {attempts} attempt(s): "

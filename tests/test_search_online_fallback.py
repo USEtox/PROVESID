@@ -49,13 +49,19 @@ class _PubChemOnline:
 
     instances = []
 
-    def __init__(self, fail=False):
+    def __init__(self, fail=False, held=False):
         self.calls = []
         self.fail = fail
+        self.held = held
         _PubChemOnline.instances.append(self)
 
     def _cids(self, method, value, known):
         self.calls.append((method, value))
+        if self.held:
+            # What the circuit breaker raises for a host a Retry-After holds.
+            exc = ServiceError("pubchem.ncbi.nlm.nih.gov asked for no requests until ...")
+            exc.held_until = 1e12
+            raise exc
         if self.fail:
             raise ServiceError("PUGREST.ServerBusy")
         if value in known:
@@ -269,6 +275,21 @@ class TestFailures:
             for r in caplog.records
         )
 
+
+    def test_a_held_host_is_not_warned_about_per_query(self, online, monkeypatch, caplog):
+        """
+        The transport warned once, when PubChem's Retry-After was recorded; a
+        batch refused by the circuit breaker must not repeat that per query.
+        """
+        monkeypatch.setattr(
+            "provesid.search.PubChemAPI", lambda: _PubChemOnline(held=True)
+        )
+        with caplog.at_level(logging.DEBUG, logger="provesid.search"):
+            df = _search(online_fallback=True).search("50-78-2")
+        assert df.iloc[0]["source"] == "CACTUS"
+        failed = [r for r in caplog.records if "lookup failed" in r.getMessage()]
+        assert failed, "the refusal was not logged at all"
+        assert all(r.levelno == logging.DEBUG for r in failed)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # The lookups and adapters, on their own

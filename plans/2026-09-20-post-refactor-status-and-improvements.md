@@ -379,7 +379,7 @@ replace it.
   database. §8 below makes the split more attractive, since the FTP builder
   belongs beside `PubChemID`, not beside `PubChemAPI`.
 - **Step 11**: `zeropm.py` logging, `reach.py` xlsx, `config.py` printing.
-- **A circuit breaker** (§23.8). A `Retry-After` is information about the *host*,
+- ~~**A circuit breaker** (§23.8).~~ **Done, §27.** A `Retry-After` is information about the *host*,
   so it belongs on the host's clock as a "not before T" that every client
   respects, making a known-throttled host fail at once. The shared `RateLimiter`
   is already the right place.
@@ -454,7 +454,7 @@ Steps are independently committable and leave the suite green.
 | 13 | ~~`sources.py`; collapse the `Search` ladders~~ **done, §22** | 4.5 | M |
 | 14 | ~~`Search(online_fallback=...)` as a row in the source table~~ **done, §23** | 4.4 | M |
 | 15 | ~~`Search.PRESETS`~~ **done, §24** | 4.6 | S |
-| 16 | circuit breaker on the shared `RateLimiter` | 4.12 | M |
+| 16 | ~~circuit breaker on the shared `RateLimiter`~~ **done, §27** | 4.12 | M |
 | 17 | docstrings with examples, module by module | 4.12 | L |
 | 18 | rebuild `docs/`; delete `docs/examples/`; drop `docs/plans/` from the nav | 4.9 | M |
 | 19 | notebooks, `search/` first | 4.11 | L |
@@ -3540,3 +3540,101 @@ another source for chemicals CompTox holds no InChIKey for.
   §23's rule that blocks the fallback. Whether a candidate with no
   identifiers at all should count as "found" deserves a look.
 - §24.5's other items, §23.5, §4.13 and §22.6 are unchanged.
+
+---
+
+## 27. Landed on 2026-09-22 — step 16, the circuit breaker (§4.12)
+
+§23.8 of the August plan and §23.6 here asked for the same thing. A
+`Retry-After` is information about the *host*, so it belongs on the host's
+shared `RateLimiter` as a "not before T" that every client respects. A host
+known to be throttled should then fail at once, with one message.
+
+### 27.1 What landed
+
+- `RateLimiter` gained `not_before`, `hold(seconds)`, `held_for()` and
+  `release()`, and a `host` for messages. `host_limiter` names its limiters.
+  `provesid.release_holds()` clears every host's hold in the process.
+- `HTTPClient.request` records every `Retry-After` it is sent on the
+  limiter, before it decides whether to retry. A hold only moves later.
+  A shorter `Retry-After` never shortens a longer one already in place.
+- **On entry**, a call checks the hold. If the hold is no longer than the
+  client would wait anyway, which is `max_backoff` capped by `max_elapsed`,
+  the call waits it out, and the wait counts against `max_elapsed`. A longer
+  hold raises the client's `rate_limit_cls` **without a request**, with a
+  message naming the host and the time. The exception carries
+  `held_until`.
+- **Within a call**, a `Retry-After` longer than `max_backoff` now ends the
+  retries. Before, it was cut down to `max_backoff`, and the client asked
+  again before the time the host had named.
+- `Search._collect` logs a lookup refused by the breaker at DEBUG. The
+  transport already warned once, when the hold was recorded.
+- `tests/conftest.py` releases all holds after every test. Holds live on
+  process-wide limiters, and a stub answering `Retry-After: 30` under
+  PubChem's real host would otherwise fail every later PubChem test.
+- `docs/api/http.md` gained "A throttle belongs to the host too".
+  `examples/http/circuit_breaker_demo.py` shows the breaker against a stubbed,
+  throttled PubChem, offline.
+
+### 27.2 Checked only on entry, not before each retry
+
+The retry loop already waits a `Retry-After` it can afford, so checking
+the hold again before each retry would only re-read a time the loop has
+just slept through. It would also make the retry depend on the wall clock.
+The suite replaces `time.sleep` and not `time.time`, so a stubbed sleep would
+leave the hold in place, and every retry test would refuse its own second
+attempt. What the breaker has to stop is the *next* call, and that call
+checks on entry.
+
+### 27.3 The one behaviour change a caller can see
+
+`test_retry_after_is_capped_by_max_backoff` asserted that a service asking
+for an hour got asked again after `max_backoff` (5 s), and that the second
+answer was used. Under the breaker, that is the request the host asked not
+to receive. The test is now
+`test_a_retry_after_longer_than_max_backoff_gives_up_instead_of_asking_early`:
+one request, no sleep, `rate_limit_cls`. For the clients as configured this
+matters little. `max_backoff` is 60 s for all of them, and both PubChem
+clients already declined `Retry-After: 30` through their 10 s `max_elapsed`.
+
+### 27.4 Effect
+
+Against a stubbed PubChem answering `503` with `Retry-After: 30`
+(`examples/http/circuit_breaker_demo.py`), 1 000 calls split over `PubChemAPI`
+and `PubChemView` after the first refusal send **no requests** and take
+18 ms in total. Before, each of them sent one request. At PubChem's 0.2 s
+pacing that is about 200 s of refused requests, each one telling PubChem
+that the block is still needed. That figure is arithmetic, not a
+measurement. The breaker has not been seen tripping against the live
+PubChem.
+
+### 27.5 Validation
+
+- `tests/test_http.py`: 70 passed (60 + 10). The new tests cover: a held host failing
+  with no request; the hold binding a second client on the same host; one
+  host's hold not touching another; a short hold waited out; the hold's wait
+  counting against `max_elapsed`; a longer hold never shortened; no hold
+  without `Retry-After`; `release_holds`; `held_until` set only by the
+  breaker; `held_until` on a plain exception class. The capped-`Retry-After`
+  test was rewritten, as §27.3 describes.
+- `tests/test_pubchem_failure_reporting.py`: a throttle seen by PUG-REST
+  stops a PUG-View call without a request.
+- `tests/test_search_online_fallback.py`: a held host is logged at DEBUG,
+  not WARNING.
+- Doctests in `http.py`: 20 passed, 5 skipped (the network examples).
+- `pytest tests/`: **1498 passed, 34 skipped, 0 failed** (7 min 23 s).
+- The demo was run: 1 000 refused calls, one request sent, 18 ms.
+
+### 27.6 Still open
+
+- **The hold is per process**, like the pacing clock. Two processes on one
+  machine each learn a throttle for themselves.
+- **Bulk downloads do not see it.** `datasets.download_file` has its own
+  retry and reads `Retry-After` itself. Its hosts (the FTP and Zenodo
+  mirrors) are not the API hosts, so there is nothing to share yet.
+- **Only `Retry-After` trips the breaker.** A service that fails every
+  request with a bare 503 still costs one retry curve per call. Counting
+  consecutive failures per host would catch that. It would also have to
+  decide when a host is healthy again, which `Retry-After` decides for us.
+  Nothing here needs it yet.
+- §26.5, §24.5's other items, §23.5, §4.13 and §22.6 are unchanged.

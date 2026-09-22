@@ -89,7 +89,9 @@ of which property name it misspelled.
 - A request is made at most `max_retries + 1` times.
 - The wait is `backoff * 2 ** attempt`, capped at `max_backoff` — unless the
   service sent a `Retry-After`, in seconds or as an HTTP date, in which case
-  that wins, also capped.
+  that wins. A `Retry-After` longer than `max_backoff` is not cut short: the
+  call gives up instead, because asking before the time the service named
+  only earns a second refusal.
 - Pacing applies to retries too: a service already shedding load is not asked
   again faster than a healthy one.
 - `max_elapsed`, when set, caps the *total* waiting: "do not make the caller
@@ -137,6 +139,48 @@ while the wait is measured against the shared clock. A client given no
 The effective rate for a host is set by its most impatient client: sharing the
 clock stops two clients doubling a limit, but it does not stop one client
 configured with `min_interval=0.01` from exceeding it by itself.
+
+## A throttle belongs to the host too
+
+A `Retry-After` says when the *host* will next answer, not when one request
+may be repeated, so it is kept on the same shared
+[`RateLimiter`][provesid.http.RateLimiter] as the pacing clock, as a "not
+before" time. This is the circuit breaker. Every client aimed at that host
+checks it before asking:
+
+- a hold no longer than the client would wait anyway (`max_backoff`, and what
+  is left of `max_elapsed`) is waited out, and the request is then sent;
+- a longer hold fails the call at once with the client's rate-limit
+  exception (`PubChemServerError`, `PubChemViewError`, …), **without sending
+  a request**.
+
+Before, each call rediscovered a throttle by being refused it. Resolving a
+thousand names against a PubChem that had blocked this IP cost a thousand
+refused requests, and each one tells PubChem the block is still needed. Now
+the first refusal is remembered, and the other 999 fail in microseconds:
+
+```python
+>>> api = PubChemAPI()
+>>> api.get_compound_synonyms(2244)        # PubChem: 503, Retry-After: 30
+PubChemServerError: ... stopped retrying after 0s of its 10s retry budget ...
+>>> PubChemView().get_property(2244, "Boiling Point")   # no request sent
+PubChemViewError: pubchem.ncbi.nlm.nih.gov asked for no requests until 14:02:31 ...
+```
+
+The refusal carries `held_until`, the end of the hold, and is otherwise the
+client's ordinary rate-limit exception. `Search` uses it to log a held host
+at DEBUG. The transport already warned once, when the hold was recorded, so a
+batch does not print a warning for every query that follows.
+
+A shorter `Retry-After` never shortens a longer hold already in place. Only a
+`Retry-After` sets a hold. A bare 503 is one request's bad luck, not a
+statement about the host. A caller who knows better than the header, after a
+network change for example, clears every hold with
+[`release_holds`][provesid.http.release_holds], or one host's with
+`host_limiter(url).release()`.
+
+The hold, like the clock, is per process: two Python processes on one machine
+each learn a throttle for themselves.
 
 ## Sessions
 

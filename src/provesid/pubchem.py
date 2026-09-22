@@ -105,7 +105,13 @@ class CompoundDomainNamespace:
     FAST_SEARCH = "fast search"
 
 class SubstanceDomainNamespace:
-    """The ``<namespace>`` values of the substance domain (SIDs, depositor IDs, names)."""
+    """
+    The ``<namespace>`` values of the substance domain (SIDs, depositor IDs, names).
+
+    Example:
+        >>> f"substance/{SubstanceDomainNamespace.NAME}/aspirin/sids"
+        'substance/name/aspirin/sids'
+    """
     SID = "sid"
     SOURCEID = "sourceid"
     SOURCEALL = "sourceall"
@@ -114,7 +120,13 @@ class SubstanceDomainNamespace:
     LISTKEY = "listkey"
 
 class AssayDomainNamespace:
-    """The ``<namespace>`` values of the assay domain (AIDs, types, targets, activities)."""
+    """
+    The ``<namespace>`` values of the assay domain (AIDs, types, targets, activities).
+
+    Example:
+        >>> f"assay/{AssayDomainNamespace.AID}/1000/{Operation.SUMMARY}"
+        'assay/aid/1000/summary'
+    """
     AID = "aid"
     LISTKEY = "listkey"
     TYPE = "type"
@@ -138,7 +150,13 @@ class StructureSearch:
     IDENTITY = "identity"
 
 class StructureSearchQueryType:
-    """How the query of a :class:`StructureSearch` is written: SMILES, InChI, SDF or a CID."""
+    """
+    How the query of a :class:`StructureSearch` is written: SMILES, InChI, SDF or a CID.
+
+    Example:
+        >>> f"{FastSearch.FASTSUBSTRUCTURE}/{StructureSearchQueryType.CID}"
+        'fastsubstructure/cid'
+    """
     SMILES = "smiles"
     INCHI = "inchi"
     SDF = "sdf"
@@ -149,7 +167,12 @@ class FastSearch:
     PubChem's synchronous "fast" searches, which answer in one request.
 
     The plain :class:`StructureSearch` kinds may answer with a ``ListKey`` to
-    poll instead; these do not.
+    poll instead; these do not. :meth:`PubChemAPI.substructure_search` and its
+    siblings use them.
+
+    Example:
+        >>> f"compound/{FastSearch.FASTFORMULA}/C9H8O4/cids/JSON"
+        'compound/fastformula/C9H8O4/cids/JSON'
     """
     FASTIDENTITY = "fastidentity"
     FASTSIMILARITY_2D = "fastsimilarity_2d"
@@ -194,6 +217,11 @@ class OutputFormat:
 
     :class:`PubChemAPI` asks for ``JSON`` by default and parses it; ``PNG``
     comes back as bytes, and the other text formats as a string.
+
+    Example:
+        >>> api = PubChemAPI()
+        >>> api.get_cids_by_smiles("CCO", output_format=OutputFormat.TXT)  # doctest: +SKIP
+        '702\\n'
     """
     XML = "XML"
     JSON = "JSON"
@@ -206,7 +234,22 @@ class OutputFormat:
     ASNB = "ASNB"
 
 class CompoundProperties:
-    """Available compound properties for property tables"""
+    """
+    The property names PUG-REST's ``property`` operation accepts.
+
+    Pass them to :meth:`PubChemAPI.get_compound_properties` or
+    :meth:`PubChemAPI.get_properties_for_cids`. The attribute names are
+    Python spellings of PubChem's names; the values are PubChem's own.
+    :meth:`PubChemAPI.get_all_compound_info` asks for all of them.
+
+    Example:
+        >>> CompoundProperties.MOLECULAR_WEIGHT
+        'MolecularWeight'
+        >>> api = PubChemAPI()
+        >>> api.get_properties_for_cids(
+        ...     [2244], [CompoundProperties.XLOGP, CompoundProperties.TPSA])  # doctest: +SKIP
+        [{'CID': 2244, 'XLogP': 1.2, 'TPSA': 63.6}]
+    """
     MOLECULAR_FORMULA = "MolecularFormula"
     MOLECULAR_WEIGHT = "MolecularWeight"
     SMILES = "SMILES"
@@ -256,19 +299,66 @@ class CompoundProperties:
     FINGERPRINT_2D = "Fingerprint2D"
 
 class PubChemError(ServiceError):
-    """Custom exception for PubChem API errors"""
+    """
+    Base class of every error the PubChem clients raise.
+
+    Also raised on its own for a permanent error in the request, such as a
+    property name PubChem does not know. Catch this to catch any PubChem
+    failure; the subclasses separate absence from trouble.
+
+    Example:
+        >>> api = PubChemAPI()
+        >>> try:                                              # doctest: +SKIP
+        ...     api.get_properties_for_cids([2244], ["NoSuchProperty"])
+        ... except PubChemError as exc:
+        ...     print(type(exc).__name__)
+        PubChemError
+    """
     pass
 
 class PubChemTimeoutError(PubChemError, ServiceTimeoutError):
-    """Exception raised when request times out"""
+    """
+    Every attempt at a PubChem request timed out or could not connect.
+
+    Also a :class:`~provesid.http.ServiceTimeoutError`, so code that handles
+    timeouts for every service catches it.
+
+    Example:
+        >>> issubclass(PubChemTimeoutError, ServiceTimeoutError)
+        True
+    """
     pass
 
 class PubChemNotFoundError(PubChemError, NotFoundError):
-    """Exception raised when resource is not found"""
+    """
+    PubChem has no such compound, substance or assay.
+
+    A permanent answer, never retried. Also a
+    :class:`~provesid.http.NotFoundError`.
+
+    Example:
+        >>> api = PubChemAPI()
+        >>> api.get_cids_by_name("xyzzy-no-such")             # doctest: +SKIP
+        Traceback (most recent call last):
+        ...
+        provesid.pubchem.PubChemNotFoundError: No data for https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/xyzzy-no-such/cids/JSON?name_type=word (HTTP 404)
+    """
     pass
 
 class PubChemServerError(PubChemError):
-    """Exception raised when server error occurs"""
+    """
+    PubChem stayed busy or kept throttling for every attempt.
+
+    Raised after the retries are spent, and at once, with no request, while
+    PubChem's host is held by a ``Retry-After`` longer than the client will
+    wait; see :class:`provesid.http.RateLimiter`. ``held_until`` is set in
+    that case.
+
+    Example:
+        >>> err = PubChemServerError("PubChem is throttling this address")
+        >>> isinstance(err, PubChemError), err.held_until
+        (True, None)
+    """
     pass
 
 
@@ -311,6 +401,16 @@ def fault_code(response: requests.Response) -> Optional[str]:
 
     Returns:
         The fault code, or None when the body is not a PubChem fault.
+
+    Example:
+        >>> import requests
+        >>> response = requests.Response()
+        >>> response._content = b'{"Fault": {"Code": "PUGREST.NotFound"}}'
+        >>> fault_code(response)
+        'PUGREST.NotFound'
+        >>> response._content = b'<html>Bad Gateway</html>'
+        >>> fault_code(response) is None
+        True
     """
     try:
         return response.json().get("Fault", {}).get("Code")
@@ -440,39 +540,54 @@ def _synonyms_incomplete(result: Any) -> bool:
 class PubChemAPI:
     """
     A Python interface to the PubChem REST API (PUG-REST)
-    
+
     This class provides methods to interact with PubChem's REST API for retrieving
     chemical compound, substance, and assay information.
-    
-    Usage examples:
-        api = PubChemAPI()
-        
-        # Get compound by CID
-        compound = api.get_compound_by_cid(2244)
-        
-        # Get compound properties
-        props = api.get_compound_properties([2244, 5793], ['MolecularFormula', 'MolecularWeight'])
-        
-        # Search by name
-        compounds = api.get_compounds_by_name('aspirin')
-        
-        # Structure search
-        similar = api.similarity_search('CCO', threshold=90)
+
+    Every method sends at least one request, paced to PubChem's limit of five
+    per second per address, and most are cached (see :mod:`provesid.cache`).
+    For the ~1.4 M compounds with a CAS number, the offline
+    :class:`~provesid.pubchem_id.PubChemID` answers identifier lookups with
+    no network at all.
+
+    The methods fall into three groups: the raw calls, which return
+    PUG-REST's own JSON with at most one wrapper removed
+    (``get_compound_by_cid``, ``get_cids_by_*``, the structure searches,
+    substances and assays); the flat property calls
+    (:meth:`get_compound_properties`, :meth:`get_properties_for_cids`); and
+    convenience layers over both (:meth:`search_compound`,
+    :meth:`get_basic_compound_info`, :meth:`get_compound_identifiers`,
+    :meth:`find_cids_comprehensive`).
+
+    Example:
+        >>> api = PubChemAPI()
+        >>> api.get_cids_by_smiles("CCO")                                   # doctest: +SKIP
+        [702]
+        >>> api.get_properties_for_cids([2244, 702], ["MolecularFormula"])  # doctest: +SKIP
+        [{'CID': 2244, 'MolecularFormula': 'C9H8O4'}, {'CID': 702, 'MolecularFormula': 'C2H6O'}]
+        >>> api.similarity_search("CC(=O)OC1=CC=CC=C1C(=O)O", threshold=95,
+        ...                       MaxRecords=3)                             # doctest: +SKIP
+        {'IdentifierList': {'CID': [2244, 5161, 68484]}}
     """
-    
+
     def __init__(self, base_url: str = pugrest_prolog, pause_time: float = pause_between_calls, use_cache: bool = True):
         """
         Initialize PubChem API client
-        
+
         Args:
             base_url: Base URL for PubChem REST API
             pause_time: Minimum time between API calls in seconds
-            use_cache: Whether to use cache for lookups (default: True). 
+            use_cache: Whether to use cache for lookups (default: True).
                       When False, skips cache lookup but still stores results.
-            
+
         Note:
             Caching is now unlimited by default with persistent storage.
             Use provesid.cache functions for cache management.
+
+        Example:
+            >>> api = PubChemAPI(pause_time=0.5, use_cache=False)
+            >>> api.base_url, api.pause_time
+            ('https://pubchem.ncbi.nlm.nih.gov/rest/pug', 0.5)
         """
         self.base_url = base_url.rstrip('/')
         self.use_cache = use_cache
@@ -552,15 +667,40 @@ class PubChemAPI:
         return ("provesid.pubchem.PubChemAPI", self.base_url)
 
     def clear_cache(self):
-        """Clear all cached results for PubChem API"""
+        """
+        Delete every cached PubChem PUG-REST answer, in memory and on disk.
+
+        The same as ``provesid.clear_cache(service='pubchem')``. Other services'
+        entries are kept.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> api.clear_cache()
+            >>> api.get_cache_info()['file_count']
+            0
+        """
         from .cache import clear_cache
         clear_cache(service='pubchem')
-            
+
     def get_cache_info(self):
-        """Get cache statistics for PubChem API cached methods"""
+        """
+        Size and location of the PubChem PUG-REST cache.
+
+        Returns:
+            dict: As :func:`provesid.cache.get_cache_info` reports it for
+            ``service='pubchem'``: ``cache_directory``, ``memory_entries``,
+            ``disk_entries``, ``file_count``, ``total_size_bytes``,
+            ``total_size_mb``, ``total_size_gb``, ``warning_threshold_gb`` and
+            ``warnings_enabled``.
+
+        Example:
+            >>> info = PubChemAPI().get_cache_info()
+            >>> info['cache_directory'].endswith('pubchem')
+            True
+        """
         from .cache import get_cache_info
         return get_cache_info(service='pubchem')
-        
+
     def _rate_limit(self):
         """
         Sleep, if needed, so requests to PubChem stay :attr:`pause_time` apart.
@@ -619,12 +759,12 @@ class PubChemAPI:
             )
         return response
 
-    def _build_url(self, domain: str, namespace: str, identifiers: Union[str, int, List[Union[str, int]]], 
+    def _build_url(self, domain: str, namespace: str, identifiers: Union[str, int, List[Union[str, int]]],
                    operation: Optional[str] = None, output_format: str = OutputFormat.JSON,
                    **options) -> str:
         """
         Build PubChem REST API URL
-        
+
         Args:
             domain: API domain (compound, substance, assay, etc.)
             namespace: Namespace within domain (cid, name, smiles, etc.)
@@ -632,7 +772,7 @@ class PubChemAPI:
             operation: Operation to perform
             output_format: Desired output format
             **options: Additional URL parameters
-            
+
         Returns:
             Complete URL string
         """
@@ -641,21 +781,21 @@ class PubChemAPI:
             identifiers_str = ','.join(map(str, identifiers))
         else:
             identifiers_str = str(identifiers)
-        
+
         # URL-encode identifiers for special characters
         identifiers_str = quote(identifiers_str, safe=',')
-        
+
         # Build base URL path
         url_parts = [self.base_url, domain, namespace, identifiers_str]
-        
+
         if operation:
             url_parts.append(operation)
-        
+
         if output_format:
             url_parts.append(output_format)
-        
+
         url = '/'.join(url_parts)
-        
+
         # Add query parameters
         if options:
             params = []
@@ -665,17 +805,17 @@ class PubChemAPI:
                 params.append(f"{key}={quote(str(value))}")
             if params:
                 url += '?' + '&'.join(params)
-        
+
         return url
-    
+
     def _parse_response(self, response: requests.Response, output_format: str = OutputFormat.JSON) -> Any:
         """
         Parse API response based on format
-        
+
         Args:
             response: HTTP response object
             output_format: Expected output format
-            
+
         Returns:
             Parsed response data
         """
@@ -684,39 +824,55 @@ class PubChemAPI:
                 return response.json()
             except json.JSONDecodeError:
                 return response.text
-        elif output_format in [OutputFormat.XML, OutputFormat.SDF, OutputFormat.CSV, 
+        elif output_format in [OutputFormat.XML, OutputFormat.SDF, OutputFormat.CSV,
                               OutputFormat.TXT, OutputFormat.ASNT, OutputFormat.ASNB]:
             return response.text
         elif output_format == OutputFormat.PNG:
             return response.content
         else:
             return response.text
-    
+
     # Public cached methods
     @cached(service='pubchem')
     def get_compound_by_cid(self, cid: Union[int, str], output_format: str = OutputFormat.JSON) -> Any:
         """
         Get compound record by CID
-        
+
+        The full record: atoms, bonds, coordinates and PubChem's computed
+        properties as a list of ``props``. :meth:`get_compound_properties` is
+        the flat alternative when only some properties are wanted.
+
         Args:
             cid: Compound ID
             output_format: Desired output format
-            
+
         Returns:
             Compound data (automatically extracts from PC_Compounds wrapper for JSON format)
+
+        Raises:
+            PubChemNotFoundError: If PubChem has no compound with this CID.
+            PubChemError: If the request could not be completed.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> record = api.get_compound_by_cid(2244)            # doctest: +SKIP
+            >>> sorted(record)                                    # doctest: +SKIP
+            ['atoms', 'bonds', 'charge', 'coords', 'count', 'id', 'props']
+            >>> record['id']                                      # doctest: +SKIP
+            {'id': {'cid': 2244}}
         """
-        url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.CID, cid, 
+        url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.CID, cid,
                              Operation.RECORD, output_format)
         response = self._make_request(url)
         result = self._parse_response(response, output_format)
-        
+
         # For JSON format, automatically extract the compound data from the wrapper
         if output_format == OutputFormat.JSON and isinstance(result, dict):
             if "PC_Compounds" in result and isinstance(result["PC_Compounds"], list) and len(result["PC_Compounds"]) > 0:
                 return result["PC_Compounds"][0]
-        
+
         return result
-    
+
     def _get_compounds_by_name_impl(self, name: str, output_format: str = OutputFormat.JSON,
                                    name_type: str = "word") -> Any:
         """Implementation method for get_compounds_by_name with caching"""
@@ -724,7 +880,7 @@ class PubChemAPI:
                              Operation.RECORD, output_format, name_type=name_type)
         response = self._make_request(url)
         result = self._parse_response(response, output_format)
-        
+
         # For JSON format, automatically extract the compound data from the wrapper
         if output_format == OutputFormat.JSON and isinstance(result, dict):
             if "PC_Compounds" in result and isinstance(result["PC_Compounds"], list) and len(result["PC_Compounds"]) > 0:
@@ -733,7 +889,7 @@ class PubChemAPI:
                     return result["PC_Compounds"][0]
                 else:
                     return result["PC_Compounds"]
-        
+
         return result
 
     @cached(service='pubchem')
@@ -741,20 +897,36 @@ class PubChemAPI:
                              name_type: str = "word") -> Any:
         """
         Get compounds by name
-        
+
+        ``name_type="word"`` (the default) matches every compound one of whose
+        names contains the word, so a common name returns many records;
+        ``"complete"`` matches whole names only.
+
         Args:
             name: Compound name
             output_format: Desired output format
             name_type: Name search type ("word" or "complete")
-            
+
         Returns:
-            Compound data (automatically extracts from PC_Compounds wrapper for JSON format)
+            Compound data (automatically extracts from PC_Compounds wrapper for JSON format).
+            One record is returned as a dict, several as a list of dicts.
+
+        Raises:
+            PubChemNotFoundError: If no compound has this name.
+            PubChemError: If the request could not be completed.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> len(api.get_compounds_by_name("aspirin"))                 # doctest: +SKIP
+            142
+            >>> api.get_compounds_by_name("aspirin", name_type="complete")["id"]  # doctest: +SKIP
+            {'id': {'cid': 2244}}
         """
         url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.NAME, name,
                              Operation.RECORD, output_format, name_type=name_type)
         response = self._make_request(url)
         result = self._parse_response(response, output_format)
-        
+
         # For JSON format, automatically extract the compound data from the wrapper
         if output_format == OutputFormat.JSON and isinstance(result, dict):
             if "PC_Compounds" in result and isinstance(result["PC_Compounds"], list) and len(result["PC_Compounds"]) > 0:
@@ -763,16 +935,16 @@ class PubChemAPI:
                     return result["PC_Compounds"][0]
                 else:
                     return result["PC_Compounds"]
-        
+
         return result
-    
+
     def _get_compounds_by_smiles_impl(self, smiles: str, output_format: str = OutputFormat.JSON) -> Any:
         """Implementation method for get_compounds_by_smiles with caching"""
         url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.SMILES, smiles,
                              Operation.RECORD, output_format)
         response = self._make_request(url)
         result = self._parse_response(response, output_format)
-        
+
         # For JSON format, automatically extract the compound data from the wrapper
         if output_format == OutputFormat.JSON and isinstance(result, dict):
             if "PC_Compounds" in result and isinstance(result["PC_Compounds"], list) and len(result["PC_Compounds"]) > 0:
@@ -781,26 +953,40 @@ class PubChemAPI:
                     return result["PC_Compounds"][0]
                 else:
                     return result["PC_Compounds"]
-        
+
         return result
 
     @cached(service='pubchem')
     def get_compounds_by_smiles(self, smiles: str, output_format: str = OutputFormat.JSON) -> Any:
         """
         Get compounds by SMILES
-        
+
+        PubChem standardises the structure before matching, so any valid
+        SMILES for a compound finds it.
+
         Args:
             smiles: SMILES string
             output_format: Desired output format
-            
+
         Returns:
-            Compound data (automatically extracts from PC_Compounds wrapper for JSON format)
+            Compound data (automatically extracts from PC_Compounds wrapper for JSON format).
+            A valid structure PubChem does not hold still comes back as a
+            record, computed on the fly, whose ``id`` is empty.
+
+        Raises:
+            PubChemError: If the request could not be completed, or PubChem
+                could not standardise the SMILES (HTTP 400).
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> api.get_compounds_by_smiles("OCC")["id"]          # doctest: +SKIP
+            {'id': {'cid': 702}}
         """
         url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.SMILES, smiles,
                              Operation.RECORD, output_format)
         response = self._make_request(url)
         result = self._parse_response(response, output_format)
-        
+
         # For JSON format, automatically extract the compound data from the wrapper
         if output_format == OutputFormat.JSON and isinstance(result, dict):
             if "PC_Compounds" in result and isinstance(result["PC_Compounds"], list) and len(result["PC_Compounds"]) > 0:
@@ -809,16 +995,16 @@ class PubChemAPI:
                     return result["PC_Compounds"][0]
                 else:
                     return result["PC_Compounds"]
-        
+
         return result
-    
+
     def _get_compounds_by_inchikey_impl(self, inchikey: str, output_format: str = OutputFormat.JSON) -> Any:
         """Implementation method for get_compounds_by_inchikey with caching"""
         url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.INCHIKEY, inchikey,
                              Operation.RECORD, output_format)
         response = self._make_request(url)
         result = self._parse_response(response, output_format)
-        
+
         # For JSON format, automatically extract the compound data from the wrapper
         if output_format == OutputFormat.JSON and isinstance(result, dict):
             if "PC_Compounds" in result and isinstance(result["PC_Compounds"], list) and len(result["PC_Compounds"]) > 0:
@@ -827,26 +1013,35 @@ class PubChemAPI:
                     return result["PC_Compounds"][0]
                 else:
                     return result["PC_Compounds"]
-        
+
         return result
 
     @cached(service='pubchem')
     def get_compounds_by_inchikey(self, inchikey: str, output_format: str = OutputFormat.JSON) -> Any:
         """
         Get compounds by InChIKey
-        
+
         Args:
             inchikey: InChI Key
             output_format: Desired output format
-            
+
         Returns:
             Compound data (automatically extracts from PC_Compounds wrapper for JSON format)
+
+        Raises:
+            PubChemNotFoundError: If no compound has this InChIKey.
+            PubChemError: If the request could not be completed.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> api.get_compounds_by_inchikey("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")["id"]  # doctest: +SKIP
+            {'id': {'cid': 2244}}
         """
         url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.INCHIKEY, inchikey,
                              Operation.RECORD, output_format)
         response = self._make_request(url)
         result = self._parse_response(response, output_format)
-        
+
         # For JSON format, automatically extract the compound data from the wrapper
         if output_format == OutputFormat.JSON and isinstance(result, dict):
             if "PC_Compounds" in result and isinstance(result["PC_Compounds"], list) and len(result["PC_Compounds"]) > 0:
@@ -855,12 +1050,12 @@ class PubChemAPI:
                     return result["PC_Compounds"][0]
                 else:
                     return result["PC_Compounds"]
-        
+
         return result
-    
+
     @cached(service='pubchem')
-    def _cached_get_compound_properties(self, cid: Union[int, str], 
-                                       properties_tuple: tuple, 
+    def _cached_get_compound_properties(self, cid: Union[int, str],
+                                       properties_tuple: tuple,
                                        include_synonyms: bool = True,
                                        output_format: str = OutputFormat.JSON) -> Dict[str, Any]:
         """Cached implementation of get_compound_properties"""
@@ -872,7 +1067,7 @@ class PubChemAPI:
                                  operation, output_format)
             response = self._make_request(url)
             prop_data = self._parse_response(response, output_format)
-            
+
             # Get synonyms if requested
             synonyms_data = None
             synonyms_error = None
@@ -885,11 +1080,11 @@ class PubChemAPI:
                     logging.warning(f"Synonym lookup failed for CID {cid}: {e}")
                     synonyms_data = []
                     synonyms_error = str(e)
-            
+
             # Extract properties from nested structure
             if prop_data and 'PropertyTable' in prop_data and 'Properties' in prop_data['PropertyTable']:
                 properties_dict = prop_data['PropertyTable']['Properties'][0]
-                
+
                 # Add metadata keys
                 properties_dict['success'] = True
                 properties_dict['cid'] = cid
@@ -898,7 +1093,7 @@ class PubChemAPI:
                     properties_dict['synonyms'] = synonyms_data
                     if synonyms_error is not None:
                         properties_dict['synonyms_error'] = synonyms_error
-                
+
                 return properties_dict
             else:
                 # Fallback for unexpected structure
@@ -913,7 +1108,7 @@ class PubChemAPI:
                     if synonyms_error is not None:
                         result['synonyms_error'] = synonyms_error
                 return result
-                
+
         except Exception as e:
             result = {
                 "success": False,
@@ -925,22 +1120,34 @@ class PubChemAPI:
             return result
 
     @cached(service='pubchem', skip_if=_synonyms_incomplete)
-    def get_compound_properties(self, cid: Union[int, str], 
-                               properties: List[str], 
+    def get_compound_properties(self, cid: Union[int, str],
+                               properties: List[str],
                                include_synonyms: bool = True,
                                output_format: str = OutputFormat.JSON) -> Dict[str, Any]:
         """
         Get compound properties and synonyms by CID with direct property access
-        
+
         Args:
             cid: Single Compound ID
             properties: List of property names
             include_synonyms: Whether to include synonyms in the output
             output_format: Desired output format
-            
+
         Returns:
             Dictionary with properties directly accessible at top level,
-            plus 'success', 'cid', 'synonyms', and 'error' metadata keys
+            plus 'success', 'cid', 'synonyms', and 'error' metadata keys.
+            A failed request is reported in the dict, with ``success=False``
+            and the message in ``error``, rather than raised. A synonym
+            lookup that failed while the properties succeeded is recorded in
+            ``synonyms_error``, and such a result is not cached.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> api.get_compound_properties(2244, ["MolecularFormula", "MolecularWeight"],
+            ...                             include_synonyms=False)  # doctest: +SKIP
+            {'CID': 2244, 'MolecularFormula': 'C9H8O4', 'MolecularWeight': '180.16', 'success': True, 'cid': 2244, 'error': None}
+            >>> api.get_compound_properties(2244, ["MolecularFormula"])["synonyms"][:3]  # doctest: +SKIP
+            ['aspirin', 'ACETYLSALICYLIC ACID', '50-78-2']
         """
         # Convert list to tuple for caching
         properties_tuple = tuple(properties)
@@ -1169,11 +1376,11 @@ class PubChemAPI:
     def get_compound_synonyms(self, cid: Union[int, str], output_format: str = OutputFormat.JSON) -> List[str]:
         """
         Get compound synonyms by CID
-        
+
         Args:
             cid: Compound ID
             output_format: Desired output format
-            
+
         Returns:
             List of synonyms (flattened from nested structure). An empty list
             means PubChem lists no synonyms for this CID.
@@ -1182,6 +1389,11 @@ class PubChemAPI:
             PubChemError: If the request could not be completed. A failed fetch
                 is never reported as an empty list, so that a transient error
                 does not get cached as "this compound has no synonyms".
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> api.get_compound_synonyms(2244)[:4]               # doctest: +SKIP
+            ['aspirin', 'ACETYLSALICYLIC ACID', '50-78-2', '2-Acetoxybenzoic acid']
         """
         try:
             url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.CID, cid,
@@ -1191,34 +1403,48 @@ class PubChemAPI:
         except PubChemNotFoundError:
             logging.debug(f"No synonym record for CID {cid}")
             return []
-        
+
         # Extract synonyms from nested structure
         if raw_data and 'InformationList' in raw_data:
             info_list = raw_data['InformationList'].get('Information', [])
             if info_list and len(info_list) > 0:
                 return info_list[0].get('Synonym', [])
-        
+
         # Return empty list if no synonyms found
         return []
-    
+
     @cached(service='pubchem')
     def get_cids_by_name(self, name: str, output_format: str = OutputFormat.JSON,
                         name_type: str = "word", domain: str = Domain.COMPOUND) -> Any:
         """
         Get CIDs by name from compound or substance domain
-        
+
         Args:
             name: Compound or substance name
             output_format: Desired output format
             name_type: Name search type ("word" or "complete")
             domain: Search domain (Domain.COMPOUND or Domain.SUBSTANCE)
-            
+
         Returns:
-            CID list (extracted from nested response structure)
-            
+            CID list (extracted from nested response structure). The compound
+            domain lists them in PubChem's order, best match first; the
+            substance domain's are de-duplicated and in no particular order.
+
+        Raises:
+            ValueError: If ``domain`` is neither compound nor substance.
+            PubChemNotFoundError: If nothing has this name.
+            PubChemError: If the request could not be completed.
+
         Note:
             When searching in the substance domain, this can find CIDs for substances
             that may not be directly searchable in the compound domain.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> api.get_cids_by_name("aspirin")[:3]               # doctest: +SKIP
+            [2244, 1983, 9871508]
+            >>> api.get_cids_by_name("50-78-2", domain=Domain.SUBSTANCE)  # doctest: +SKIP
+            [12280114, 2244, 67252, 3434975]
         """
         # Choose appropriate namespace based on domain
         if domain == Domain.COMPOUND:
@@ -1227,12 +1453,12 @@ class PubChemAPI:
             namespace = SubstanceDomainNamespace.NAME
         else:
             raise ValueError(f"Unsupported domain: {domain}. Use Domain.COMPOUND or Domain.SUBSTANCE")
-        
+
         url = self._build_url(domain, namespace, name,
                              Operation.CIDS, output_format, name_type=name_type)
         response = self._make_request(url)
         parsed_response = self._parse_response(response, output_format)
-        
+
         # Extract CID list from nested structure if JSON format
         if output_format == OutputFormat.JSON and isinstance(parsed_response, dict):
             # Handle compound domain response structure
@@ -1248,27 +1474,37 @@ class PubChemAPI:
             elif 'Fault' in parsed_response:
                 # Handle API fault response
                 raise PubChemNotFoundError(f"No CIDs found for name: {name}")
-        
+
         # Return original response for non-JSON formats or if structure is different
         return parsed_response
-    
+
     @cached(service='pubchem')
     def get_cids_by_smiles(self, smiles: str, output_format: str = OutputFormat.JSON) -> Any:
         """
         Get CIDs by SMILES
-        
+
         Args:
             smiles: SMILES string
             output_format: Desired output format
-            
+
         Returns:
-            CID list (extracted from nested response structure)
+            CID list (extracted from nested response structure). A structure
+            PubChem does not hold comes back as ``[0]``, not as an error.
+
+        Raises:
+            PubChemError: If the request could not be completed, or PubChem
+                could not standardise the SMILES (HTTP 400).
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> api.get_cids_by_smiles("CCO")                     # doctest: +SKIP
+            [702]
         """
         url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.SMILES, smiles,
                              Operation.CIDS, output_format)
         response = self._make_request(url)
         parsed_response = self._parse_response(response, output_format)
-        
+
         # Extract CID list from nested structure if JSON format
         if output_format == OutputFormat.JSON and isinstance(parsed_response, dict):
             if 'IdentifierList' in parsed_response and 'CID' in parsed_response['IdentifierList']:
@@ -1276,27 +1512,36 @@ class PubChemAPI:
             elif 'Fault' in parsed_response:
                 # Handle API fault response
                 raise PubChemNotFoundError(f"No CIDs found for SMILES: {smiles}")
-        
+
         # Return original response for non-JSON formats or if structure is different
         return parsed_response
-    
+
     @cached(service='pubchem')
     def get_cids_by_inchikey(self, inchikey: str, output_format: str = OutputFormat.JSON) -> Any:
         """
         Get CIDs by InChI Key
-        
+
         Args:
             inchikey: InChI Key string
             output_format: Desired output format
-            
+
         Returns:
             CID list (extracted from nested response structure)
+
+        Raises:
+            PubChemNotFoundError: If no compound has this InChIKey.
+            PubChemError: If the request could not be completed.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> api.get_cids_by_inchikey("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")  # doctest: +SKIP
+            [2244]
         """
         url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.INCHIKEY, inchikey,
                              Operation.CIDS, output_format)
         response = self._make_request(url)
         parsed_response = self._parse_response(response, output_format)
-        
+
         # Extract CID list from nested structure if JSON format
         if output_format == OutputFormat.JSON and isinstance(parsed_response, dict):
             if 'IdentifierList' in parsed_response and 'CID' in parsed_response['IdentifierList']:
@@ -1304,10 +1549,10 @@ class PubChemAPI:
             elif 'Fault' in parsed_response:
                 # Handle API fault response
                 raise PubChemNotFoundError(f"No CIDs found for InChI Key: {inchikey}")
-        
+
         # Return original response for non-JSON formats or if structure is different
         return parsed_response
-    
+
     @cached(service='pubchem')
     def get_cids_by_inchi(self, inchi: str) -> List[int]:
         """
@@ -1355,21 +1600,30 @@ class PubChemAPI:
                            allow_other_elements: bool = False) -> Any:
         """
         Get CIDs by molecular formula using fast search
-        
+
         Args:
             formula: Molecular formula
             output_format: Desired output format
             allow_other_elements: Allow other elements beyond those specified
-            
+
         Returns:
-            CID list
+            PUG-REST's answer as parsed, not unwrapped: for JSON, a dict
+            ``{'IdentifierList': {'CID': [...]}}``.
+
+        Raises:
+            PubChemError: If the request could not be completed.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> api.get_cids_by_formula("C9H8O4")["IdentifierList"]["CID"][:3]  # doctest: +SKIP
+            [2244, 689043, 979]
         """
         url = self._build_url(Domain.COMPOUND, FastSearch.FASTFORMULA, formula,
-                             Operation.CIDS, output_format, 
+                             Operation.CIDS, output_format,
                              AllowOtherElements=allow_other_elements)
         response = self._make_request(url)
         return self._parse_response(response, output_format)
-    
+
     # Structure search methods
     def _make_options_hashable(self, **options: Any) -> tuple:
         """Convert options dict to a hashable tuple for caching"""
@@ -1378,7 +1632,7 @@ class PubChemAPI:
         # Sort items to ensure consistent hashing
         sorted_items = tuple(sorted(options.items()))
         return sorted_items
-    
+
     @cached(service='pubchem')
     def _cached_substructure_search(self, query: str, query_type: str, output_format: str, options_tuple: tuple) -> Any:
         """Cached implementation of substructure search"""
@@ -1388,24 +1642,35 @@ class PubChemAPI:
                              Operation.CIDS, output_format, **options)
         response = self._make_request(url)
         return self._parse_response(response, output_format)
-    
-    def substructure_search(self, query: str, query_type: str = "smiles", 
+
+    def substructure_search(self, query: str, query_type: str = "smiles",
                            output_format: str = OutputFormat.JSON, **options: Any) -> Any:
         """
         Perform substructure search
-        
+
         Args:
             query: Query structure (SMILES, CID, etc.)
             query_type: Type of query (smiles, cid, etc.)
             output_format: Desired output format
             **options: Search options (MatchIsotopes, MaxRecords, etc.)
-            
+
         Returns:
-            Search results
+            Search results: for JSON, ``{'IdentifierList': {'CID': [...]}}``
+            with the compounds containing the query structure.
+
+        Raises:
+            PubChemError: If the request could not be completed.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> api.substructure_search("C1=CC=CC=C1C(=O)O", MaxRecords=5)  # doctest: +SKIP
+            {'IdentifierList': {'CID': [135, 243, 2345, 7456, 338]}}
+            >>> api.substructure_search("2244", query_type="cid", MaxRecords=3)  # doctest: +SKIP
+            {'IdentifierList': {'CID': [2244, 24666, 9905405]}}
         """
         options_tuple = self._make_options_hashable(**options)
         return self._cached_substructure_search(query, query_type, output_format, options_tuple)
-    
+
     @cached(service='pubchem')
     def _cached_superstructure_search(self, query: str, query_type: str, output_format: str, options_tuple: tuple) -> Any:
         """Cached implementation of superstructure search"""
@@ -1415,55 +1680,76 @@ class PubChemAPI:
                              Operation.CIDS, output_format, **options)
         response = self._make_request(url)
         return self._parse_response(response, output_format)
-    
+
     def superstructure_search(self, query: str, query_type: str = "smiles",
                              output_format: str = OutputFormat.JSON, **options: Any) -> Any:
         """
         Perform superstructure search
-        
+
         Args:
             query: Query structure (SMILES, CID, etc.)
             query_type: Type of query (smiles, cid, etc.)
             output_format: Desired output format
             **options: Search options
-            
+
         Returns:
-            Search results
+            Search results: for JSON, ``{'IdentifierList': {'CID': [...]}}``
+            with the compounds the query structure contains.
+
+        Raises:
+            PubChemError: If the request could not be completed.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> api.superstructure_search("CC(=O)OC1=CC=CC=C1C(=O)O",
+            ...                           MaxRecords=5)            # doctest: +SKIP
+            {'IdentifierList': {'CID': [176, 243, 702, 887, 996]}}
         """
         options_tuple = self._make_options_hashable(**options)
         return self._cached_superstructure_search(query, query_type, output_format, options_tuple)
-    
+
     @cached(service='pubchem')
     def _cached_similarity_search(self, query: str, query_type: str, threshold: int, output_format: str, options_tuple: tuple) -> Any:
         """Cached implementation of similarity search"""
         options = dict(options_tuple) if options_tuple else {}
         search_type = f"{FastSearch.FASTSIMILARITY_2D}/{query_type}"
         url = self._build_url(Domain.COMPOUND, search_type, query,
-                             Operation.CIDS, output_format, 
+                             Operation.CIDS, output_format,
                              Threshold=threshold, **options)
         response = self._make_request(url)
         return self._parse_response(response, output_format)
-    
+
     @cached(service='pubchem')
     def similarity_search(self, query: str, query_type: str = "smiles",
                          threshold: int = 90, output_format: str = OutputFormat.JSON,
                          **options: Any) -> Any:
         """
         Perform 2D similarity search
-        
+
         Args:
             query: Query structure (SMILES, CID, etc.)
             query_type: Type of query (smiles, cid, etc.)
-            threshold: Similarity threshold (0-100)
+            threshold: Similarity threshold (0-100), as a Tanimoto score on
+                PubChem's 2D fingerprints
             output_format: Desired output format
             **options: Search options
-            
+
         Returns:
-            Search results
+            Search results: for JSON, ``{'IdentifierList': {'CID': [...]}}``,
+            most similar first.
+
+        Raises:
+            PubChemError: If the request could not be completed.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> api.similarity_search("CC(=O)OC1=CC=CC=C1C(=O)O", threshold=95,
+            ...                       MaxRecords=3)                # doctest: +SKIP
+            {'IdentifierList': {'CID': [2244, 5161, 68484]}}
         """
         options_tuple = self._make_options_hashable(**options)
         return self._cached_similarity_search(query, query_type, threshold, output_format, options_tuple)
-    
+
     @cached(service='pubchem')
     def _cached_identity_search(self, query: str, query_type: str, identity_type: str, output_format: str, options_tuple: tuple) -> Any:
         """Cached implementation of identity search"""
@@ -1474,69 +1760,103 @@ class PubChemAPI:
                              identity_type=identity_type, **options)
         response = self._make_request(url)
         return self._parse_response(response, output_format)
-    
+
     @cached(service='pubchem')
     def identity_search(self, query: str, query_type: str = "smiles",
                        identity_type: str = "same_stereo_isotope",
                        output_format: str = OutputFormat.JSON, **options: Any) -> Any:
         """
         Perform identity search
-        
+
         Args:
             query: Query structure (SMILES, CID, etc.)
             query_type: Type of query (smiles, cid, etc.)
-            identity_type: Type of identity match
+            identity_type: Type of identity match: PubChem's
+                ``same_connectivity``, ``same_tautomer``, ``same_stereo``,
+                ``same_isotope``, ``same_stereo_isotope`` (default), or others
+                it documents
             output_format: Desired output format
             **options: Search options
-            
+
         Returns:
-            Search results
+            Search results: for JSON, ``{'IdentifierList': {'CID': [...]}}``.
+
+        Raises:
+            PubChemError: If the request could not be completed.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> api.identity_search("CC(=O)OC1=CC=CC=C1C(=O)O")  # doctest: +SKIP
+            {'IdentifierList': {'CID': [2244]}}
         """
         options_tuple = self._make_options_hashable(**options)
         return self._cached_identity_search(query, query_type, identity_type, output_format, options_tuple)
-    
+
     # Substance methods
     @cached(service='pubchem')
     def get_substance_by_sid(self, sid: Union[int, str], output_format: str = OutputFormat.JSON) -> Any:
         """
         Get substance by SID
-        
+
+        A substance is one depositor's record of a chemical, before PubChem
+        standardises it into a compound.
+
         Args:
             sid: Substance ID
             output_format: Desired output format
-            
+
         Returns:
             Substance data (automatically extracts from PC_Substances wrapper for JSON format)
+
+        Raises:
+            PubChemNotFoundError: If there is no substance with this SID.
+            PubChemError: If the request could not be completed.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> substance = api.get_substance_by_sid(12345)       # doctest: +SKIP
+            >>> substance['source']                               # doctest: +SKIP
+            {'db': {'name': 'KEGG', 'source_id': {'str': 'C10159'}}}
         """
         url = self._build_url(Domain.SUBSTANCE, SubstanceDomainNamespace.SID, sid,
                              Operation.RECORD, output_format)
         response = self._make_request(url)
         result = self._parse_response(response, output_format)
-        
+
         # For JSON format, automatically extract the substance data from the wrapper
         if output_format == OutputFormat.JSON and isinstance(result, dict):
             if "PC_Substances" in result and isinstance(result["PC_Substances"], list) and len(result["PC_Substances"]) > 0:
                 return result["PC_Substances"][0]
-        
+
         return result
-    
+
     @cached(service='pubchem')
     def get_substances_by_name(self, name: str, output_format: str = OutputFormat.JSON) -> Any:
         """
         Get substances by name
-        
+
         Args:
             name: Substance name
             output_format: Desired output format
-            
+
         Returns:
-            Substance data (automatically extracts from PC_Substances wrapper for JSON format)
+            Substance data (automatically extracts from PC_Substances wrapper for JSON format).
+            One record is returned as a dict, several as a list of dicts.
+
+        Raises:
+            PubChemNotFoundError: If no substance has this name.
+            PubChemError: If the request could not be completed.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> len(api.get_substances_by_name("aspirin"))        # doctest: +SKIP
+            184
         """
         url = self._build_url(Domain.SUBSTANCE, SubstanceDomainNamespace.NAME, name,
                              Operation.RECORD, output_format)
         response = self._make_request(url)
         result = self._parse_response(response, output_format)
-        
+
         # For JSON format, automatically extract the substance data from the wrapper
         if output_format == OutputFormat.JSON and isinstance(result, dict):
             if "PC_Substances" in result and isinstance(result["PC_Substances"], list) and len(result["PC_Substances"]) > 0:
@@ -1545,32 +1865,41 @@ class PubChemAPI:
                     return result["PC_Substances"][0]
                 else:
                     return result["PC_Substances"]
-        
+
         return result
-    
+
     @cached(service='pubchem')
     def get_sids_by_name(self, name: str, output_format: str = OutputFormat.JSON,
                         sourcename: Optional[str] = None) -> Any:
         """
         Get SIDs by name
-        
+
         Args:
             name: Substance name
             output_format: Desired output format
             sourcename: Restrict to specific source
-            
+
         Returns:
             SID list (extracted from nested response structure)
+
+        Raises:
+            PubChemNotFoundError: If no substance has this name.
+            PubChemError: If the request could not be completed.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> api.get_sids_by_name("aspirin")[:5]               # doctest: +SKIP
+            [4594, 87798, 476106, 602429, 840714]
         """
         options = {}
         if sourcename:
             options['sourcename'] = sourcename
-            
+
         url = self._build_url(Domain.SUBSTANCE, SubstanceDomainNamespace.NAME, name,
                              Operation.SIDS, output_format, **options)
         response = self._make_request(url)
         parsed_response = self._parse_response(response, output_format)
-        
+
         # Extract SID list from nested structure if JSON format
         if output_format == OutputFormat.JSON and isinstance(parsed_response, dict):
             if 'IdentifierList' in parsed_response and 'SID' in parsed_response['IdentifierList']:
@@ -1578,58 +1907,97 @@ class PubChemAPI:
             elif 'Fault' in parsed_response:
                 # Handle API fault response
                 raise PubChemNotFoundError(f"No SIDs found for name: {name}")
-        
+
         # Return original response for non-JSON formats or if structure is different
         return parsed_response
-    
+
     # Assay methods
     @cached(service='pubchem')
     def get_assay_by_aid(self, aid: Union[int, str], output_format: str = OutputFormat.JSON) -> Any:
         """
         Get assay by AID
-        
+
         Args:
             aid: Assay ID
             output_format: Desired output format
-            
+
         Returns:
-            Assay data
+            Assay data, as PUG-REST sends it: for JSON, a dict holding
+            ``PC_AssaySubmit`` with the assay's ``assay`` description and its
+            ``data`` rows.
+
+        Raises:
+            PubChemNotFoundError: If there is no assay with this AID.
+            PubChemError: If the request could not be completed.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> assay = api.get_assay_by_aid(1000)                # doctest: +SKIP
+            >>> assay['PC_AssaySubmit']['assay']['descr']['name']  # doctest: +SKIP
+            'Screening for Inhibitors of the Mevalonate Pathway in Streptococcus Pneumoniae - MK Secondary Assay'
         """
         url = self._build_url(Domain.ASSAY, AssayDomainNamespace.AID, aid,
                              Operation.RECORD, output_format)
         response = self._make_request(url)
         return self._parse_response(response, output_format)
-    
+
     @cached(service='pubchem')
     def get_assay_summary(self, cids: Union[int, str, List[Union[int, str]]],
                          output_format: str = OutputFormat.JSON) -> Any:
         """
         Get assay summary for compounds
-        
+
         Args:
             cids: Single CID or list of CIDs
             output_format: Desired output format
-            
+
         Returns:
-            Assay summary data
+            Assay summary data: for JSON, ``{'Table': {'Columns': ...,
+            'Row': [...]}}``, one row per assay result.
+
+        Raises:
+            PubChemNotFoundError: If PubChem holds no assay results for them.
+            PubChemError: If the request could not be completed.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> summary = api.get_assay_summary(2244)             # doctest: +SKIP
+            >>> summary['Table']['Columns']['Column'][:5]         # doctest: +SKIP
+            ['AID', 'Panel Member ID', 'SID', 'CID', 'Activity Outcome']
         """
         url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.CID, cids,
                              Operation.ASSAYSUMMARY, output_format)
         response = self._make_request(url)
         return self._parse_response(response, output_format)
-    
+
     # Convenience methods for common use cases
     @cached(service='pubchem')
     def search_compound(self, query: str, search_type: str = "name") -> Dict[str, Any]:
         """
         Search for compound with automatic format detection
-        
+
+        A convenience layer over the ``get_compound(s)_by_*`` methods that
+        reports failure in the result instead of raising. The query type is
+        not detected: ``search_type`` says what it is. A CAS number is a name
+        to PubChem.
+
         Args:
             query: Search query (name, SMILES, InChIKey, etc.)
             search_type: Type of search ("name", "smiles", "inchikey", "cid")
-            
+
         Returns:
-            Dictionary with search results and metadata
+            Dictionary with search results and metadata: ``success``,
+            ``query``, ``search_type``, ``data`` (the full record, or a list of
+            records when several match) and ``error``. Pass it to
+            :meth:`format_search_compound_result` for flat properties.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> result = api.search_compound("50-00-0")           # doctest: +SKIP
+            >>> result['success'], result['data']['id']           # doctest: +SKIP
+            (True, {'id': {'cid': 712}})
+            >>> api.search_compound("xyzzy-no-such")['success']  # doctest: +SKIP
+            False
         """
         try:
             if search_type == "name":
@@ -1642,7 +2010,7 @@ class PubChemAPI:
                 result = self.get_compound_by_cid(query)
             else:
                 raise ValueError(f"Unsupported search type: {search_type}")
-            
+
             return {
                 "success": True,
                 "query": query,
@@ -1650,7 +2018,7 @@ class PubChemAPI:
                 "data": result,
                 "error": None
             }
-            
+
         except Exception as e:
             return {
                 "success": False,
@@ -1660,37 +2028,43 @@ class PubChemAPI:
                 "error": str(e)
             }
 
-    def format_search_compound_result(self, search_result: Dict[str, Any], 
+    def format_search_compound_result(self, search_result: Dict[str, Any],
                                       index: Optional[int] = None) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
         """
         Convert search_compound output to a nicely formatted dictionary with flat structure
-        
+
         Extracts properties from the nested props structure in search_compound results
         and creates a dictionary similar to get_all_compound_info output.
-        
+
         Args:
             search_result: The result dictionary from search_compound()
             index: If search returns multiple results, specify which one to format (0-based).
                    If None and multiple results exist, returns a list of all formatted results.
-            
+
         Returns:
             Dictionary with formatted properties, or list of dictionaries if multiple results.
-            If search was unsuccessful or data is missing, returns a dictionary with 
+            If search was unsuccessful or data is missing, returns a dictionary with
             success=False and error message.
-            
+
         Examples:
             >>> pch = PubChemAPI()
             >>> # Single result (e.g., CAS number)
-            >>> res = pch.search_compound("50-00-0")
-            >>> formatted = pch.format_search_compound_result(res)
-            >>> print(formatted.get("MolecularFormula"))
-            'CH2O'
-            
+            >>> res = pch.search_compound("50-00-0")                      # doctest: +SKIP
+            >>> formatted = pch.format_search_compound_result(res)        # doctest: +SKIP
+            >>> formatted["CID"], formatted["MolecularFormula"]           # doctest: +SKIP
+            (712, 'CH2O')
+
             >>> # Multiple results (e.g., common name)
-            >>> res = pch.search_compound("aspirin")
-            >>> formatted = pch.format_search_compound_result(res, index=0)  # Get first result
-            >>> # Or get all results
-            >>> all_formatted = pch.format_search_compound_result(res)  # Returns list
+            >>> res = pch.search_compound("aspirin")                      # doctest: +SKIP
+            >>> first = pch.format_search_compound_result(res, index=0)   # doctest: +SKIP
+            >>> every = pch.format_search_compound_result(res)            # doctest: +SKIP
+            >>> len(every)                                                # doctest: +SKIP
+            142
+
+            >>> # A failed search stays a failure, with its reason
+            >>> pch.format_search_compound_result(
+            ...     {"success": False, "query": "x", "search_type": "name", "error": "HTTP 404"})
+            {'success': False, 'error': 'HTTP 404', 'query': 'x', 'search_type': 'name'}
         """
         # Check if search was successful
         if not search_result.get("success"):
@@ -1700,7 +2074,7 @@ class PubChemAPI:
                 "query": search_result.get("query"),
                 "search_type": search_result.get("search_type")
             }
-        
+
         # Check if data exists
         data = search_result.get("data")
         if not data:
@@ -1710,7 +2084,7 @@ class PubChemAPI:
                 "query": search_result.get("query"),
                 "search_type": search_result.get("search_type")
             }
-        
+
         # Handle multiple results (list of compounds)
         if isinstance(data, list):
             if index is not None:
@@ -1726,9 +2100,9 @@ class PubChemAPI:
                     }
             else:
                 # Format all results
-                return [self._format_single_compound(compound, search_result) 
+                return [self._format_single_compound(compound, search_result)
                         for compound in data]
-        
+
         # Handle single result (dict)
         if "props" not in data:
             return {
@@ -1737,18 +2111,18 @@ class PubChemAPI:
                 "query": search_result.get("query"),
                 "search_type": search_result.get("search_type")
             }
-        
+
         return self._format_single_compound(data, search_result)
-    
-    def _format_single_compound(self, data: Dict[str, Any], 
+
+    def _format_single_compound(self, data: Dict[str, Any],
                                 search_result: Dict[str, Any]) -> Dict[str, Any]:
         """
         Internal helper to format a single compound's data
-        
+
         Args:
             data: Single compound data dictionary with 'props' key
             search_result: Original search result for metadata
-            
+
         Returns:
             Formatted dictionary with flat structure
         """
@@ -1759,11 +2133,11 @@ class PubChemAPI:
             "search_type": search_result.get("search_type"),
             "error": None
         }
-        
+
         # Add CID if available
         if "id" in data and "id" in data["id"] and "cid" in data["id"]["id"]:
             formatted["CID"] = data["id"]["id"]["cid"]
-        
+
         # Map of property labels/names to standardized keys
         # This maps the PubChem record format to property table format
         property_mapping = {
@@ -1789,13 +2163,13 @@ class PubChemAPI:
             ("IUPAC Name", "Systematic"): "IUPACName_Systematic",
             ("IUPAC Name", "Traditional"): "IUPACName_Traditional",
         }
-        
+
         # Process each property
         for prop in data["props"]:
             urn = prop.get("urn", {})
             label = urn.get("label", "")
             name = urn.get("name", "")
-            
+
             # Get value based on type
             value_obj = prop.get("value", {})
             if "sval" in value_obj:
@@ -1808,7 +2182,7 @@ class PubChemAPI:
                 value = value_obj["binary"]
             else:
                 continue  # Skip if no recognized value type
-            
+
             # Check if we have a mapping for this property
             key_tuple = (label, name)
             if key_tuple in property_mapping:
@@ -1820,14 +2194,14 @@ class PubChemAPI:
                 else:
                     key = label.replace(" ", "").replace("-", "")
                 formatted[key] = value
-        
+
         return formatted
 
     @cached(service='pubchem')
-    def get_basic_compound_info(self, cid: Union[int, str], 
+    def get_basic_compound_info(self, cid: Union[int, str],
                                 include_synonyms: bool = False) -> Dict[str, Any]:
         """
-        Get basic compound information including formula, molecular weight, 
+        Get basic compound information including formula, molecular weight,
         and structure, and IUPAC name. Synonyms can be included optionally.
 
         Args:
@@ -1836,7 +2210,16 @@ class PubChemAPI:
 
         Returns:
             Dictionary with compound properties directly accessible at top level,
-            plus 'success', 'cid', 'synonyms', and 'error' metadata keys
+            plus 'success', 'cid', 'synonyms', and 'error' metadata keys.
+            The properties are ``MolecularFormula``, ``MolecularWeight``,
+            ``SMILES``, ``InChI``, ``InChIKey`` and ``IUPACName``; see
+            :meth:`get_compound_properties` for how a failure is reported.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> info = api.get_basic_compound_info(2244)          # doctest: +SKIP
+            >>> info['IUPACName'], info['InChIKey']               # doctest: +SKIP
+            ('2-acetyloxybenzoic acid', 'BSYNRYMUTXBXSQ-UHFFFAOYSA-N')
         """
         # Get basic properties with synonyms
         properties = [
@@ -1847,7 +2230,7 @@ class PubChemAPI:
             CompoundProperties.INCHIKEY,
             CompoundProperties.IUPAC_NAME
         ]
-        
+
         # Use the new get_compound_properties method which already includes synonyms and metadata
         return self.get_compound_properties(cid, properties, include_synonyms=include_synonyms)
 
@@ -1861,7 +2244,14 @@ class PubChemAPI:
 
         Returns:
             Dictionary with compound properties directly accessible at top level,
-            plus 'success', 'cid', and 'error' metadata keys
+            plus 'success', 'cid', and 'error' metadata keys. A property
+            PubChem has no value for is absent.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> info = api.get_all_compound_info(2244)            # doctest: +SKIP
+            >>> info['XLogP'], info['TPSA'], info['success']      # doctest: +SKIP
+            (1.2, 63.6, True)
         """
         # Get all property values from CompoundProperties class
         properties = []
@@ -1870,26 +2260,38 @@ class PubChemAPI:
                 prop_value = getattr(CompoundProperties, attr_name)
                 if isinstance(prop_value, str):
                     properties.append(prop_value)
-        
+
         # Use the new get_compound_properties method which already returns flat data
         return self.get_compound_properties(cid, properties, include_synonyms=False)
 
     def extract_identifiers_from_synonyms(self, synonyms: List[str]) -> Dict[str, List[str]]:
         """
         Extract chemical identifiers from a list of synonyms
-        
+
         Args:
             synonyms: List of synonym strings
-            
+
         Returns:
-            Dictionary with lists of unique identifiers for each type:
-            - casrn: CAS Registry Numbers (format: 2-5 digit-2 digit-single digit)
+            Dictionary with lists of unique identifiers for each type, in
+            order of first appearance:
+            - casrn: CAS Registry Numbers (2-7 digits-2 digits-1 digit). The
+              check digit is not verified, so malformed numbers PubChem lists
+              as synonyms (aspirin's ``001-16-2``) come through.
             - nsc: NSC numbers (begins with NSC)
             - dtxsid: DTXSID identifiers (begins with DTXSID)
             - dtxcid: DTXCID identifiers (begins with DTXCID)
-            - ec_number: EC numbers (format: NNN-NNN-N)
+            - ec_number: Enzyme Commission numbers (``N.N.N.N``). EC
+              inventory numbers such as ``200-064-1`` are not extracted.
             - chebi_id: ChEBI IDs (begins with CHEBI)
             - chembl: ChEMBL numbers (begins with CHEMBL)
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> ids = api.extract_identifiers_from_synonyms(
+            ...     ["aspirin", "50-78-2", "CAS-50-78-2", "NSC 27223", "DTXSID5020108",
+            ...      "CHEBI:15365", "CHEMBL25", "EC 3.1.1.7"])
+            >>> ids['casrn'], ids['nsc'], ids['chebi_id'], ids['ec_number']
+            (['50-78-2'], ['NSC27223'], ['CHEBI:15365'], ['3.1.1.7'])
         """
         identifiers = {
             'casrn': [],
@@ -1900,13 +2302,13 @@ class PubChemAPI:
             'chebi_id': [],
             'chembl': []
         }
-        
+
         for synonym in synonyms:
             if not isinstance(synonym, str):
                 continue
-                
+
             synonym_upper = synonym.upper().strip()
-            
+
             # CAS Registry Number: 2-5 digits, hyphen, 2 digits, hyphen, 1 digit
             # May or may not begin with "CAS"
             cas_patterns = [
@@ -1919,28 +2321,28 @@ class PubChemAPI:
                     if re.match(r'^\d{2,7}-\d{2}-\d$', match):
                         if match not in identifiers['casrn']:
                             identifiers['casrn'].append(match)
-            
+
             # NSC Number: begins with NSC
             nsc_match = re.search(r'\b(NSC\s*\d+)\b', synonym_upper)
             if nsc_match:
                 nsc = nsc_match.group(1).replace(' ', '')
                 if nsc not in identifiers['nsc']:
                     identifiers['nsc'].append(nsc)
-            
+
             # DTXSID: begins with DTXSID
             dtxsid_match = re.search(r'\b(DTXSID\d+)\b', synonym_upper)
             if dtxsid_match:
                 dtxsid = dtxsid_match.group(1)
                 if dtxsid not in identifiers['dtxsid']:
                     identifiers['dtxsid'].append(dtxsid)
-            
+
             # DTXCID: begins with DTXCID
             dtxcid_match = re.search(r'\b(DTXCID\d+)\b', synonym_upper)
             if dtxcid_match:
                 dtxcid = dtxcid_match.group(1)
                 if dtxcid not in identifiers['dtxcid']:
                     identifiers['dtxcid'].append(dtxcid)
-            
+
             # EC Number: standard format is N.N.N.N (enzyme classification)
             # Only accept the standard dot-separated format
             ec_pattern = r'\b(?:EC\s*[:\-]?\s*)?(\d{1,2}\.\d{1,3}\.\d{1,3}\.(?:\d{1,3}|\-))\b'
@@ -1948,7 +2350,7 @@ class PubChemAPI:
             for match in matches:
                 if match not in identifiers['ec_number']:
                     identifiers['ec_number'].append(match)
-            
+
             # ChEBI ID: begins with CHEBI
             chebi_match = re.search(r'\b(CHEBI:?\s*\d+)\b', synonym_upper)
             if chebi_match:
@@ -1958,33 +2360,42 @@ class PubChemAPI:
                     chebi = chebi.replace('CHEBI', 'CHEBI:')
                 if chebi not in identifiers['chebi_id']:
                     identifiers['chebi_id'].append(chebi)
-            
+
             # ChEMBL: begins with CHEMBL
             chembl_match = re.search(r'\b(CHEMBL\d+)\b', synonym_upper)
             if chembl_match:
                 chembl = chembl_match.group(1)
                 if chembl not in identifiers['chembl']:
                     identifiers['chembl'].append(chembl)
-        
+
         return identifiers
 
     def get_compound_identifiers(self, cid: Union[int, str]) -> Dict[str, Any]:
         """
         Get compound identifiers extracted from synonyms
-        
+
         Args:
             cid: Compound ID
-            
+
         Returns:
-            Dictionary with 'success', 'cid', 'error' metadata and extracted identifiers
+            Dictionary with 'success', 'cid', 'error' metadata and extracted identifiers,
+            as :meth:`extract_identifiers_from_synonyms` finds them, plus
+            ``total_synonyms``. A failed request gives ``success=False``
+            and empty lists rather than raising.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> ids = api.get_compound_identifiers(2244)          # doctest: +SKIP
+            >>> ids['dtxsid'], ids['chembl'][:1]                  # doctest: +SKIP
+            (['DTXSID5020108'], ['CHEMBL25'])
         """
         try:
             # Get synonyms
             synonyms_list = self.get_compound_synonyms(cid)
-            
+
             # Extract identifiers
             identifiers = self.extract_identifiers_from_synonyms(synonyms_list)
-            
+
             # Add metadata
             result = {
                 'success': True,
@@ -1993,9 +2404,9 @@ class PubChemAPI:
                 'total_synonyms': len(synonyms_list)
             }
             result.update(identifiers)
-            
+
             return result
-            
+
         except Exception as e:
             return {
                 'success': False,
@@ -2014,17 +2425,31 @@ class PubChemAPI:
     def find_cids_comprehensive(self, name: str, name_type: str = "word") -> Dict[str, Any]:
         """
         Search for CIDs in both compound and substance domains
-        
+
         This method first searches in the compound domain, and if no results are found,
         it searches in the substance domain. This is useful for comprehensive searching
         when you're not sure which domain contains the identifier.
-        
+
         Args:
             name: Compound or substance name (including CAS numbers, trade names, etc.)
             name_type: Name search type ("word" or "complete")
-            
+
         Returns:
-            Dictionary with search results from both domains
+            Dictionary with search results from both domains:
+            ``compound_domain`` and ``substance_domain``, each
+            ``{"cids", "success", "error"}``; ``total_unique_cids``, the union
+            in no particular order; and ``recommended_domain``, whichever
+            domain returned more CIDs (the compound domain on a tie), or None
+            when both failed. More is not better here: the compound domain's
+            one CID is usually the right answer.
+
+        Example:
+            >>> api = PubChemAPI()
+            >>> found = api.find_cids_comprehensive("50-78-2")    # doctest: +SKIP
+            >>> found['compound_domain']['cids']                  # doctest: +SKIP
+            [2244]
+            >>> sorted(found['substance_domain']['cids'])         # doctest: +SKIP
+            [2244, 67252, 3434975, 12280114]
         """
         results = {
             "query": name,
@@ -2034,7 +2459,7 @@ class PubChemAPI:
             "total_unique_cids": [],
             "recommended_domain": None
         }
-        
+
         # Try compound domain first
         try:
             compound_cids = self.get_cids_by_name(name, name_type=name_type, domain=Domain.COMPOUND)
@@ -2043,7 +2468,7 @@ class PubChemAPI:
             results["total_unique_cids"].extend(compound_cids)
         except Exception as e:
             results["compound_domain"]["error"] = str(e)
-        
+
         # Try substance domain
         try:
             substance_cids = self.get_cids_by_name(name, name_type=name_type, domain=Domain.SUBSTANCE)
@@ -2052,10 +2477,10 @@ class PubChemAPI:
             results["total_unique_cids"].extend(substance_cids)
         except Exception as e:
             results["substance_domain"]["error"] = str(e)
-        
+
         # Remove duplicates and determine recommended domain
         results["total_unique_cids"] = list(set(results["total_unique_cids"]))
-        
+
         if results["compound_domain"]["success"] and results["substance_domain"]["success"]:
             # Both succeeded - recommend the one with more results
             compound_count = len(results["compound_domain"]["cids"])
@@ -2067,5 +2492,5 @@ class PubChemAPI:
             results["recommended_domain"] = "substance"
         else:
             results["recommended_domain"] = None
-        
+
         return results

@@ -425,6 +425,25 @@ class TestChEBI:
         assert result == "18.015"
 
     @patch('requests.Session.post')
+    def test_text_body_calls_do_not_ask_for_json(self, mock_post):
+        """
+        The structure-calculation endpoints answer text/plain or image/png and
+        refuse ``Accept: application/json`` --- the session's default --- with
+        HTTP 406. The mocks above never looked, so every calculate_* call
+        returned None against the live service.
+        """
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = "46.069"
+        mock_post.return_value = mock_response
+
+        ChEBI().calculate_avg_mass_from_formula("C2H6O")
+
+        headers = mock_post.call_args.kwargs["headers"]
+        assert headers["Accept"] == "*/*"
+        assert headers["Content-Type"].startswith("text/plain")
+
+    @patch('requests.Session.post')
     def test_calculate_mol_formula(self, mock_post):
         """Test molecular formula calculation."""
         mock_response = Mock()

@@ -78,10 +78,15 @@ class ChEBI:
         timeout (int): Request timeout in seconds
         session (requests.Session): HTTP session for connection pooling
 
+    Every method needs the network. Lookups that fail return None (or an
+    empty collection) after logging a warning, rather than raising; the
+    offline alternative for records, names and structures is
+    :class:`~provesid.chebi_sdf.ChebiSDF`.
+
     Example:
         >>> chebi = ChEBI()
-        >>> compound = chebi.get_compound(15377)  # CHEBI:15377 (water)
-        >>> print(compound['name'])
+        >>> compound = chebi.get_compound(15377)  # doctest: +SKIP
+        >>> print(compound['name'])               # doctest: +SKIP
         water
     """
 
@@ -102,6 +107,10 @@ class ChEBI:
 
         Args:
             timeout (int): Request timeout in seconds (default: 30)
+
+        Example:
+            >>> ChEBI(timeout=60)
+            ChEBI(base_url='https://www.ebi.ac.uk/chebi/backend/api/public', timeout=60)
         """
         self.base_url = "https://www.ebi.ac.uk/chebi/backend/api/public"
         self.timeout = timeout
@@ -275,9 +284,11 @@ class ChEBI:
         POST a ``text/plain`` body and return the raw response.
 
         The structure-calculation endpoints want the text; ``depict_structure``
-        wants the bytes of a PNG. Only the ``Content-Type`` header --- the one
-        thing these endpoints need that the session does not already carry ---
-        is set per request; ``requests`` merges it over the session's own.
+        wants the bytes of a PNG. Two headers are set per request, and
+        ``requests`` merges them over the session's own: ``Content-Type``, and
+        ``Accept``. These endpoints answer ``text/plain`` or ``image/png``, and
+        refuse the session's ``Accept: application/json`` with HTTP 406, which
+        until 2026-09-22 made every one of them return None.
 
         Args:
             endpoint (str): Path relative to *base_url*.
@@ -295,7 +306,7 @@ class ChEBI:
         url = f"{self.base_url}/{endpoint}"
         return self._http.post(
             url, data=text_body, params=params,
-            headers={"Content-Type": "text/plain;charset=UTF-8"},
+            headers={"Content-Type": "text/plain;charset=UTF-8", "Accept": "*/*"},
         )
 
     # ------------------------------------------------------------------
@@ -346,6 +357,18 @@ class ChEBI:
 
         Older examples and user code refer to ``get_complete_entity``. The
         ChEBI 2.0 client uses ``get_compound`` as the canonical method name.
+
+        Args:
+            chebi_id: ChEBI ID (with or without ``CHEBI:`` prefix).
+            only_ontology_parents: As for :meth:`get_compound`.
+            only_ontology_children: As for :meth:`get_compound`.
+
+        Returns:
+            The :meth:`get_compound` record, or None on error.
+
+        Example:
+            >>> ChEBI().get_complete_entity("CHEBI:15377")["name"]  # doctest: +SKIP
+            'water'
         """
         return self.get_compound(
             chebi_id,
@@ -363,11 +386,14 @@ class ChEBI:
             chebi_ids: List of ChEBI IDs.
 
         Returns:
-            API response (typically a list of compound dicts), or *None* on error.
+            API response, a dict keyed by ``CHEBI:<id>`` holding each compound's
+            record, or *None* on error.
 
         Example:
             >>> chebi = ChEBI()
-            >>> results = chebi.get_compounds(["CHEBI:15377", "CHEBI:16236"])
+            >>> results = chebi.get_compounds(["CHEBI:15377", "CHEBI:15365"])  # doctest: +SKIP
+            >>> {key: record["name"] for key, record in results.items()}      # doctest: +SKIP
+            {'CHEBI:15377': 'water', 'CHEBI:15365': 'acetylsalicylic acid'}
         """
         ids_formatted = [self._format_chebi_id(cid) for cid in chebi_ids]
         try:
@@ -389,6 +415,12 @@ class ChEBI:
 
         Returns:
             Mapping of canonical ``CHEBI:<id>`` string to compound payload.
+            IDs that could not be fetched are left out.
+
+        Example:
+            >>> found = ChEBI().batch_get_entities([15377, "CHEBI:15365"])  # doctest: +SKIP
+            >>> {key: record["name"] for key, record in found.items()}     # doctest: +SKIP
+            {'CHEBI:15377': 'water', 'CHEBI:15365': 'acetylsalicylic acid'}
         """
         results: Dict[str, Dict[str, Any]] = {}
         for chebi_id in chebi_ids:
@@ -420,11 +452,15 @@ class ChEBI:
             size: Page size (default 15).
 
         Returns:
-            Search results dict, or *None* on error.
+            Search results dict, or *None* on error: ``results`` (the hits,
+            best first, each with its record under ``_source``), ``total`` and
+            ``number_pages``.
 
         Example:
             >>> chebi = ChEBI()
-            >>> results = chebi.search("paracetamol")
+            >>> results = chebi.search("paracetamol")               # doctest: +SKIP
+            >>> results["results"][0]["_source"]["chebi_accession"]  # doctest: +SKIP
+            'CHEBI:46195'
         """
         params: Dict[str, Any] = {"term": term, "page": page, "size": size}
         try:
@@ -444,7 +480,14 @@ class ChEBI:
             size: Page size (default 15).
 
         Returns:
-            list of matching entity dicts (may be empty).
+            list of matching entity dicts (may be empty): the ``results`` of
+            :meth:`search`, each carrying ``_score`` and the record under
+            ``_source``.
+
+        Example:
+            >>> hits = ChEBI().search_by_name("paracetamol", size=2)  # doctest: +SKIP
+            >>> [(hit["_source"]["chebi_accession"], hit["_source"]["name"]) for hit in hits]  # doctest: +SKIP
+            [('CHEBI:46195', 'paracetamol'), ('CHEBI:74529', 'antidote to paracetamol poisoning')]
         """
         result = self.search(search_text, page=page, size=size)
         if result is None:
@@ -503,7 +546,9 @@ class ChEBI:
             ...     "formula_specification": {
             ...         "and_specification": [{"term": "C6H12O7"}]
             ...     }
-            ... }, three_star_only=False)
+            ... }, three_star_only=False)                         # doctest: +SKIP
+            >>> results["total"]                                  # doctest: +SKIP
+            15
         """
         params: Dict[str, Any] = {
             "three_star_only": str(three_star_only).lower(),
@@ -528,7 +573,13 @@ class ChEBI:
         Endpoint: ``GET /advanced_search/sources_list``
 
         Returns:
-            Sources information, or *None* on error.
+            Sources information, or *None* on error: a list of
+            ``{"prefix", "name"}`` dicts, the names usable in a
+            ``database_name_specification``.
+
+        Example:
+            >>> ChEBI().get_sources_list()[:2]                    # doctest: +SKIP
+            [{'prefix': 'agr', 'name': 'Agricola'}, {'prefix': 'pesticides', 'name': "Alan Wood's Pesticides"}]
         """
         try:
             return self._get("advanced_search/sources_list")
@@ -550,7 +601,16 @@ class ChEBI:
             chebi_id: ChEBI ID (with or without ``CHEBI:`` prefix).
 
         Returns:
-            Ontology parent data, or *None* on error.
+            Ontology parent data, or *None* on error: the compound's ``id`` and
+            ``chebi_accession``, with its relations under
+            ``ontology_relations["outgoing_relations"]``, each naming the
+            ``relation_type`` and the parent (``final_id``, ``final_name``).
+
+        Example:
+            >>> parents = ChEBI().get_ontology_parents(15377)     # doctest: +SKIP
+            >>> first = parents["ontology_relations"]["outgoing_relations"][0]  # doctest: +SKIP
+            >>> first["relation_type"], first["final_id"]         # doctest: +SKIP
+            ('has role', 75772)
         """
         chebi_id_str = self._format_chebi_id(chebi_id)
         try:
@@ -569,7 +629,15 @@ class ChEBI:
             chebi_id: ChEBI ID (with or without ``CHEBI:`` prefix).
 
         Returns:
-            Ontology children data, or *None* on error.
+            Ontology children data, or *None* on error: as for
+            :meth:`get_ontology_parents`, with the relations under
+            ``ontology_relations["incoming_relations"]`` and the child named by
+            ``init_id`` and ``init_name``.
+
+        Example:
+            >>> children = ChEBI().get_ontology_children(15377)   # doctest: +SKIP
+            >>> children["ontology_relations"]["incoming_relations"][0]["init_name"]  # doctest: +SKIP
+            'methane clathrate'
         """
         chebi_id_str = self._format_chebi_id(chebi_id)
         try:
@@ -611,7 +679,9 @@ class ChEBI:
             >>> # Get all compounds that are alcohols
             >>> results = chebi.get_all_ontology_children_in_path(
             ...     relation="is_a", entity="CHEBI:30879"
-            ... )
+            ... )                                                 # doctest: +SKIP
+            >>> results["total"]                                  # doctest: +SKIP
+            4029
         """
         entity_str = self._format_chebi_id(entity)
         params: Dict[str, Any] = {
@@ -649,6 +719,10 @@ class ChEBI:
 
         Returns:
             Raw SVG string, or *None* on error.
+
+        Example:
+            >>> ChEBI().get_compound_structure(15377)[:21]        # doctest: +SKIP
+            "<?xml version='1.0' e"
         """
         # This endpoint expects the numeric compound PK
         numeric_id = str(chebi_id)
@@ -677,6 +751,12 @@ class ChEBI:
 
         Returns:
             Raw SVG string, or *None* on error.
+
+        Example:
+            >>> chebi = ChEBI()
+            >>> structure_id = chebi.get_compound(15377)["default_structure"]["id"]  # doctest: +SKIP
+            >>> structure_id, chebi.get_structure(structure_id)[:5]  # doctest: +SKIP
+            (2018, '<?xml')
         """
         params: Dict[str, Any] = {"width": width, "height": height}
         try:
@@ -697,6 +777,11 @@ class ChEBI:
 
         Returns:
             Mol file contents as string, or *None* on error.
+
+        Example:
+            >>> molfile = ChEBI().get_molfile(15377)              # doctest: +SKIP
+            >>> molfile.splitlines()[3][:6]                       # doctest: +SKIP
+            '  3  2'
         """
         try:
             resp = self._get_raw(f"molfile/{compound_id}/")
@@ -739,7 +824,9 @@ class ChEBI:
 
         Example:
             >>> chebi = ChEBI()
-            >>> results = chebi.structure_search("c1ccccc1", "substructure")
+            >>> results = chebi.structure_search("CCO", "connectivity")  # doctest: +SKIP
+            >>> results["total"]                                         # doctest: +SKIP
+            2
         """
         params: Dict[str, Any] = {
             "smiles": smiles,
@@ -764,9 +851,23 @@ class ChEBI:
 
     def calculate_avg_mass(self, structure: str) -> Optional[str]:
         """
-        Calculate the average mass from a structure (SMILES or molfile).
+        Calculate the average mass from a structure (a molfile).
 
         Endpoint: ``POST /structure-calculations/avg-mass/``
+
+        Args:
+            structure: A molfile. ChEBI does not accept SMILES here.
+
+        Returns:
+            The average mass as text, e.g. ``'46.069'``, or *None* on error (a structure ChEBI cannot parse is
+            HTTP 400, logged).
+
+        Example:
+            >>> chebi = ChEBI()
+            >>> from rdkit import Chem
+            >>> molfile = Chem.MolToMolBlock(Chem.MolFromSmiles("CCO"))
+            >>> chebi.calculate_avg_mass(molfile)  # doctest: +SKIP
+            '46.069'
         """
         try:
             return self._post_text("structure-calculations/avg-mass/", structure)
@@ -779,6 +880,18 @@ class ChEBI:
         Calculate the average mass from a molecular formula.
 
         Endpoint: ``POST /structure-calculations/avg-mass/from-formula/``
+
+        Args:
+            formula: A molecular formula, e.g. ``'C2H6O'``.
+
+        Returns:
+            The average mass as text, or *None* on error (a structure ChEBI cannot parse is
+            HTTP 400, logged).
+
+        Example:
+            >>> chebi = ChEBI()
+            >>> chebi.calculate_avg_mass_from_formula('C2H6O')  # doctest: +SKIP
+            '46.069'
         """
         try:
             return self._post_text("structure-calculations/avg-mass/from-formula/", formula)
@@ -788,9 +901,23 @@ class ChEBI:
 
     def calculate_mol_formula(self, structure: str) -> Optional[str]:
         """
-        Calculate the molecular formula from a structure (SMILES or molfile).
+        Calculate the molecular formula from a structure (a molfile).
 
         Endpoint: ``POST /structure-calculations/mol-formula/``
+
+        Args:
+            structure: A molfile. ChEBI does not accept SMILES here.
+
+        Returns:
+            The formula as text, or *None* on error (a structure ChEBI cannot parse is
+            HTTP 400, logged).
+
+        Example:
+            >>> chebi = ChEBI()
+            >>> from rdkit import Chem
+            >>> molfile = Chem.MolToMolBlock(Chem.MolFromSmiles("CCO"))
+            >>> chebi.calculate_mol_formula(molfile)  # doctest: +SKIP
+            'C2H6O'
         """
         try:
             return self._post_text("structure-calculations/mol-formula/", structure)
@@ -800,9 +927,23 @@ class ChEBI:
 
     def calculate_monoisotopic_mass(self, structure: str) -> Optional[str]:
         """
-        Calculate the monoisotopic mass from a structure (SMILES or molfile).
+        Calculate the monoisotopic mass from a structure (a molfile).
 
         Endpoint: ``POST /structure-calculations/monoisotopic-mass/``
+
+        Args:
+            structure: A molfile. ChEBI does not accept SMILES here.
+
+        Returns:
+            The monoisotopic mass as text, or *None* on error (a structure ChEBI cannot parse is
+            HTTP 400, logged).
+
+        Example:
+            >>> chebi = ChEBI()
+            >>> from rdkit import Chem
+            >>> molfile = Chem.MolToMolBlock(Chem.MolFromSmiles("CCO"))
+            >>> chebi.calculate_monoisotopic_mass(molfile)  # doctest: +SKIP
+            '46.041864812'
         """
         try:
             return self._post_text("structure-calculations/monoisotopic-mass/", structure)
@@ -815,6 +956,18 @@ class ChEBI:
         Calculate the monoisotopic mass from a molecular formula.
 
         Endpoint: ``POST /structure-calculations/monoisotopic-mass/from-formula/``
+
+        Args:
+            formula: A molecular formula, e.g. ``'C2H6O'``.
+
+        Returns:
+            The monoisotopic mass as text, or *None* on error (a structure ChEBI cannot parse is
+            HTTP 400, logged).
+
+        Example:
+            >>> chebi = ChEBI()
+            >>> chebi.calculate_monoisotopic_mass_from_formula('C2H6O')  # doctest: +SKIP
+            '46.041864812'
         """
         try:
             return self._post_text(
@@ -826,9 +979,23 @@ class ChEBI:
 
     def calculate_net_charge(self, structure: str) -> Optional[str]:
         """
-        Calculate the net charge from a structure (SMILES or molfile).
+        Calculate the net charge from a structure (a molfile).
 
         Endpoint: ``POST /structure-calculations/net-charge/``
+
+        Args:
+            structure: A molfile. ChEBI does not accept SMILES here.
+
+        Returns:
+            The net charge as text, e.g. ``'-1'``, or *None* on error (a structure ChEBI cannot parse is
+            HTTP 400, logged).
+
+        Example:
+            >>> chebi = ChEBI()
+            >>> from rdkit import Chem
+            >>> molfile = Chem.MolToMolBlock(Chem.MolFromSmiles("CCO"))
+            >>> chebi.calculate_net_charge(molfile)  # doctest: +SKIP
+            '0'
         """
         try:
             return self._post_text("structure-calculations/net-charge/", structure)
@@ -852,6 +1019,11 @@ class ChEBI:
 
         Returns:
             PNG image data as bytes, or *None* on error.
+
+        Example:
+            >>> png = ChEBI().depict_structure("CCO")             # doctest: +SKIP
+            >>> png[:4]                                           # doctest: +SKIP
+            b'\x89PNG'
         """
         params: Dict[str, Any] = {
             "width": width,
@@ -885,7 +1057,13 @@ class ChEBI:
             pause_time: Seconds to pause between requests (default 0.1).
 
         Returns:
-            dict mapping ``CHEBI:<id>`` to compound data.
+            dict mapping ``CHEBI:<id>`` to compound data. IDs that could not
+            be fetched are left out.
+
+        Example:
+            >>> found = ChEBI().batch_get_compounds([15377, 15365])  # doctest: +SKIP
+            >>> {key: record["name"] for key, record in found.items()}  # doctest: +SKIP
+            {'CHEBI:15377': 'water', 'CHEBI:15365': 'acetylsalicylic acid'}
         """
         results: Dict[str, Dict[str, Any]] = {}
         for chebi_id in chebi_ids:
@@ -922,7 +1100,9 @@ def get_chebi_entity(chebi_id: Union[int, str]) -> Optional[Dict[str, Any]]:
 
     Example:
         >>> from provesid import get_chebi_entity
-        >>> water = get_chebi_entity(15377)
+        >>> water = get_chebi_entity(15377)                   # doctest: +SKIP
+        >>> water["default_structure"]["smiles"]              # doctest: +SKIP
+        '[H]O[H]'
     """
     chebi = ChEBI()
     return chebi.get_compound(chebi_id)
@@ -941,7 +1121,9 @@ def search_chebi(search_text: str, max_results: int = 10) -> List[Dict[str, Any]
 
     Example:
         >>> from provesid import search_chebi
-        >>> results = search_chebi("aspirin")
+        >>> results = search_chebi("paracetamol", max_results=1)  # doctest: +SKIP
+        >>> results[0]["_source"]["name"]                         # doctest: +SKIP
+        'paracetamol'
     """
     chebi = ChEBI()
     return chebi.search_by_name(search_text, size=max_results)

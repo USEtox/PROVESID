@@ -31,31 +31,31 @@ from .utils import user_dataset_path
 class ChebiSDF:
     """
     Parser for ChEBI SDF (Structure-Data File) for offline access to ChEBI data.
-    
+
     This class provides efficient querying of the ChEBI SDF file containing
     ~190,000 compounds with structure data, chemical properties, synonyms,
     and cross-references to 80+ external databases.
-    
+
     The class builds an index on first use for fast lookups. The index is
     cached to disk for faster subsequent initializations.
-    
+
     If the SDF file is not found, it can be automatically downloaded from the
     ChEBI FTP server.
-    
+
     Attributes:
         sdf_path (str): Path to ChEBI SDF file
         index (dict): In-memory index for fast lookups
-        
+
     Example:
         >>> chebi_sdf = ChebiSDF()
         >>> compound = chebi_sdf.get_compound_by_id("CHEBI:15377")
         >>> print(compound['ChEBI NAME'])
         water
     """
-    
+
     # Default download URL for ChEBI SDF file
     DEFAULT_SDF_URL = "https://ftp.ebi.ac.uk/pub/databases/chebi/SDF/chebi.sdf.gz"
-    
+
     def __init__(
         self,
         sdf_path: Optional[str] = None,
@@ -67,7 +67,7 @@ class ChebiSDF:
     ):
         """
         Initialize ChebiSDF parser.
-        
+
         Args:
             sdf_path (str, optional): Path to ChEBI SDF file. If None, uses
                 the persistent user dataset directory.
@@ -79,16 +79,16 @@ class ChebiSDF:
             redownload (bool): If True, force re-download when
                 ``auto_download`` is enabled.
         """
-        
+
         if sdf_path is None:
             base_dir = data_dir or user_dataset_path()
             sdf_path = os.path.join(base_dir, 'chebi.sdf')
-        
+
         self.sdf_path = os.path.abspath(os.path.expanduser(sdf_path))
         self.index_path = self.sdf_path + '.index.pkl'
         self.sdf_url = sdf_url or self.DEFAULT_SDF_URL
         self.logger = logging.getLogger(__name__)
-        
+
         needs_download = redownload or not os.path.exists(self.sdf_path)
 
         # Check if SDF file exists, download if needed
@@ -111,7 +111,7 @@ class ChebiSDF:
 
         if redownload:
             rebuild_index = True
-        
+
         # Load or build index
         if rebuild_index or not os.path.exists(self.index_path):
             self.logger.info("Building index from SDF file...")
@@ -120,11 +120,11 @@ class ChebiSDF:
         else:
             self.logger.info("Loading cached index...")
             self.index = self._load_index()
-    
+
     def download_sdf(self, url: Optional[str] = None, force: bool = False) -> str:
         """
         Download the ChEBI SDF file from the ChEBI FTP server.
-        
+
         The file is downloaded as a gzip archive (~250 MB) and automatically
         extracted to the data directory (~868 MB uncompressed).
 
@@ -132,11 +132,11 @@ class ChebiSDF:
         file beside the archive and the next call continues from it. The gzip
         archive is kept until the SDF has been extracted and checked, so a
         failure during extraction does not cost another download.
-        
+
         Args:
             url (str, optional): URL to download from. If None, uses default ChEBI FTP URL.
             force (bool): If True, download even if file already exists (default: False)
-            
+
         Returns:
             str: Path to the downloaded and extracted SDF file
 
@@ -275,29 +275,29 @@ class ChebiSDF:
                     if 'ChEBI ID' in current_data:
                         chebi_id = current_data['ChEBI ID']
                         index['id_to_offset'][chebi_id] = current_mol_offset
-                        
+
                         # Index by name
                         if 'ChEBI NAME' in current_data:
                             name_lower = current_data['ChEBI NAME'].lower()
                             if name_lower not in index['name_to_ids']:
                                 index['name_to_ids'][name_lower] = []
                             index['name_to_ids'][name_lower].append(chebi_id)
-                        
+
                         # Index by InChIKey
                         if 'INCHIKEY' in current_data:
                             index['inchikey_to_id'][current_data['INCHIKEY']] = chebi_id
-                        
+
                         # Index by InChI
                         if 'INCHI' in current_data:
                             index['inchi_to_id'][current_data['INCHI']] = chebi_id
-                        
+
                         # Index by formula
                         if 'FORMULA' in current_data:
                             formula = current_data['FORMULA']
                             if formula not in index['formula_to_ids']:
                                 index['formula_to_ids'][formula] = []
                             index['formula_to_ids'][formula].append(chebi_id)
-                        
+
                         # Index by CAS
                         if 'CAS Registry Numbers' in current_data:
                             cas_numbers = current_data['CAS Registry Numbers'].split(';')
@@ -307,7 +307,7 @@ class ChebiSDF:
                                     if cas not in index['cas_to_ids']:
                                         index['cas_to_ids'][cas] = []
                                     index['cas_to_ids'][cas].append(chebi_id)
-                        
+
                         # Index by synonyms
                         if 'SYNONYM' in current_data:
                             synonyms = current_data['SYNONYM'].split(';')
@@ -325,7 +325,7 @@ class ChebiSDF:
 
         self.logger.info(f"Index built: {len(index['id_to_offset'])} compounds indexed")
         return index
-    
+
     # Bumped whenever the offset convention or index layout changes, so a stale
     # cached index is rebuilt rather than silently mis-read.
     INDEX_FORMAT_VERSION = 2
@@ -430,17 +430,17 @@ class ChebiSDF:
                     break
 
         return data
-    
+
     def get_compound_by_id(self, chebi_id: str) -> Optional[Dict[str, str]]:
         """
         Get compound data by ChEBI ID.
-        
+
         Args:
             chebi_id (str): ChEBI ID (e.g., "CHEBI:15377" or "15377")
-            
+
         Returns:
             dict: Compound data, or None if not found
-            
+
         Example:
             >>> chebi_sdf = ChebiSDF()
             >>> water = chebi_sdf.get_compound_by_id("CHEBI:15377")
@@ -450,24 +450,24 @@ class ChebiSDF:
         # Normalize ID format
         if not chebi_id.startswith('CHEBI:'):
             chebi_id = f'CHEBI:{chebi_id}'
-        
+
         offset = self.index['id_to_offset'].get(chebi_id)
         if offset is None:
             return None
-        
+
         return self._read_mol_at_offset(offset)
-    
+
     def search_by_name(self, name: str, exact: bool = True) -> List[Dict[str, str]]:
         """
         Search compounds by name.
-        
+
         Args:
             name (str): Compound name to search for
             exact (bool): If True, exact match; if False, partial match (default: True)
-            
+
         Returns:
             list: List of matching compound data
-            
+
         Example:
             >>> chebi_sdf = ChebiSDF()
             >>> results = chebi_sdf.search_by_name("water")
@@ -476,7 +476,7 @@ class ChebiSDF:
         """
         name_lower = name.lower()
         results = []
-        
+
         if exact:
             chebi_ids = self.index['name_to_ids'].get(name_lower, [])
         else:
@@ -485,28 +485,38 @@ class ChebiSDF:
             for indexed_name, ids in self.index['name_to_ids'].items():
                 if name_lower in indexed_name:
                     chebi_ids.extend(ids)
-        
+
         for chebi_id in chebi_ids:
             compound = self.get_compound_by_id(chebi_id)
             if compound:
                 results.append(compound)
-        
+
         return results
-    
+
     def search_by_synonym(self, synonym: str, exact: bool = True) -> List[Dict[str, str]]:
         """
         Search compounds by synonym.
-        
+
+        Matching ignores case.
+
         Args:
             synonym (str): Synonym to search for
             exact (bool): If True, exact match; if False, partial match (default: True)
-            
+
         Returns:
-            list: List of matching compound data
+            list: List of matching compound data. A partial match returns each
+            compound once, in no particular order.
+
+        Example:
+            >>> sdf = ChebiSDF()
+            >>> [c["ChEBI ID"] for c in sdf.search_by_synonym("aspirin")]
+            ['CHEBI:15365']
+            >>> len(sdf.search_by_synonym("aspirin", exact=False)) > 1
+            True
         """
         synonym_lower = synonym.lower()
         results = []
-        
+
         if exact:
             chebi_ids = self.index['synonym_to_ids'].get(synonym_lower, [])
         else:
@@ -517,96 +527,123 @@ class ChebiSDF:
                     chebi_ids.extend(ids)
             # Remove duplicates
             chebi_ids = list(set(chebi_ids))
-        
+
         for chebi_id in chebi_ids:
             compound = self.get_compound_by_id(chebi_id)
             if compound:
                 results.append(compound)
-        
+
         return results
-    
+
     def search_by_inchikey(self, inchikey: str) -> Optional[Dict[str, str]]:
         """
         Search compound by InChIKey.
-        
+
         Args:
             inchikey (str): InChIKey to search for
-            
+
         Returns:
             dict: Compound data, or None if not found
+
+        Example:
+            >>> ChebiSDF().search_by_inchikey("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")["ChEBI NAME"]
+            'acetylsalicylic acid'
         """
         chebi_id = self.index['inchikey_to_id'].get(inchikey)
         if chebi_id:
             return self.get_compound_by_id(chebi_id)
         return None
-    
+
     def search_by_inchi(self, inchi: str) -> Optional[Dict[str, str]]:
         """
         Search compound by InChI.
-        
+
         Args:
             inchi (str): InChI string to search for
-            
+
         Returns:
-            dict: Compound data, or None if not found
+            dict: Compound data, or None if not found. The match is on the
+            exact string.
+
+        Example:
+            >>> ChebiSDF().search_by_inchi("InChI=1S/H2O/h1H2")["ChEBI ID"]
+            'CHEBI:15377'
         """
         chebi_id = self.index['inchi_to_id'].get(inchi)
         if chebi_id:
             return self.get_compound_by_id(chebi_id)
         return None
-    
+
     def search_by_cas(self, cas: str) -> List[Dict[str, str]]:
         """
         Search compounds by CAS Registry Number.
-        
+
         Args:
             cas (str): CAS Registry Number
-            
+
         Returns:
-            list: List of matching compound data
+            list: List of matching compound data. Only about 29 000 of
+            ChEBI's ~192 000 entries carry a CAS number.
+
+        Example:
+            >>> [(c["ChEBI ID"], c["ChEBI NAME"]) for c in ChebiSDF().search_by_cas("7732-18-5")]
+            [('CHEBI:15377', 'water'), ('CHEBI:29375', 'diprotium oxide')]
         """
         chebi_ids = self.index['cas_to_ids'].get(cas, [])
         results = []
-        
+
         for chebi_id in chebi_ids:
             compound = self.get_compound_by_id(chebi_id)
             if compound:
                 results.append(compound)
-        
+
         return results
-    
+
     def search_by_formula(self, formula: str) -> List[Dict[str, str]]:
         """
         Search compounds by molecular formula.
-        
+
         Args:
             formula (str): Molecular formula (e.g., "H2O")
-            
+
         Returns:
-            list: List of matching compound data
+            list: List of matching compound data. The formula must be written
+            as ChEBI writes it.
+
+        Example:
+            >>> [c["ChEBI NAME"] for c in ChebiSDF().search_by_formula("H2O")]
+            ['water', 'diprotium oxide']
         """
         chebi_ids = self.index['formula_to_ids'].get(formula, [])
         results = []
-        
+
         for chebi_id in chebi_ids:
             compound = self.get_compound_by_id(chebi_id)
             if compound:
                 results.append(compound)
-        
+
         return results
-    
+
     def filter_by_star_rating(self, min_stars: int = 3) -> List[str]:
         """
         Get ChEBI IDs of compounds with minimum star rating.
-        
+
         Args:
             min_stars (int): Minimum star rating (1-3, default: 3)
-            
+
         Returns:
             list: List of ChEBI IDs matching criteria
+
+        Note:
+            Reads every record in the file, which takes several seconds.
+
+        Example:
+            >>> three_star = ChebiSDF().filter_by_star_rating(3)  # doctest: +SKIP
+            >>> len(three_star), three_star[:2]                   # doctest: +SKIP
+            (52903, ['CHEBI:7', 'CHEBI:8'])
         """
         matching_ids = []
-        
+
         for chebi_id in tqdm(self.index['id_to_offset'].keys(), desc="Filtering by star rating"):
             compound = self.get_compound_by_id(chebi_id)
             if compound and 'STAR' in compound:
@@ -616,18 +653,24 @@ class ChebiSDF:
                         matching_ids.append(chebi_id)
                 except ValueError:
                     continue
-        
+
         return matching_ids
-    
+
     def get_compounds_by_ids(self, chebi_ids: List[str]) -> List[Dict[str, str]]:
         """
         Get multiple compounds by ChEBI IDs.
-        
+
         Args:
             chebi_ids (list): List of ChEBI IDs
-            
+
         Returns:
-            list: List of compound data dictionaries
+            list: List of compound data dictionaries, in the order asked;
+            IDs not in the file are left out
+
+        Example:
+            >>> found = ChebiSDF().get_compounds_by_ids(["CHEBI:15377", "CHEBI:0", "CHEBI:15365"])
+            >>> [c["ChEBI NAME"] for c in found]
+            ['water', 'acetylsalicylic acid']
         """
         results = []
         for chebi_id in chebi_ids:
@@ -635,46 +678,59 @@ class ChebiSDF:
             if compound:
                 results.append(compound)
         return results
-    
-    def export_to_dataframe(self, chebi_ids: Optional[List[str]] = None, 
+
+    def export_to_dataframe(self, chebi_ids: Optional[List[str]] = None,
                            fields: Optional[List[str]] = None) -> pd.DataFrame:
         """
         Export compounds to pandas DataFrame.
-        
+
         Args:
             chebi_ids (list, optional): List of ChEBI IDs. If None, exports all compounds.
             fields (list, optional): List of field names to include. If None, includes common fields.
-            
+
         Returns:
             pd.DataFrame: DataFrame with compound data
-            
+
         Example:
             >>> chebi_sdf = ChebiSDF()
             >>> df = chebi_sdf.export_to_dataframe(["CHEBI:15377", "CHEBI:16236"])
             >>> print(df[['ChEBI ID', 'ChEBI NAME', 'FORMULA']])
+                  ChEBI ID ChEBI NAME FORMULA
+            0  CHEBI:15377      water     H2O
+            1  CHEBI:16236    ethanol   C2H6O
         """
         if fields is None:
-            fields = ['ChEBI ID', 'ChEBI NAME', 'STAR', 'FORMULA', 'MASS', 
+            fields = ['ChEBI ID', 'ChEBI NAME', 'STAR', 'FORMULA', 'MASS',
                      'SMILES', 'INCHI', 'INCHIKEY', 'CAS Registry Numbers']
-        
+
         if chebi_ids is None:
             chebi_ids = list(self.index['id_to_offset'].keys())
-        
+
         data = []
         for chebi_id in tqdm(chebi_ids, desc="Exporting to DataFrame"):
             compound = self.get_compound_by_id(chebi_id)
             if compound:
                 row = {field: compound.get(field, None) for field in fields}
                 data.append(row)
-        
+
         return pd.DataFrame(data)
-    
+
     def get_database_stats(self) -> Dict[str, int]:
         """
         Get statistics about the ChEBI SDF database.
-        
+
         Returns:
-            dict: Statistics including counts of various indexed fields
+            dict: Statistics including counts of various indexed fields:
+            ``total_compounds``, and the number of distinct keys in each index
+            --- ``compounds_with_inchikey``, ``compounds_with_inchi`` and
+            ``compounds_with_cas`` count distinct InChIKeys, InChIs and CAS
+            numbers, not compounds --- plus ``unique_formulas``,
+            ``indexed_names`` and ``indexed_synonyms``.
+
+        Example:
+            >>> stats = ChebiSDF().get_database_stats()
+            >>> stats["total_compounds"] > stats["compounds_with_cas"]
+            True
         """
         return {
             'total_compounds': len(self.index['id_to_offset']),

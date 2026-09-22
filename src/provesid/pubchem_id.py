@@ -16,7 +16,7 @@ behind :meth:`PubChemID.descriptors`, for structures that are not in PubChem.
 
 Examples:
     >>> from provesid import PubChemID
-    >>> with PubChemID() as db:                         # doctest: +SKIP
+    >>> with PubChemID() as db:
     ...     db.cas_to_cid("50-78-2")
     2244
 """

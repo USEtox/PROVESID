@@ -154,8 +154,9 @@ class CompToxID(SQLiteClient):
     own connection.
 
     Examples:
-        >>> with CompToxID() as db:                     # doctest: +SKIP
-        ...     dtxsid = db.casrn_to_dtxsid("50-78-2")
+        >>> with CompToxID() as db:
+        ...     db.casrn_to_dtxsid("50-78-2")
+        'DTXSID5020108'
     """
 
     # Default database filename

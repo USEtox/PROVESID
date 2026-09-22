@@ -52,17 +52,17 @@ waiting took 8.52 s serially and 1.17 s on eight threads.
 
 Examples:
     >>> from provesid import PubChemID
-    >>> with PubChemID() as db:                      # doctest: +SKIP
+    >>> with PubChemID() as db:
     ...     row = db.get_by_cas("50-00-0")
-    >>> db.closed                                    # doctest: +SKIP
+    >>> db.closed
     True
 
     >>> from concurrent.futures import ThreadPoolExecutor
     >>> cas_numbers = ["50-00-0", "64-17-5", "50-78-2"]
-    >>> with PubChemID() as db:                      # doctest: +SKIP
+    >>> with PubChemID() as db:
     ...     with ThreadPoolExecutor(8) as pool:
     ...         rows = list(pool.map(db.get_by_cas, cas_numbers))
-    >>> [row["cid"] for row in rows]                 # doctest: +SKIP
+    >>> [row["cid"] for row in rows]
     [712, 702, 2244]
 """
 

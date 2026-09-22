@@ -3657,12 +3657,18 @@ output. That is done for all of `src/provesid/`.
 - **A way to run them.** `pytest --doctest-modules src/provesid`, set up by
   `src/conftest.py`, which is not installed. It skips a module's examples
   when the database they read is absent, so a doctest run never downloads,
-  and it sandboxes the cache and the config directory. `doctest_optionflags`
-  gains `NORMALIZE_WHITESPACE` and `ELLIPSIS`. `TESTING.md` says how to run
-  it.
-- **Result.** 476 passed, 88 skipped, 0 failed, where the baseline was 133
-  passed, 59 failed, 35 skipped. With `PROVESID_DATA_DIR` pointing at an
-  empty directory: 290 passed, 274 skipped, nothing downloaded.
+  it sandboxes the cache and the config directory, and it refuses every
+  outbound connection so that an example needing the network has to say so
+  (§28.6). `doctest_optionflags` gains `NORMALIZE_WHITESPACE` and `ELLIPSIS`.
+  `TESTING.md` says how to run it, and how to lift the block
+  (`PROVESID_DOCTEST_ALLOW_NETWORK=1`) to re-record an online output.
+- **Result.** 477 passed, 87 skipped, 0 failed, with the network refused,
+  where the baseline was 133 passed, 59 failed, 35 skipped. With
+  `PROVESID_DATA_DIR` pointing at an empty directory: 281 passed, 283
+  skipped, nothing downloaded --- the directory gains one empty `chebifier/`
+  from a classifier that is constructed but never run. A skipped item is a
+  docstring every one of whose examples is `+SKIP`, not a docstring without
+  examples.
 - **Outputs are real.** Offline outputs come from the installed databases.
   Online ones were recorded against the live services on 2026-09-22 and
   marked `+SKIP`. CAS Common Chemistry is the exception, see §28.4.
@@ -3730,4 +3736,37 @@ since February 2023 (step 7 is still postponed).
 - `ClassyFireAPI.query_status` is cached, so polling with the cache on sees
   the first answer forever (documented, not changed).
 - The online examples are skipped by design, so they will drift as the
-  services change; re-record them before a release.
+  services change; re-record them before a release
+  (`PROVESID_DOCTEST_ALLOW_NETWORK=1`, and read the diff: a service that has
+  changed its answer is the point of the exercise).
+
+### 28.6 Three examples were asking live services
+
+Re-running the step's own verification with outbound connections refused
+turned up three examples that reached the network without
+`# doctest: +SKIP`: `PubChemAPI.get_properties_for_cids`,
+`PubChemAPI.get_compound_properties_batch` and `ChEBI.get_compound`. They
+passed when they were written because PubChem and ChEBI were up; PubChem
+answered 503 on the re-run and two of them failed, which is how they were
+found. `ChEBI.get_compound`'s example also asserted nothing --- it bound
+`water` and stopped --- so it could only ever fail by raising.
+
+All three are marked now, with output recorded live on 2026-09-22
+(`get_properties_for_cids` and the ChEBI record were re-checked against the
+services the same day), and `ChEBI.get_compound` asserts the name and
+accession it gets back. The block in `src/conftest.py` is what keeps the
+fourth one from happening: an unmarked example now fails with a message
+naming the host it asked, rather than passing whenever the service is up.
+
+The block also settles what the remaining 87 skips are for: downloads, index
+builds and other mutations; the provenance and cross-reference tables, which
+the Zenodo copy of `pubchem_id.db` does not carry; CompTox's exact name
+searches, which build a ~20 s index on a machine that has never run one; and
+the online services. Three markers did not belong there and are gone:
+`pubchem_id`'s module example (`cas_to_cid("50-78-2")`), `sqlite_client`'s
+module examples --- the context manager and the eight-thread pool the module
+is about, both of which now run --- and `CompToxID`'s class example, which
+asserted nothing and now checks the DTXSID it gets back. `sqlite_client`
+joins the dataset map in `src/conftest.py` for the same reason the others
+are in it: without the PubChem database its examples would ask for a
+download.

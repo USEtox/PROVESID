@@ -46,11 +46,20 @@ python -m pytest --doctest-modules src/provesid
 ```
 
 The ordinary run above never collects them. Examples that need the network
-are marked `# doctest: +SKIP`. Examples that read an offline database run
-against the installed copy; a module whose database is not installed is
-skipped, never downloaded (`src/conftest.py`). The outputs shown were taken
-from the databases as installed on the day they were written, so a later
-release can change a count or an ordering without anything being wrong.
+are marked `# doctest: +SKIP`, and the run enforces it: `src/conftest.py`
+refuses every outbound connection, so an example that forgets the marker
+fails instead of quietly asking a live service. To re-record an online
+example's output, lift the block for that run:
+
+```bash
+PROVESID_DOCTEST_ALLOW_NETWORK=1 python -m pytest --doctest-modules src/provesid
+```
+
+Examples that read an offline database run against the installed copy; a
+module whose database is not installed is skipped, never downloaded
+(`src/conftest.py` again). The outputs shown were taken from the databases as
+installed on the day they were written, so a later release can change a count
+or an ordering without anything being wrong.
 
 ## Test Categories
 

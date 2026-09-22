@@ -331,7 +331,9 @@ class ChEBI:
 
         Examples:
             >>> chebi = ChEBI()
-            >>> water = chebi.get_compound(15377)
+            >>> water = chebi.get_compound(15377)              # doctest: +SKIP
+            >>> water['name'], water['chebi_accession']        # doctest: +SKIP
+            ('water', 'CHEBI:15377')
         """
         chebi_id_str = self._format_chebi_id(chebi_id)
         params: Dict[str, Any] = {}

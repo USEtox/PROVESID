@@ -1272,9 +1272,9 @@ class PubChemAPI:
 
         Examples:
             >>> api = PubChemAPI()
-            >>> rows = api.get_properties_for_cids([2244, 702],
-            ...                                    ['MolecularFormula', 'MolecularWeight'])
-            >>> {row['CID']: row['MolecularFormula'] for row in rows}
+            >>> rows = api.get_properties_for_cids(          # doctest: +SKIP
+            ...     [2244, 702], ['MolecularFormula', 'MolecularWeight'])
+            >>> {row['CID']: row['MolecularFormula'] for row in rows}   # doctest: +SKIP
             {2244: 'C9H8O4', 702: 'C2H6O'}
         """
         if not properties:
@@ -1330,8 +1330,9 @@ class PubChemAPI:
 
         Examples:
             >>> api = PubChemAPI()
-            >>> rows = api.get_compound_properties_batch([2244, 702], ['MolecularFormula'])
-            >>> for row in rows:
+            >>> rows = api.get_compound_properties_batch(    # doctest: +SKIP
+            ...     [2244, 702], ['MolecularFormula'])
+            >>> for row in rows:                             # doctest: +SKIP
             ...     print(row['cid'], row.get('MolecularFormula'))
             2244 C9H8O4
             702 C2H6O

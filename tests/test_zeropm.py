@@ -767,6 +767,22 @@ class TestZeroPMAdvancedSearchMethods:
         else:
             pytest.skip("No chemical names found in database")
     
+    def test_query_name_regex_case_sensitive_distinguishes_case(self, zpm):
+        """``case_sensitive=True`` used to go through LIKE, which ignores case."""
+        insensitive = [name for _, name in
+                       zpm.query_name_regex("formaldehyde", limit=10)]
+        sensitive = [name for _, name in
+                     zpm.query_name_regex("formaldehyde", case_sensitive=True, limit=10)]
+        assert "Formaldehyde" in insensitive
+        assert sensitive == ["formaldehyde"]
+
+    def test_query_name_regex_case_sensitive_wildcards(self, zpm):
+        """``.*`` and ``.`` are wildcards in both modes."""
+        names = [name for _, name in
+                 zpm.query_name_regex("Formaldehyd..*", case_sensitive=True, limit=50)]
+        assert "Formaldehyde" in names
+        assert all(name.startswith("Formaldehyd") for name in names)
+
     def test_query_name_regex_no_match(self, zpm):
         """Test regex name search with no matches"""
         pattern = "%xyzabc123nonexistent%"
@@ -1806,6 +1822,12 @@ class TestZeroPMv004Features:
 
     def test_zeropm_id_to_inchi_id_unknown_id(self, zpm):
         assert zpm.zeropm_id_to_inchi_id(999999999) is None
+
+    def test_id_table_from_zeropm_id_has_no_repeated_rows(self, zpm):
+        """api_results repeats (query, structure, rank); the table must not."""
+        table = zpm.get_id_table_from_zeropm_id(3224)  # formaldehyde
+        assert not table.duplicated(["query_id", "rank"]).any()
+        assert set(table[table["rank"] == 1]["cas"]) == {"50-00-0", "30525-89-4"}
 
     def test_batch_get_pm_probabilities_with_cas(self, zpm):
         """Test batch getting P/M probabilities from CAS list"""

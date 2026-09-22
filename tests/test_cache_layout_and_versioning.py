@@ -311,6 +311,29 @@ def test_a_cached_none_survives_an_export_import_round_trip(tmp_path):
 
 
 @pytest.mark.unit
+def test_entries_written_by_an_earlier_process_are_counted_and_exported(tmp_path):
+    """
+    metadata.json is flushed every hundred writes, so a process that made two
+    never recorded them. Export used to walk the metadata and so returned
+    True with nothing in it; the files on disk are the record.
+    """
+    cache_dir = str(tmp_path / "cache")
+    writer = CacheManager(cache_dir=cache_dir, service_name="rt")
+    writer.set("f", (1,), {}, "one")
+    writer.set("f", (2,), {}, "two")
+
+    later = CacheManager(cache_dir=cache_dir, service_name="rt")
+    assert later.get_cache_info()["disk_entries"] == 2
+
+    export_file = tmp_path / "export.pkl"
+    assert later.export_cache(str(export_file))
+    target = CacheManager(cache_dir=str(tmp_path / "dst"), service_name="rt")
+    assert target.import_cache(str(export_file))
+    assert target.get("f", (1,), {}) == (True, "one")
+    assert target.get("f", (2,), {}) == (True, "two")
+
+
+@pytest.mark.unit
 def test_the_new_cache_api_is_exported():
     for name in ('CACHE_SERVICES', 'CACHE_KEY_VERSION', 'clear_cache',
                  'get_cache_info', 'get_all_cache_info', 'get_cache_size',

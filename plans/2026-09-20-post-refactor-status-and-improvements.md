@@ -453,7 +453,7 @@ Steps are independently committable and leave the suite green.
 | 12 | ~~split `pubchem.py` → `+ pubchem_id.py`; `chebi.py` → `+ chebi_sdf.py`~~ **done, §21** | 4.12 | M |
 | 13 | ~~`sources.py`; collapse the `Search` ladders~~ **done, §22** | 4.5 | M |
 | 14 | ~~`Search(online_fallback=...)` as a row in the source table~~ **done, §23** | 4.4 | M |
-| 15 | `Search.PRESETS` | 4.6 | S |
+| 15 | ~~`Search.PRESETS`~~ **done, §24** | 4.6 | S |
 | 16 | circuit breaker on the shared `RateLimiter` | 4.12 | M |
 | 17 | docstrings with examples, module by module | 4.12 | L |
 | 18 | rebuild `docs/`; delete `docs/examples/`; drop `docs/plans/` from the nav | 4.9 | M |
@@ -3166,3 +3166,134 @@ commit with its own equivalence check, so it was kept out of this one.
   throttled, `RateLimiter` should fail its requests at once, with one
   message.
 - §4.13 and §22.6 are unchanged.
+
+---
+
+## 24. Landed on 2026-09-22 — step 15, `Search.PRESETS` (§4.6)
+
+§4.6 as proposed. `balanced`, `strict` and `recall` are dicts of constructor
+arguments. Explicit arguments override them, and each result frame records
+which one it ran under.
+
+### 24.1 What landed
+
+- `Search.PRESETS`, a class attribute with three entries over the same
+  thirteen keys: `fuzzy`, `fuzzy_score_cutoff`, `fuzzy_scorer`,
+  `inchikey_skeleton`, `similarity_threshold`, `use_zeropm`,
+  `top_k_per_source`, `cluster_by_skeleton`, `consensus_compat_threshold`,
+  `query_weight`, `n_hits`, `min_confidence`, `min_source_support`. These are
+  the arguments that decide what counts as a match and what is returned.
+
+  | preset | differs from `balanced` in |
+  |---|---|
+  | `balanced` | nothing; it holds the constructor defaults |
+  | `strict` | `min_source_support=2` |
+  | `recall` | `fuzzy`, `inchikey_skeleton`, `similarity_threshold=0.7`, `use_zeropm`, `n_hits="all"` |
+
+- `Search(..., preset="balanced")`. The thirteen arguments now default to
+  `None`, meaning "take the preset's value", which is the convention
+  `search()` already used for its per-call overrides. With the old literal
+  defaults, `preset="recall", fuzzy=False` would have been
+  indistinguishable from not passing `fuzzy`. The thirteen defaults are now
+  written only in `PRESETS["balanced"]`, and each docstring entry says
+  "Balanced: X".
+- `Search.settings`, a property giving the values in force, keyed as
+  `PRESETS`, and `Search.preset`.
+- `df.attrs["preset"]` and `df.attrs["settings"]` on every `search()` and
+  `enrich()` frame. `settings` includes that call's `n_hits`,
+  `min_confidence` and `min_source_support`, so it describes the call and
+  not just the instance. The four existing provenance entries now come from
+  one `_provenance()` helper. `enrich` still reads them from the instance,
+  not from `results.attrs` (§23.4).
+- Left out of the presets on purpose: `online_fallback` (a preset should not
+  open a socket), `use_opsin` (needs Java), `strip_salts` and
+  `return_alternatives` (they change output columns, not what matches),
+  `datasets` and the client arguments.
+- `examples/search/presets_demo.py`; a "Presets" section and the two new
+  members in `docs/api/search.md`.
+
+### 24.2 Measured on the installed databases
+
+200 queries per sample, drawn by `rowid` stride from CompTox (whose
+structure is the truth), and scored by InChIKey skeleton as in
+`test_search_precision_regression.py`. `n_hits=1` for every preset,
+recall included, so each gets one answer to be judged. Synonyms come from
+the test's `_pick_synonym`. Typos are the preferred name with one interior
+character deleted (seed 0).
+
+| sample | preset | correct | wrong | not found | time |
+|---|---|---:|---:|---:|---:|
+| CAS | balanced | 200 | 0 | 0 | 0.5 s |
+| | strict | 199 | 0 | 1 | 0.5 s |
+| | recall | 200 | 0 | 0 | 7.7 s |
+| synonym | balanced | 28 | 1 | 171 | 36 s |
+| | strict | 2 | 0 | 198 | 35 s |
+| | recall | 197 | 3 | 0 | 628 s |
+| typo | balanced | 0 | 3 | 197 | 33 s |
+| | strict | 0 | 1 | 199 | 33 s |
+| | recall | 39 | 60 | 101 | 730 s |
+
+What this says about the presets:
+
+- On CAS numbers all three are right, and strict costs one answer in 200:
+  a structure only one database holds.
+- `strict` does what it says. Its answers are never wrong in these samples,
+  and on names it answers almost nothing. Most of these synonyms are known
+  to one database only.
+- `recall`'s top hit on a typo is wrong 60 times in 99. That is why
+  `recall` returns `n_hits="all"` and its docstring says to read
+  `confidence` and `n_source_support`: it finds candidates for review, not
+  answers. It is also 20× slower than balanced on names.
+
+### 24.3 Found while measuring: CompTox's exact name lookup ignores its synonyms
+
+Ablating the synonym row shows the gain is fuzzy widening's alone:
+`balanced + use_zeropm` scores 31 correct, while `balanced + fuzzy` scores
+197 correct, 2 wrong and 1 not found in 607 s. The queries are not typos.
+They are names like `Acetaldoxime` and `2,3-dimethylvaleraldehyde` that
+CompTox holds verbatim. `CompToxID.search_by_name(exact=True)` and
+`get_by_name` compare against `PREFERRED_NAME` only
+(`comptox.py:429`, `:372`). The synonyms sit in the pipe-separated
+`IDENTIFIER` column, and only the `LIKE '%…%'` path reads it. That path is
+a full-table scan at about 3 s a query. So balanced and strict miss about
+85 % of CompTox synonyms, and fuzzy finds them slowly by substring.
+
+The fix is a synonym table built with the CompTox database, one row per
+`(name, DTXSID)` and indexed, as §12 did for ChEMBL. The exact `name` cell
+in `sources.py` would then consult it. That changes offline output and
+needs its own equivalence check, so it is not part of this step. The
+sample also flatters the fix, because every synonym was drawn from
+CompTox.
+
+### 24.4 Validation
+
+- `tests/test_search_presets.py`: 18 tests, no database opened. They cover
+  the table's shape; every key being a constructor argument that defaults
+  to `None`; balanced equalling a bare `Search()`; strict differing from
+  balanced in one key; each preset reproduced by `settings`; explicit
+  overrides, including one equal to the balanced value; unknown presets and
+  scorers refused; `PRESETS` not aliased by an instance; strict dropping an
+  uncorroborated hit that balanced keeps; and `attrs` recording per-call
+  settings in `search` and `enrich`.
+- The eight existing `Search` files plus `test_sources.py`: 394 passed,
+  unchanged by the new `None` defaults.
+- `pytest tests/`: **1456 passed, 34 skipped, 0 failed** (7 min 17 s), which
+  is §23.4's 1438 plus the 18 new tests.
+- The `settings` doctest passes. `ruff check --select F,E9` is clean, and
+  `mkdocs build --strict` is clean with `PRESETS` and `settings` rendered.
+- `examples/search/presets_demo.py` ran end to end on the installed data.
+  Recall resolves the typo `atrazin` to atrazine (4 sources, 0.77); balanced
+  and strict leave it unresolved.
+
+### 24.5 Still open
+
+- §24.3, the CompTox synonym index. It is the largest recall gap measured
+  so far on names, and it affects the default preset.
+- §19.8's descriptor columns were marked "with step 15's presets". They
+  are not a preset matter: they add output columns and change no matching
+  setting. They belong with `strip_salts` and `return_alternatives`, as an
+  output option.
+- Presets name policies, but the three were chosen by reasoning, and §24.2
+  measured them afterwards. No sample has yet tested whether, for example,
+  `cluster_by_skeleton=False` belongs in `strict`.
+- §23.5, §4.13 and §22.6 are unchanged.

@@ -398,11 +398,17 @@ class Search:
       ~6.5 GiB installed, and none of them is fetched on your behalf.  ``Search`` uses what is installed and
       reports the rest (``datasets="present"``, the default); install them
       deliberately with :func:`provesid.datasets.fetch`.
+    - **Presets**: ``preset="balanced"`` (the default), ``"strict"`` or
+      ``"recall"`` name a whole matching policy in one word; see
+      :attr:`PRESETS`.
     - **Online fallback** (opt-in, ``online_fallback=True``): a query no
       offline source answers is retried against PubChem PUG-REST and CACTUS.
 
     Attributes:
         identifier_type (str): Input identifier type used for all queries.
+        preset (str): The :attr:`PRESETS` entry the instance started from.
+        settings (dict): The matching and output settings in force, keyed as
+            :attr:`PRESETS`; explicit constructor arguments applied.
         strip_salts (bool): Strip salts/solvents and report parent molecule.
         fuzzy (bool): Enable fuzzy name matching via rapidfuzz.
         similarity_threshold (float): Minimum Tanimoto similarity for
@@ -445,6 +451,13 @@ class Search:
         df = s.search(["50-00-0", "64-17-5"])
         print(df[["CASRN", "name", "canonical_smiles", "confidence"]])
 
+        # Named settings: "strict" returns only what two databases agree on,
+        # "recall" widens every way it can.  Explicit arguments still win.
+        Search.PRESETS["strict"]
+        df = Search("name", preset="strict").search("atrazine")
+        df = Search("name", preset="recall", n_hits=5).search("atrazin")
+        df.attrs["preset"], df.attrs["settings"]
+
         s_fuzzy = Search("name", fuzzy=True)
         df = s_fuzzy.search(["asprin", "paracetamol"])
 
@@ -485,6 +498,48 @@ class Search:
          "token_set_ratio", "QRatio"]
     )
 
+    #: Named settings for the arguments that decide what counts as a match
+    #: and what is returned.  ``Search(..., preset=name)`` starts from one of
+    #: these, and any of its keys passed explicitly overrides the preset's
+    #: value.  ``"balanced"`` is the default and holds the constructor's
+    #: defaults, so it is also the one place those defaults are written down.
+    #: A preset is a name to cite: "resolved with ``Search('cas',
+    #: preset='strict')``" says everything :attr:`settings` would.
+    PRESETS: Dict[str, Dict[str, Any]] = {
+        "balanced": {
+            "fuzzy": False,
+            "fuzzy_score_cutoff": 80.0,
+            "fuzzy_scorer": "ratio",
+            "inchikey_skeleton": False,
+            "similarity_threshold": 0.0,
+            "use_zeropm": False,
+            "top_k_per_source": 5,
+            "cluster_by_skeleton": True,
+            "consensus_compat_threshold": 0.35,
+            "query_weight": 0.5,
+            "n_hits": 1,
+            "min_confidence": 0.0,
+            "min_source_support": 0,
+        },
+    }
+    # Precision first: only exact matches, and only structures two
+    # independent databases agree on.
+    PRESETS["strict"] = {
+        **PRESETS["balanced"],
+        "min_source_support": 2,
+    }
+    # Recall first: every widening the resolver has, every plausible
+    # compound returned, and ZeroPM back in the pool because it is the only
+    # source that retrieves by fuzzy name (see _candidate_pool_from_name).
+    PRESETS["recall"] = {
+        **PRESETS["balanced"],
+        "fuzzy": True,
+        "inchikey_skeleton": True,
+        "similarity_threshold": 0.7,
+        "use_zeropm": True,
+        "n_hits": "all",
+    }
+
     #: What to do about offline datasets that are not on disk.  ``"present"``
     #: is the default: a laptop should not spend ~32 GB on a first CAS lookup
     #: because a source client happens to default to ``auto_download=True``.
@@ -494,24 +549,25 @@ class Search:
         self,
         identifier_type: str = "cas",
         *,
+        preset: str = "balanced",
         strip_salts: bool = False,
-        fuzzy: bool = False,
-        similarity_threshold: float = 0.0,
-        inchikey_skeleton: bool = False,
+        fuzzy: Optional[bool] = None,
+        similarity_threshold: Optional[float] = None,
+        inchikey_skeleton: Optional[bool] = None,
         show_progress: bool = True,
         salt_smarts: Optional[List[str]] = None,
-        n_hits: Union[int, str] = 1,
-        min_confidence: float = 0.0,
-        min_source_support: int = 0,
+        n_hits: Optional[Union[int, str]] = None,
+        min_confidence: Optional[float] = None,
+        min_source_support: Optional[int] = None,
         use_opsin: bool = False,
         opsin_jar_fpath: str = "default",
-        use_zeropm: bool = False,
-        top_k_per_source: int = 5,
-        cluster_by_skeleton: bool = True,
-        fuzzy_score_cutoff: float = 80.0,
-        fuzzy_scorer: str = "ratio",
-        consensus_compat_threshold: float = 0.35,
-        query_weight: float = 0.5,
+        use_zeropm: Optional[bool] = None,
+        top_k_per_source: Optional[int] = None,
+        cluster_by_skeleton: Optional[bool] = None,
+        fuzzy_score_cutoff: Optional[float] = None,
+        fuzzy_scorer: Optional[str] = None,
+        consensus_compat_threshold: Optional[float] = None,
+        query_weight: Optional[float] = None,
         return_alternatives: bool = False,
         online_fallback: bool = False,
         datasets: str = "present",
@@ -529,38 +585,62 @@ class Search:
             identifier_type: Type of identifier to resolve.  One of ``"cas"``,
                 ``"name"``, ``"smiles"``, ``"inchi"``, ``"inchikey"``,
                 ``"dtxsid"``, ``"formula"``.  Defaults to ``"cas"``.
+            preset: Named starting point for the matching and output
+                settings, one of :attr:`PRESETS`:
+
+                ``"balanced"``
+                    **The default.**  Exact matching only, uncorroborated hits
+                    accepted, one row per query.
+                ``"strict"``
+                    As ``"balanced"``, but a structure is returned only when
+                    at least two independent databases carry it
+                    (``min_source_support=2``).  Fewer answers, fewer wrong
+                    ones.
+                ``"recall"``
+                    Fuzzy names, InChIKey-skeleton and Tanimoto (0.7)
+                    widening, ZeroPM queried, and every plausible compound
+                    returned (``n_hits="all"``).  Read ``confidence`` and
+                    ``n_source_support`` before trusting a row.
+
+                The arguments marked *preset* below default to ``None``, which
+                takes the preset's value; passing one overrides the preset
+                for that argument alone, so ``Search("name",
+                preset="strict", n_hits=3)`` is strict with three hits.  The
+                values in force are :attr:`settings`.
             strip_salts: Strip salt/solvent fragments and populate
                 ``parent_smiles`` / ``parent_inchikey`` columns.
-            fuzzy: Enable fuzzy name matching when an exact name match fails.
-                Requires rapidfuzz.
-            similarity_threshold: Tanimoto similarity threshold in [0, 1].
-                When > 0 a Morgan-fingerprint similarity search is run as a
-                fallback for SMILES queries with no exact match.  0.0 disables
-                the search entirely.
-            inchikey_skeleton: When True, fall back to 14-character InChIKey
-                prefix matching when an exact InChIKey match fails.
+            fuzzy: *Preset.*  Enable fuzzy name matching when an exact name
+                match fails.  Requires rapidfuzz.  Balanced: ``False``.
+            similarity_threshold: *Preset.*  Tanimoto similarity threshold in
+                [0, 1].  When > 0 a Morgan-fingerprint similarity search is run
+                as a fallback for SMILES queries with no exact match.  0.0
+                disables the search entirely.  Balanced: ``0.0``.
+            inchikey_skeleton: *Preset.*  When True, fall back to 14-character
+                InChIKey prefix matching when an exact InChIKey match fails.
+                Balanced: ``False``.
             show_progress: Display a tqdm progress bar during batch queries.
             salt_smarts: Additional SMARTS patterns passed to
                 :func:`strip_salts` when ``strip_salts=True``.
-            n_hits: Default number of ranked hits to return per query.  Either a
-                positive integer or the literal ``"all"``.  Defaults to ``1``
-                (one row per query).  Can be overridden per-call in
-                :meth:`search`.
-            min_confidence: Drop hits whose confidence is below this value
-                before truncating to ``n_hits``.  Defaults to ``0.0``.
-            min_source_support: Minimum number of independent databases that
-                must carry a structure for it to be returned.  ``0`` (the
-                default) accepts uncorroborated hits; ``2`` requires at least
-                two databases to agree, trading recall for precision.  OPSIN-only
-                clusters have no database support and are dropped by any value
-                above ``0``.
+            n_hits: *Preset.*  Default number of ranked hits to return per
+                query.  Either a positive integer or the literal ``"all"``.
+                Balanced: ``1`` (one row per query).  Can be overridden
+                per-call in :meth:`search`.
+            min_confidence: *Preset.*  Drop hits whose confidence is below
+                this value before truncating to ``n_hits``.  Balanced: ``0.0``.
+            min_source_support: *Preset.*  Minimum number of independent
+                databases that must carry a structure for it to be returned.
+                ``0`` (balanced) accepts uncorroborated hits; ``2`` (strict)
+                requires at least two databases to agree, trading recall for
+                precision.  OPSIN-only clusters have no database support and
+                are dropped by any value above ``0``.
             use_opsin: Enable PYOPSIN IUPAC-name → structure anchoring for name
                 queries.  Requires a Java runtime; falls back to plain name
                 matching (with a one-time warning) when unavailable.  Defaults
                 to ``False``.
             opsin_jar_fpath: ``jar_fpath`` passed to :class:`~provesid.PYOPSIN`.
-            use_zeropm: Include the ZeroPM inventory among the queried sources.
-                Defaults to ``False``: ZeroPM aggregates regulatory inventories
+            use_zeropm: *Preset.*  Include the ZeroPM inventory among the
+                queried sources.  Balanced and strict: ``False``; recall:
+                ``True``.  ZeroPM aggregates regulatory inventories
                 instead of curating compounds, so its name→structure rows are
                 noisier than ChEBI/CompTox/PubChem/ChEMBL yet carried the same
                 weight in the corroboration vote.  Set to ``True`` to restore
@@ -569,25 +649,26 @@ class Search:
                 fuzzy *retrieval* (see :meth:`_candidate_pool_from_name`).
                 While ``False``, a ``zeropm`` client passed to the constructor
                 is ignored.
-            top_k_per_source: Number of candidate rows pulled from each source
-                before pooling / clustering.  Defaults to ``5``.
-            cluster_by_skeleton: Merge stereo/charge/isotope variants when
-                clustering candidates by structure (14-char InChIKey skeleton).
-                Defaults to ``True``.
-            fuzzy_score_cutoff: rapidfuzz / ZeroPM fuzzy score cut-off in
-                [0, 100].  Defaults to ``80.0``.
-            fuzzy_scorer: rapidfuzz scorer name; one of ``WRatio``, ``ratio``,
-                ``partial_ratio``, ``token_sort_ratio``, ``token_set_ratio``,
-                ``QRatio``.  Defaults to ``"ratio"``.  Avoid ``WRatio`` and
+            top_k_per_source: *Preset.*  Number of candidate rows pulled from
+                each source before pooling / clustering.  Balanced: ``5``.
+            cluster_by_skeleton: *Preset.*  Merge stereo/charge/isotope
+                variants when clustering candidates by structure (14-char
+                InChIKey skeleton).  Balanced: ``True``.
+            fuzzy_score_cutoff: *Preset.*  rapidfuzz / ZeroPM fuzzy score
+                cut-off in [0, 100].  Balanced: ``80.0``.
+            fuzzy_scorer: *Preset.*  rapidfuzz scorer name; one of ``WRatio``,
+                ``ratio``, ``partial_ratio``, ``token_sort_ratio``,
+                ``token_set_ratio``, ``QRatio``.  Balanced: ``"ratio"``.  Avoid ``WRatio`` and
                 ``partial_ratio``: their partial-ratio term scores a short
                 name highly whenever it appears anywhere inside the query, so
                 ``fuzzy_score_cutoff`` stops discriminating (see
                 :meth:`_name_score`).
-            consensus_compat_threshold: Minimum candidate similarity for a
-                candidate to be merged with the consensus anchor.  Defaults to
-                ``0.35``.
-            query_weight: Weight (in [0, 1]) of the query-agreement term versus
-                the method base in the confidence formula.  Defaults to ``0.5``.
+            consensus_compat_threshold: *Preset.*  Minimum candidate
+                similarity for a candidate to be merged with the consensus
+                anchor.  Balanced: ``0.35``.
+            query_weight: *Preset.*  Weight (in [0, 1]) of the query-agreement
+                term versus the method base in the confidence formula.
+                Balanced: ``0.5``.
             return_alternatives: When ``n_hits == 1``, attach compact runner-up
                 summaries in an ``alternatives`` column.  Defaults to ``False``.
             online_fallback: When True, a query that produced no candidate
@@ -650,7 +731,8 @@ class Search:
 
         Raises:
             ValueError: If ``identifier_type`` is not one of the supported
-                values, or ``datasets`` is not one of
+                values, ``preset`` is not a key of :attr:`PRESETS`, or
+                ``datasets`` is not one of
                 :data:`DATASET_POLICIES`, or ``redownload=True`` was combined
                 with a policy that does not download.
             provesid.datasets.MissingDatasetError: If ``datasets="required"``
@@ -662,32 +744,57 @@ class Search:
                 f"got {identifier_type!r}"
             )
 
+        if preset not in self.PRESETS:
+            raise ValueError(
+                f"preset must be one of {sorted(self.PRESETS)}, got {preset!r}"
+            )
+        # None means "not passed", so the preset supplies it; anything else
+        # was asked for and wins.  No preset key legitimately takes None.
+        explicit = {
+            "fuzzy": fuzzy,
+            "fuzzy_score_cutoff": fuzzy_score_cutoff,
+            "fuzzy_scorer": fuzzy_scorer,
+            "inchikey_skeleton": inchikey_skeleton,
+            "similarity_threshold": similarity_threshold,
+            "use_zeropm": use_zeropm,
+            "top_k_per_source": top_k_per_source,
+            "cluster_by_skeleton": cluster_by_skeleton,
+            "consensus_compat_threshold": consensus_compat_threshold,
+            "query_weight": query_weight,
+            "n_hits": n_hits,
+            "min_confidence": min_confidence,
+            "min_source_support": min_source_support,
+        }
+        chosen = dict(self.PRESETS[preset])
+        chosen.update({k: v for k, v in explicit.items() if v is not None})
+
         self.identifier_type = identifier_type
+        self.preset = preset
         self.strip_salts = strip_salts
-        self.fuzzy = fuzzy
-        self.similarity_threshold = float(similarity_threshold)
-        self.inchikey_skeleton = inchikey_skeleton
+        self.fuzzy = bool(chosen["fuzzy"])
+        self.similarity_threshold = float(chosen["similarity_threshold"])
+        self.inchikey_skeleton = bool(chosen["inchikey_skeleton"])
         self.show_progress = show_progress
         self.salt_smarts: List[str] = list(salt_smarts or [])
 
         # Multi-hit / tuning attributes
-        self.n_hits = self._validate_n_hits(n_hits)
-        self.min_confidence = float(min_confidence)
-        self.min_source_support = max(0, int(min_source_support))
+        self.n_hits = self._validate_n_hits(chosen["n_hits"])
+        self.min_confidence = float(chosen["min_confidence"])
+        self.min_source_support = max(0, int(chosen["min_source_support"]))
         self.use_opsin = bool(use_opsin)
         self.opsin_jar_fpath = opsin_jar_fpath
-        self.use_zeropm = bool(use_zeropm)
-        self.top_k_per_source = max(1, int(top_k_per_source))
-        self.cluster_by_skeleton = bool(cluster_by_skeleton)
-        self.fuzzy_score_cutoff = float(fuzzy_score_cutoff)
-        if fuzzy_scorer not in self._FUZZY_SCORERS:
+        self.use_zeropm = bool(chosen["use_zeropm"])
+        self.top_k_per_source = max(1, int(chosen["top_k_per_source"]))
+        self.cluster_by_skeleton = bool(chosen["cluster_by_skeleton"])
+        self.fuzzy_score_cutoff = float(chosen["fuzzy_score_cutoff"])
+        if chosen["fuzzy_scorer"] not in self._FUZZY_SCORERS:
             raise ValueError(
                 f"fuzzy_scorer must be one of {sorted(self._FUZZY_SCORERS)}, "
-                f"got {fuzzy_scorer!r}"
+                f"got {chosen['fuzzy_scorer']!r}"
             )
-        self.fuzzy_scorer = fuzzy_scorer
-        self.consensus_compat_threshold = float(consensus_compat_threshold)
-        self.query_weight = float(query_weight)
+        self.fuzzy_scorer = chosen["fuzzy_scorer"]
+        self.consensus_compat_threshold = float(chosen["consensus_compat_threshold"])
+        self.query_weight = float(chosen["query_weight"])
         self.return_alternatives = bool(return_alternatives)
         self.online_fallback = bool(online_fallback)
 
@@ -775,6 +882,47 @@ class Search:
         # nothing is downloaded.
         if self.datasets == "required":
             require(self._datasets_needed(), self.data_dir)
+
+    @property
+    def settings(self) -> Dict[str, Any]:
+        """The matching and output settings in force, keyed as :attr:`PRESETS`.
+
+        The preset's values with any explicit constructor argument applied, as
+        this instance will use them.  :meth:`search` records the same dict,
+        with its own per-call overrides applied, in ``df.attrs["settings"]``.
+
+        Returns:
+            A new dict with one entry per key of ``PRESETS["balanced"]``.
+
+        Example::
+
+            >>> s = Search("name", preset="strict", n_hits=3)
+            >>> s.settings["min_source_support"], s.settings["n_hits"]
+            (2, 3)
+            >>> s.settings == Search.PRESETS["strict"]
+            False
+        """
+        return {key: getattr(self, key) for key in self.PRESETS["balanced"]}
+
+    def _provenance(self, **run_overrides: Any) -> Dict[str, Any]:
+        """The ``df.attrs`` entries that say how a result frame was produced.
+
+        Args:
+            **run_overrides: Per-call values of :attr:`settings` keys, as
+                :meth:`search` resolved them.
+
+        Returns:
+            Dict of the preset, the settings in force for the call, the
+            offline sources that backed it and the online-fallback counters.
+        """
+        return {
+            "preset": self.preset,
+            "settings": {**self.settings, **run_overrides},
+            "sources_available": list(self.sources_available),
+            "sources_unavailable": list(self.sources_unavailable),
+            "online_fallbacks": self._online_fallbacks,
+            "online_resolved": self._online_resolved,
+        }
 
     # ── Client lifecycle ──────────────────────────────────────────────────────
 
@@ -1082,6 +1230,11 @@ class Search:
             up to ``n_hits`` ranked rows per query, ordered by descending
             confidence with a ``hit_rank`` column (0 = best).
 
+            ``df.attrs["preset"]`` names the preset the instance was built
+            from and ``df.attrs["settings"]`` holds the settings this call
+            ran with (:attr:`settings` plus this call's ``n_hits``,
+            ``min_confidence`` and ``min_source_support``), so a saved
+            frame says how it was made.
             ``df.attrs["sources_available"]`` and
             ``df.attrs["sources_unavailable"]`` record which offline sources
             backed the run (see :attr:`sources_available`).  With
@@ -1164,10 +1317,11 @@ class Search:
 
         # Which sources backed this frame — a run degraded by a missing source
         # should not look like a full run afterwards.
-        result_df.attrs["sources_available"] = list(self.sources_available)
-        result_df.attrs["sources_unavailable"] = list(self.sources_unavailable)
-        result_df.attrs["online_fallbacks"] = self._online_fallbacks
-        result_df.attrs["online_resolved"] = self._online_resolved
+        result_df.attrs.update(self._provenance(
+            n_hits=effective_n_hits,
+            min_confidence=effective_min_conf,
+            min_source_support=effective_min_support,
+        ))
 
         return result_df
 
@@ -1209,7 +1363,7 @@ class Search:
             When ``n_hits`` yields more than one row per query the index is a
             fresh ``RangeIndex``, since rows no longer correspond one-to-one.
             ``df.attrs`` carries the same provenance :meth:`search` records:
-            which offline sources backed the run and, with
+            the preset and settings, which offline sources backed the run and, with
             ``online_fallback=True``, how many queries went online.
 
         Raises:
@@ -1272,10 +1426,10 @@ class Search:
             out.index = df.index
 
         # Carry the source provenance of the underlying search (merge drops attrs).
-        out.attrs["sources_available"] = list(self.sources_available)
-        out.attrs["sources_unavailable"] = list(self.sources_unavailable)
-        out.attrs["online_fallbacks"] = self._online_fallbacks
-        out.attrs["online_resolved"] = self._online_resolved
+        # Read from the instance, not results.attrs, which a stubbed search()
+        # need not set.
+        run_overrides = {} if n_hits is None else {"n_hits": self._validate_n_hits(n_hits)}
+        out.attrs.update(self._provenance(**run_overrides))
         return out
 
     # ── Input normalisation ───────────────────────────────────────────────────

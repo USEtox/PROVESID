@@ -54,12 +54,35 @@ df.attrs["online_resolved"]   # how many of those came back with an answer
 Each service counts as one vote in `n_source_support`, the same as a database.
 A service that fails is logged and left out, and formula queries are never sent.
 
+### Presets
+
+The arguments that decide what counts as a match and what is returned have
+three named settings, `Search.PRESETS`:
+
+| preset | what changes from `balanced` | for |
+|---|---|---|
+| `"balanced"` | nothing: the constructor's defaults | general use |
+| `"strict"` | `min_source_support=2` | tables where a wrong structure costs more than a missing one |
+| `"recall"` | `fuzzy`, `inchikey_skeleton`, `similarity_threshold=0.7`, `use_zeropm`, `n_hits="all"` | finding candidates to review by hand |
+
+```python
+Search.PRESETS["strict"]                          # a plain dict: inspect it
+Search("name", preset="strict").search("atrazine")
+Search("name", preset="recall", n_hits=3)         # explicit arguments win
+df.attrs["preset"], df.attrs["settings"]          # what produced this frame
+```
+
+An argument passed explicitly overrides the preset, even when it equals the
+`balanced` value: `preset="recall", use_zeropm=False` leaves ZeroPM out.
+
 ::: provesid.search.Search
     options:
       show_source: false
       show_bases: false
       members:
         - __init__
+        - PRESETS
+        - settings
         - search
 
 ---

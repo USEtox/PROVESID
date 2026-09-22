@@ -6,7 +6,7 @@ structures, and properties. ChEMBL is a manually curated database of bioactive m
 with drug-like properties maintained by EMBL-EBI.
 
 Database tables accessed:
-- molecule_dictionary: Primary compound information (ChEMBL ID, names, max_phase, drug 
+- molecule_dictionary: Primary compound information (ChEMBL ID, names, max_phase, drug
                        classifications, approval status, administration routes)
 - molecule_hierarchy: Parent-salt-metabolite relationships for compounds and pro-drugs
 - compound_structures: Chemical structures (SMILES, InChI, InChIKey)
@@ -54,7 +54,18 @@ from .utils import user_dataset_path
 
 
 class ChEMBLError(Exception):
-    """Custom exception for ChEMBL database errors"""
+    """
+    Custom exception for ChEMBL database errors.
+
+    Raised for a database that is missing and may not be fetched, or that
+    cannot be built or verified.
+
+    Example:
+        >>> CheMBL.compact(CheMBL().db_path)     # the installed file is an extract
+        Traceback (most recent call last):
+        ...
+        provesid.chembl.ChEMBLError: ... is already a PROVESID extract; nothing to compact. ...
+    """
     pass
 
 
@@ -80,11 +91,11 @@ class _CountingReader:
 class CheMBL(SQLiteClient):
     """
     Interface to the ChEMBL SQLite database for chemical compound queries.
-    
+
     The ChEMBL database contains manually curated bioactive compounds with drug-like
     properties. This class provides methods to search compounds by various identifiers
     and retrieve structural and property information.
-    
+
     Parameters
     ----------
     db_name : str, optional
@@ -132,16 +143,14 @@ class CheMBL(SQLiteClient):
 
     Examples
     --------
-    >>> with CheMBL() as chembl:                 # doctest: +SKIP
-    ...     compound = chembl.search_by_chembl_id('CHEMBL25')
-    >>> chembl = CheMBL()
-    >>> compound = chembl.search_by_chembl_id('CHEMBL25')  # Aspirin
-    >>> print(compound['pref_name'])
-    'ASPIRIN'
-    >>> props = chembl.get_properties(compound['molregno'])
+    >>> with CheMBL() as chembl:
+    ...     compound = chembl.search_by_chembl_id('CHEMBL25')  # Aspirin
+    ...     props = chembl.get_properties(compound['molregno'])
+    >>> compound['pref_name'], compound['molregno']
+    ('ASPIRIN', 1280)
     >>> print(f"MW: {props['mw_freebase']}")
     MW: 180.16
-    
+
     Notes
     -----
     The database is large and grows with every release: ChEMBL 37 is ~5.8 GB
@@ -298,7 +307,7 @@ class CheMBL(SQLiteClient):
     ):
         """
         Initialize ChEMBL database interface.
-        
+
         Parameters
         ----------
         db_name : str, optional
@@ -791,12 +800,13 @@ class CheMBL(SQLiteClient):
 
         Examples
         --------
-        Shrink whatever release is already on disk, then reclaim the space::
+        Shrink whatever release is already on disk, then reclaim the space:
 
-            from provesid import CheMBL
-
-            path = CheMBL.compact(remove_source=True)
-            print(path)   # .../chembl_37_provesid.db
+        >>> path = CheMBL.compact(remove_source=True)            # doctest: +SKIP
+        >>> path                                                  # doctest: +SKIP
+        '/home/me/.local/share/provesid/chembl_36_provesid.db'
+        >>> CheMBL.compact_path_for("/data/chembl_37.db")
+        '/data/chembl_37_provesid.db'
 
         A later ``CheMBL()`` picks up the extract automatically, because
         :meth:`_find_local_database` prefers it over a full release of the same
@@ -1352,13 +1362,11 @@ class CheMBL(SQLiteClient):
 
         Examples
         --------
-        With a dump downloaded by hand::
+        With a dump downloaded by hand:
 
-            from provesid import CheMBL
-
-            path = CheMBL.build_from_mysql_dump("chembl_37_mysql.tar.gz",
-                                                remove_source=True)
-            chembl = CheMBL(db_path=path)
+        >>> path = CheMBL.build_from_mysql_dump("chembl_37_mysql.tar.gz",
+        ...                                     remove_source=True)   # doctest: +SKIP
+        >>> chembl = CheMBL(db_path=path)                            # doctest: +SKIP
 
         ``CheMBL(source="mysql")`` downloads the dump and calls this.
 
@@ -1692,7 +1700,7 @@ class CheMBL(SQLiteClient):
     def download_database(self, url: Optional[str] = None, force: bool = False):
         """
         Download and extract ChEMBL SQLite database from EMBL-EBI FTP.
-        
+
         Downloads the compressed tar.gz archive (~5.8 GB for release 37), extracts
         the SQLite database (~27.7 GiB), and validates its integrity by querying
         the molecule_dictionary table.
@@ -1713,7 +1721,7 @@ class CheMBL(SQLiteClient):
         matters more here than anywhere else in the package: this is the
         largest single download PROVESID makes, and it used to start again from
         zero.
-        
+
         Parameters
         ----------
         url : str, optional
@@ -1721,7 +1729,7 @@ class CheMBL(SQLiteClient):
             was never set — the release resolved from the EBI ``latest/`` listing.
         force : bool, optional
             If True, re-download even if database exists (default: False)
-        
+
         Raises
         ------
         ChEMBLError
@@ -1733,7 +1741,7 @@ class CheMBL(SQLiteClient):
         the full release is in place by then and answers every query, so the
         failure costs disk rather than function.  It is logged as a warning
         naming :meth:`compact`, and ``db_path`` stays on the full release.
-        
+
         Examples
         --------
         >>> chembl = CheMBL(auto_download=False)      # doctest: +SKIP
@@ -1968,27 +1976,27 @@ class CheMBL(SQLiteClient):
         if row is None:
             return None
         return dict(zip(row.keys(), row))
-    
+
     def chembl_id_to_molregno(self, chembl_id: str) -> Optional[int]:
         """
         Convert ChEMBL ID to internal molregno identifier.
-        
+
         Parameters
         ----------
         chembl_id : str
             ChEMBL identifier (e.g., 'CHEMBL25')
-        
+
         Returns
         -------
         int or None
             Internal molregno ID, or None if not found
-        
+
         Examples
         --------
         >>> chembl = CheMBL()
         >>> molregno = chembl.chembl_id_to_molregno('CHEMBL25')
         >>> print(molregno)
-        15
+        1280
         """
         try:
             self.cursor.execute(
@@ -2000,27 +2008,27 @@ class CheMBL(SQLiteClient):
         except sqlite3.Error as e:
             self.logger.error(f"Database error in chembl_id_to_molregno: {str(e)}")
             return None
-    
+
     def molregno_to_chembl_id(self, molregno: int) -> Optional[str]:
         """
         Convert internal molregno to ChEMBL ID.
-        
+
         Parameters
         ----------
         molregno : int
             Internal molecule registry number
-        
+
         Returns
         -------
         str or None
             ChEMBL identifier, or None if not found
-        
+
         Examples
         --------
         >>> chembl = CheMBL()
-        >>> chembl_id = chembl.molregno_to_chembl_id(15)
+        >>> chembl_id = chembl.molregno_to_chembl_id(1280)
         >>> print(chembl_id)
-        'CHEMBL25'
+        CHEMBL25
         """
         try:
             self.cursor.execute(
@@ -2032,33 +2040,33 @@ class CheMBL(SQLiteClient):
         except sqlite3.Error as e:
             self.logger.error(f"Database error in molregno_to_chembl_id: {str(e)}")
             return None
-    
+
     def search_by_chembl_id(self, chembl_id: str) -> Optional[Dict[str, Any]]:
         """
         Search for compound by ChEMBL ID.
-        
+
         Parameters
         ----------
         chembl_id : str
             ChEMBL identifier (e.g., 'CHEMBL25' for aspirin)
-        
+
         Returns
         -------
         dict or None
             Compound information including structure, or None if not found
-        
+
         Examples
         --------
         >>> chembl = CheMBL()
         >>> aspirin = chembl.search_by_chembl_id('CHEMBL25')
         >>> print(aspirin['pref_name'])
-        'ASPIRIN'
+        ASPIRIN
         """
         molregno = self.chembl_id_to_molregno(chembl_id)
         if molregno is None:
             return None
         return self.get_compound(molregno)
-    
+
     def search_by_name(
         self, name: str, limit: int = 100, exact: bool = False
     ) -> List[Dict[str, Any]]:
@@ -2171,24 +2179,24 @@ class CheMBL(SQLiteClient):
     def search_by_inchi(self, inchi: str) -> Optional[Dict[str, Any]]:
         """
         Search for compound by Standard InChI.
-        
+
         Parameters
         ----------
         inchi : str
             Standard InChI string
-        
+
         Returns
         -------
         dict or None
             Compound information, or None if not found
-        
+
         Examples
         --------
         >>> chembl = CheMBL()
         >>> inchi = 'InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)'
         >>> compound = chembl.search_by_inchi(inchi)
         >>> print(compound['chembl_id'])
-        'CHEMBL25'
+        CHEMBL25
         """
         try:
             self.cursor.execute(
@@ -2202,27 +2210,27 @@ class CheMBL(SQLiteClient):
         except sqlite3.Error as e:
             self.logger.error(f"Database error in search_by_inchi: {str(e)}")
             return None
-    
+
     def search_by_inchikey(self, inchikey: str) -> Optional[Dict[str, Any]]:
         """
         Search for compound by Standard InChI Key.
-        
+
         Parameters
         ----------
         inchikey : str
             Standard InChI Key (e.g., 'BSYNRYMUTXBXSQ-UHFFFAOYSA-N')
-        
+
         Returns
         -------
         dict or None
             Compound information, or None if not found
-        
+
         Examples
         --------
         >>> chembl = CheMBL()
         >>> compound = chembl.search_by_inchikey('BSYNRYMUTXBXSQ-UHFFFAOYSA-N')
         >>> print(compound['pref_name'])
-        'ASPIRIN'
+        ASPIRIN
         """
         try:
             self.cursor.execute(
@@ -2236,30 +2244,30 @@ class CheMBL(SQLiteClient):
         except sqlite3.Error as e:
             self.logger.error(f"Database error in search_by_inchikey: {str(e)}")
             return None
-    
+
     def search_by_smiles(self, smiles: str) -> Optional[Dict[str, Any]]:
         """
         Search for compound by canonical SMILES.
-        
+
         Note: This performs exact string matching. For similarity searches,
         consider using RDKit or other cheminformatics tools.
-        
+
         Parameters
         ----------
         smiles : str
             Canonical SMILES string
-        
+
         Returns
         -------
         dict or None
             Compound information, or None if not found
-        
+
         Examples
         --------
         >>> chembl = CheMBL()
         >>> compound = chembl.search_by_smiles('CC(=O)Oc1ccccc1C(=O)O')
         >>> print(compound['chembl_id'])
-        'CHEMBL25'
+        CHEMBL25
         """
         try:
             self.cursor.execute(
@@ -2273,18 +2281,18 @@ class CheMBL(SQLiteClient):
         except sqlite3.Error as e:
             self.logger.error(f"Database error in search_by_smiles: {str(e)}")
             return None
-    
+
     def get_compound(self, molregno: int) -> Optional[Dict[str, Any]]:
         """
         Get complete compound information by internal molregno.
-        
+
         Retrieves data from molecule_dictionary, compound_structures, and molecule_synonyms tables.
-        
+
         Parameters
         ----------
         molregno : int
             Internal molecule registry number
-        
+
         Returns
         -------
         dict or None
@@ -2300,21 +2308,21 @@ class CheMBL(SQLiteClient):
             database on its own, nothing in PROVESID consumed it, and it is
             absent from the extract :meth:`compact` builds.  Build a MOL block
             from ``canonical_smiles`` with RDKit when you need one.
-        
+
         Examples
         --------
         >>> chembl = CheMBL()
-        >>> compound = chembl.get_compound(15)
+        >>> compound = chembl.get_compound(1280)   # molregno of CHEMBL25
         >>> print(compound['pref_name'])
-        'ASPIRIN'
+        ASPIRIN
         >>> print(compound['canonical_smiles'])
-        'CC(=O)Oc1ccccc1C(=O)O'
-        >>> print(compound.get("synonyms", [])[:3])
-        ['Acetylsalicylic acid', 'Aspirin', '2-Acetoxybenzoic acid']
+        CC(=O)Oc1ccccc1C(=O)O
+        >>> print(compound.get("synonyms", [])[:2])
+        ['Acetylsalicylic acid', 'Aspirin']
         """
         try:
             query = """
-            SELECT 
+            SELECT
                 md.molregno,
                 md.chembl_id,
                 md.pref_name,
@@ -2330,12 +2338,12 @@ class CheMBL(SQLiteClient):
             """
             self.cursor.execute(query, (molregno,))
             result = self.cursor.fetchone()
-            
+
             if not result:
                 return None
-            
+
             compound = self._row_to_dict(result)
-            
+
             # Get synonyms
             synonym_query = """
             SELECT synonyms, syn_type
@@ -2345,24 +2353,24 @@ class CheMBL(SQLiteClient):
             """
             self.cursor.execute(synonym_query, (molregno,))
             synonym_results = self.cursor.fetchall()
-            
+
             # Add synonyms as a list to the compound dictionary
             compound['synonyms'] = [row[0] for row in synonym_results] if synonym_results else []
-            
+
             return compound
         except sqlite3.Error as e:
             self.logger.error(f"Database error in get_compound: {str(e)}")
             return None
-    
+
     def get_properties(self, molregno: int) -> Optional[Dict[str, Any]]:
         """
         Get physicochemical properties for a compound.
-        
+
         Parameters
         ----------
         molregno : int
             Internal molecule registry number
-        
+
         Returns
         -------
         dict or None
@@ -2377,15 +2385,15 @@ class CheMBL(SQLiteClient):
             - num_ro5_violations: Lipinski violations
             - aromatic_rings, heavy_atoms, etc.
             Returns None if not found
-        
+
         Examples
         --------
         >>> chembl = CheMBL()
-        >>> props = chembl.get_properties(15)  # Aspirin
+        >>> props = chembl.get_properties(1280)  # Aspirin
         >>> print(f"MW: {props['mw_freebase']:.2f}")
         MW: 180.16
         >>> print(f"LogP: {props['alogp']:.2f}")
-        LogP: 1.19
+        LogP: 1.31
         """
         try:
             query = """
@@ -2399,19 +2407,19 @@ class CheMBL(SQLiteClient):
         except sqlite3.Error as e:
             self.logger.error(f"Database error in get_properties: {str(e)}")
             return None
-    
+
     def get_molecule_dictionary(self, molregno: int) -> Optional[Dict[str, Any]]:
         """
         Get complete molecule dictionary information for a compound.
-        
+
         Retrieves all fields from the molecule_dictionary table including drug classification,
         approval status, administration routes, and other drug-related attributes.
-        
+
         Parameters
         ----------
         molregno : int
             Internal molecule registry number
-        
+
         Returns
         -------
         dict or None
@@ -2419,7 +2427,7 @@ class CheMBL(SQLiteClient):
             - molregno: Internal Primary Key
             - pref_name: Preferred name for the molecule
             - chembl_id: ChEMBL identifier
-            - max_phase: Maximum development phase (4=Approved, 3=Phase 3, 2=Phase 2, 
+            - max_phase: Maximum development phase (4=Approved, 3=Phase 3, 2=Phase 2,
                         1=Phase 1, 0.5=Early Phase 1, -1=Clinical Phase unknown, NULL=preclinical)
             - therapeutic_flag: Has therapeutic application (1=yes, 0=no)
             - dosed_ingredient: Drug is dosed in this form (1=yes, 0=no)
@@ -2446,11 +2454,11 @@ class CheMBL(SQLiteClient):
             - orphan: Orphan designation (1=yes, 0=no, -1=preclinical)
             - veterinary: Has veterinary product (1=yes, 0=no, -1=preclinical)
             Returns None if not found
-        
+
         Examples
         --------
         >>> chembl = CheMBL()
-        >>> mol_dict = chembl.get_molecule_dictionary(15)  # Aspirin
+        >>> mol_dict = chembl.get_molecule_dictionary(1280)  # Aspirin
         >>> print(f"Name: {mol_dict['pref_name']}")
         Name: ASPIRIN
         >>> print(f"Max Phase: {mol_dict['max_phase']}")
@@ -2459,7 +2467,7 @@ class CheMBL(SQLiteClient):
         First Approval: 1950
         >>> print(f"Oral: {mol_dict['oral']}, Black Box: {mol_dict['black_box_warning']}")
         Oral: 1, Black Box: 0
-        
+
         Notes
         -----
         This method retrieves all available fields from the molecule_dictionary table.
@@ -2467,7 +2475,7 @@ class CheMBL(SQLiteClient):
         """
         try:
             query = """
-            SELECT 
+            SELECT
                 molregno,
                 pref_name,
                 chembl_id,
@@ -2505,19 +2513,19 @@ class CheMBL(SQLiteClient):
         except sqlite3.Error as e:
             self.logger.error(f"Database error in get_molecule_dictionary: {str(e)}")
             return None
-    
+
     def get_molecule_hierarchy(self, molregno: int) -> Optional[Dict[str, Any]]:
         """
         Get molecule hierarchy information showing parent-salt-metabolite relationships.
-        
+
         Retrieves data from the molecule_hierarchy table which stores relationships between
         parent compounds, salts, and active metabolites for pro-drugs.
-        
+
         Parameters
         ----------
         molregno : int
             Internal molecule registry number
-        
+
         Returns
         -------
         dict or None
@@ -2525,29 +2533,26 @@ class CheMBL(SQLiteClient):
             - molregno: The compound's molregno (has associated data)
             - parent_molregno: Parent compound after removing salts. If same as molregno,
                              no salt component or couldn't be processed
-            - active_molregno: For pro-drugs, the active metabolite. If same as 
+            - active_molregno: For pro-drugs, the active metabolite. If same as
                              parent_molregno, not currently known to be a pro-drug
             - is_parent: Boolean, True if molregno equals parent_molregno
             - is_prodrug: Boolean, True if parent_molregno differs from active_molregno
             - parent_chembl_id: ChEMBL ID of parent compound (if available)
             - active_chembl_id: ChEMBL ID of active metabolite (if available)
             Returns None if not found
-        
+
         Examples
         --------
         >>> chembl = CheMBL()
-        >>> # Example with a salt form
-        >>> hierarchy = chembl.get_molecule_hierarchy(1234567)
-        >>> if hierarchy['is_parent']:
-        ...     print("This is the parent compound (no salt)")
-        ... else:
-        ...     print(f"Parent: {hierarchy['parent_chembl_id']}")
-        >>> 
-        >>> # Example with a pro-drug
-        >>> hierarchy = chembl.get_molecule_hierarchy(7654321)
-        >>> if hierarchy['is_prodrug']:
-        ...     print(f"Active metabolite: {hierarchy['active_chembl_id']}")
-        
+        >>> # A salt: valproate sodium (molregno 1991) and its parent
+        >>> hierarchy = chembl.get_molecule_hierarchy(1991)
+        >>> hierarchy['is_parent'], hierarchy['parent_chembl_id']
+        (False, 'CHEMBL109')
+        >>> # A pro-drug: enalapril (16847) and the enalaprilat it becomes
+        >>> hierarchy = chembl.get_molecule_hierarchy(16847)
+        >>> hierarchy['is_prodrug'], hierarchy['active_chembl_id']
+        (True, 'CHEMBL577')
+
         Notes
         -----
         - Parent compounds generated only by removing salts (without their own data)
@@ -2558,7 +2563,7 @@ class CheMBL(SQLiteClient):
         """
         try:
             query = """
-            SELECT 
+            SELECT
                 mh.molregno,
                 mh.parent_molregno,
                 mh.active_molregno
@@ -2567,41 +2572,41 @@ class CheMBL(SQLiteClient):
             """
             self.cursor.execute(query, (molregno,))
             result = self.cursor.fetchone()
-            
+
             if not result:
                 return None
-            
+
             hierarchy = self._row_to_dict(result)
-            
+
             # Add computed flags
             hierarchy['is_parent'] = (hierarchy['molregno'] == hierarchy['parent_molregno'])
             hierarchy['is_prodrug'] = (hierarchy['parent_molregno'] != hierarchy['active_molregno'])
-            
+
             # Get ChEMBL IDs for parent and active metabolite
             if hierarchy['parent_molregno']:
                 hierarchy['parent_chembl_id'] = self.molregno_to_chembl_id(hierarchy['parent_molregno'])
-            
+
             if hierarchy['active_molregno']:
                 hierarchy['active_chembl_id'] = self.molregno_to_chembl_id(hierarchy['active_molregno'])
-            
+
             return hierarchy
         except sqlite3.Error as e:
             self.logger.error(f"Database error in get_molecule_hierarchy: {str(e)}")
             return None
-    
+
     def get_pesticide_classifications(self, molregno: int) -> List[Dict[str, Any]]:
         """
         Get pesticide classification information for a compound.
-        
-        Retrieves all pesticide classifications (fungicide, herbicide, insecticide) 
+
+        Retrieves all pesticide classifications (fungicide, herbicide, insecticide)
         associated with a compound according to FRAC, HRAC, and IRAC classification systems.
         A compound may have multiple pesticide classifications.
-        
+
         Parameters
         ----------
         molregno : int
             Internal molecule registry number
-        
+
         Returns
         -------
         list of dict
@@ -2616,7 +2621,7 @@ class CheMBL(SQLiteClient):
             - ref_id: Name of source file
             - ref_url: Full URL to source information
             Returns empty list if no classifications found
-        
+
         Examples
         --------
         >>> chembl = CheMBL()
@@ -2626,7 +2631,7 @@ class CheMBL(SQLiteClient):
         ...     print(f"Name: {classification['compound_name']}")
         ...     print(f"Mechanism: {classification['mechanism_comment']}")
         ...     print(f"Source: {classification['ref_url']}")
-        
+
         Notes
         -----
         - FRAC: Fungicide Resistance Action Committee
@@ -2637,7 +2642,7 @@ class CheMBL(SQLiteClient):
         """
         try:
             query = """
-            SELECT 
+            SELECT
                 pcm.mol_pest_id,
                 pcm.pest_class_id,
                 pcm.molregno,
@@ -2654,31 +2659,31 @@ class CheMBL(SQLiteClient):
             """
             self.cursor.execute(query, (molregno,))
             results = self.cursor.fetchall()
-            
+
             classifications = [self._row_to_dict(row) for row in results]
             return classifications
         except sqlite3.Error as e:
             self.logger.error(f"Database error in get_pesticide_classifications: {str(e)}")
             return []
-    
+
     def get_pesticide_classification_by_id(self, pest_class_id: int) -> Optional[Dict[str, Any]]:
         """
         Get detailed information for a specific pesticide classification.
-        
+
         Retrieves pesticide classification details by pest_class_id, including
         mechanism of action information and source references.
-        
+
         Parameters
         ----------
         pest_class_id : int
             Primary key for the pesticide classification
-        
+
         Returns
         -------
         dict or None
             Dictionary with pesticide classification details:
             - pest_class_id: Primary key
-            - compound_name: Name used in FRAC/HRAC/IRAC classification. Use with 
+            - compound_name: Name used in FRAC/HRAC/IRAC classification. Use with
                            ref_id and ref_url to identify row in source file
             - mec_id: Mechanism-of-action identifier (foreign key to drug_mechanism table)
             - mechanism_comment: Additional mechanism information from FRAC/HRAC/IRAC
@@ -2687,7 +2692,7 @@ class CheMBL(SQLiteClient):
             - ref_url: Full URL for source information
             - associated_molregnos: List of ChEMBL compound molregnos with this classification
             Returns None if not found
-        
+
         Examples
         --------
         >>> chembl = CheMBL()
@@ -2698,7 +2703,12 @@ class CheMBL(SQLiteClient):
         ...     print(f"Mechanism: {pest_class['mechanism_comment']}")
         ...     print(f"Reference: {pest_class['ref_url']}")
         ...     print(f"Applied to {len(pest_class['associated_molregnos'])} compounds")
-        
+        Classification: IRAC
+        Compound: Nitenpyram
+        Mechanism: Nicotinic acetylcholine receptor (nAChR) competitive modulators
+        Reference: https://irac-online.org/mode-of-action/
+        Applied to 1 compounds
+
         Notes
         -----
         The compound_name field should be used in conjunction with ref_id and ref_url
@@ -2707,7 +2717,7 @@ class CheMBL(SQLiteClient):
         try:
             # Get pesticide classification details
             query = """
-            SELECT 
+            SELECT
                 pest_class_id,
                 compound_name,
                 mec_id,
@@ -2720,12 +2730,12 @@ class CheMBL(SQLiteClient):
             """
             self.cursor.execute(query, (pest_class_id,))
             result = self.cursor.fetchone()
-            
+
             if not result:
                 return None
-            
+
             classification = self._row_to_dict(result)
-            
+
             # Get all molregnos associated with this classification
             mapping_query = """
             SELECT molregno
@@ -2735,21 +2745,21 @@ class CheMBL(SQLiteClient):
             """
             self.cursor.execute(mapping_query, (pest_class_id,))
             mapping_results = self.cursor.fetchall()
-            
+
             classification['associated_molregnos'] = [row[0] for row in mapping_results]
-            
+
             return classification
         except sqlite3.Error as e:
             self.logger.error(f"Database error in get_pesticide_classification_by_id: {str(e)}")
             return None
-    
+
     def search_pesticide_by_name(self, name: str, ref_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Search for pesticide classifications by compound name.
-        
-        Performs case-insensitive partial matching on compound names in the 
+
+        Performs case-insensitive partial matching on compound names in the
         pesticide classification system.
-        
+
         Parameters
         ----------
         name : str
@@ -2757,7 +2767,7 @@ class CheMBL(SQLiteClient):
         ref_type : str, optional
             Filter by classification source: 'FRAC', 'HRAC', or 'IRAC'
             If None, searches all types
-        
+
         Returns
         -------
         list of dict
@@ -2771,32 +2781,35 @@ class CheMBL(SQLiteClient):
             - ref_url: Source URL
             - molregno_count: Number of compounds with this classification
             Returns empty list if no matches found
-        
+
         Examples
         --------
         >>> chembl = CheMBL()
         >>> # Search all pesticide types
         >>> results = chembl.search_pesticide_by_name('chloro')
-        >>> for result in results:
+        >>> for result in results[:3]:
         ...     print(f"{result['compound_name']} ({result['ref_type']})")
-        >>> 
+        chloroneb (FRAC)
+        chlorothalonil (FRAC)
+        Chlorotoluron (HRAC)
         >>> # Search only fungicides
         >>> fungicides = chembl.search_pesticide_by_name('azole', ref_type='FRAC')
         >>> print(f"Found {len(fungicides)} fungicides")
-        
+        Found 25 fungicides
+
         Notes
         -----
         Valid ref_type values:
         - 'FRAC': Fungicide Resistance Action Committee
-        - 'HRAC': Herbicide Resistance Action Committee  
+        - 'HRAC': Herbicide Resistance Action Committee
         - 'IRAC': Insecticide Resistance Action Committee
         """
         try:
             search_term = f"%{name}%"
-            
+
             if ref_type:
                 query = """
-                SELECT 
+                SELECT
                     pc.pest_class_id,
                     pc.compound_name,
                     pc.mec_id,
@@ -2816,7 +2829,7 @@ class CheMBL(SQLiteClient):
                 self.cursor.execute(query, (search_term, ref_type.upper()))
             else:
                 query = """
-                SELECT 
+                SELECT
                     pc.pest_class_id,
                     pc.compound_name,
                     pc.mec_id,
@@ -2833,7 +2846,7 @@ class CheMBL(SQLiteClient):
                 ORDER BY pc.ref_type, pc.compound_name
                 """
                 self.cursor.execute(query, (search_term,))
-            
+
             results = self.cursor.fetchall()
             return [self._row_to_dict(row) for row in results]
         except sqlite3.Error as e:

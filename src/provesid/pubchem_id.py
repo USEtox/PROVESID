@@ -199,7 +199,7 @@ def _check_descriptor_names(descriptors: Optional[List[str]], source: str) -> Li
 class PubChemID(SQLiteClient):
     """
     Interface to PubChem ID SQLite database for fast identifier lookup and conversion.
-    
+
     This class provides access to a local SQLite database of the ~1.43 M PubChem
     compounds that carry a CAS number, with their identifiers (CID, CAS, InChI,
     InChIKey, SMILES), names, synonyms, formula and masses.
@@ -221,7 +221,7 @@ class PubChemID(SQLiteClient):
     :meth:`descriptors` computes those with RDKit from the stored SMILES, or
     fetches PubChem's own on request; :meth:`properties` fetches PubChem's.
     See :attr:`offline_properties` for what the open database can answer.
-    
+
     Connection handling comes from
     :class:`~provesid.sqlite_client.SQLiteClient`: use the class as a context
     manager, or call :meth:`~provesid.sqlite_client.SQLiteClient.close` when
@@ -235,29 +235,20 @@ class PubChemID(SQLiteClient):
         offline_properties (dict): The part of :attr:`OFFLINE_PROPERTIES` the
             open database has columns for --- what :meth:`properties` answers
             without the network, and retrieves when no properties are named.
-    
+
     Example:
         >>> from provesid import PubChemID
-        >>> with PubChemID() as db:                  # doctest: +SKIP
-        ...     inchi = db.cas_to_inchi("50-78-2")
-        >>>
-        >>> db = PubChemID()
-        >>> 
-        >>> # Lookup by CAS
-        >>> result = db.get_by_cas("50-78-2")  # Aspirin
-        >>> print(result['inchi'])
-        >>> 
-        >>> # Lookup by InChIKey
-        >>> result = db.get_by_inchikey("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")
-        >>> print(result['cid'])
-        >>> 
-        >>> # Convert CAS to InChI
-        >>> inchi = db.cas_to_inchi("50-78-2")
-        >>> 
-        >>> # Batch conversion
-        >>> results = db.batch_cas_to_cid(["50-78-2", "50-00-0"])
+        >>> with PubChemID() as db:
+        ...     db.get_by_cas("50-78-2")["cmpdname"]
+        ...     db.cas_to_inchikey("50-78-2")
+        ...     db.inchikey_to_cid("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")
+        ...     db.batch_cas_to_cid(["50-78-2", "50-00-0"])
+        'Aspirin'
+        'BSYNRYMUTXBXSQ-UHFFFAOYSA-N'
+        2244
+        {'50-78-2': 2244, '50-00-0': 712}
     """
-    
+
     DEFAULT_DB_NAME = "pubchem_id.db"
     DEFAULT_DB_URL = "https://zenodo.org/records/18173204/files/pubchem_id.db"
 
@@ -330,7 +321,7 @@ class PubChemID(SQLiteClient):
     ):
         """
         Initialize PubChemID database connection.
-        
+
         Args:
             db_path (str, optional): Path to SQLite database. If None, uses default
                                     location in the persistent user dataset directory.
@@ -356,21 +347,34 @@ class PubChemID(SQLiteClient):
                 ``"zenodo"`` downloads a 2.2 GB
                 prebuilt copy. It describes an acquisition, not a file: a
                 database already on disk is opened whichever way it was made.
-        
+
         Raises:
             ValueError: If ``source`` is not one of :attr:`SOURCES`. Checked
                 before anything is fetched.
             FileNotFoundError: If database file doesn't exist and auto_download is False
+
+        Example:
+            >>> db = PubChemID()                       # the default location
+            >>> db.source
+            'ftp'
+            >>> PubChemID(db_path="/no/such/pubchem_id.db", auto_download=False)
+            Traceback (most recent call last):
+            ...
+            FileNotFoundError: PubChem ID database not found at /no/such/pubchem_id.db. ...
+            >>> PubChemID(source="ncbi")
+            Traceback (most recent call last):
+            ...
+            ValueError: PubChemID(source='ncbi') is not a download route. Use one of 'ftp', 'zenodo'.
         """
         self.logger = logging.getLogger(__name__)
         self.source = self._validate_source(source)
         self.db_url = db_url or self.DEFAULT_DB_URL
         self._api = api
-        
+
         if db_path is None:
             base_dir = data_dir or user_dataset_path()
             db_path = os.path.join(base_dir, self.DEFAULT_DB_NAME)
-        
+
         self.db_path = os.path.abspath(os.path.expanduser(db_path))
 
         needs_download = redownload or not os.path.exists(self.db_path)
@@ -391,7 +395,7 @@ class PubChemID(SQLiteClient):
                     "provesid.pubchem_ftp.build_pubchem_id_db(), or run "
                     "PubChemID.download_database()."
                 )
-        
+
         # One connection per thread, released by close() or by leaving a
         # ``with`` block --- see
         # :class:`~provesid.sqlite_client.SQLiteClient`.
@@ -467,7 +471,7 @@ class PubChemID(SQLiteClient):
             zenodo_url (str, optional): URL to download from. If None, uses default Zenodo URL.
                                        Format: https://zenodo.org/record/XXXXXX/files/pubchem_id.db
             force (bool): If True, overwrite an existing local database file.
-        
+
         Returns:
             str: Path to the downloaded database file
 
@@ -480,8 +484,10 @@ class PubChemID(SQLiteClient):
 
         Example:
             >>> from provesid import PubChemID
-            >>> PubChemID.download_database()                            # doctest: +SKIP
+            >>> PubChemID.download_database(force=True)                  # doctest: +SKIP
+            '/home/me/.local/share/provesid/pubchem_id.db'
             >>> PubChemID.download_database(db_path='/tmp/pubchem_id.db')  # doctest: +SKIP
+            '/tmp/pubchem_id.db'
 
         Note:
             The database file is ~2.2 GB, so download may take several minutes.
@@ -528,181 +534,223 @@ class PubChemID(SQLiteClient):
     def get_by_cid(self, cid: int) -> Optional[Dict[str, Any]]:
         """
         Get compound information by PubChem CID.
-        
+
+        Every other ``get_by_*`` method finds a CID and then returns this
+        record for it.
+
         Args:
             cid (int): PubChem Compound ID
-        
+
         Returns:
-            dict: Compound information including identifiers and properties, or None if not found
-        
+            dict: Every column of the ``compounds`` row (``cid``, ``cmpdname``,
+            ``mf``, ``inchi``, ``smiles``, ``inchikey``, ``iupacname``, ``mw``,
+            ``exactmass``, ``cidcdate`` and whichever others the database has;
+            see :meth:`get_by_cas_batch`), plus ``cas_numbers``, the compound's
+            distinct CAS numbers in database order, and ``synonyms``, at most
+            100 of its names. None if the CID is not in the database.
+
         Example:
             >>> db = PubChemID()
             >>> result = db.get_by_cid(2244)  # Aspirin
-            >>> print(result['cmpdname'])
-            'Aspirin'
+            >>> result['cmpdname'], result['mf'], result['cas_numbers']
+            ('Aspirin', 'C9H8O4', ['50-78-2'])
+            >>> result['synonyms'][:2]
+            ['aspirin', 'ACETYLSALICYLIC ACID']
+            >>> db.get_by_cid(999999999) is None
+            True
         """
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT * FROM compounds WHERE cid = ?
         """, (cid,))
-        
+
         row = cursor.fetchone()
         if not row:
             return None
-        
+
         result = dict(row)
-        
+
         # Add CAS numbers
+        # GROUP BY because the Zenodo copy repeats some (cid, cas) pairs ---
+        # aspirin's CAS is listed twice. A database built from FTP does not.
         cursor.execute("""
             SELECT cas FROM cas_numbers WHERE cid = ?
+            GROUP BY cas ORDER BY MIN(id)
         """, (cid,))
         result['cas_numbers'] = [r[0] for r in cursor.fetchall()]
-        
+
         # Add synonyms
         cursor.execute("""
             SELECT synonym FROM synonyms WHERE cid = ? LIMIT 100
         """, (cid,))
         result['synonyms'] = [r[0] for r in cursor.fetchall()]
-        
+
         return result
-    
+
     def get_by_cas(self, cas: str) -> Optional[Dict[str, Any]]:
         """
         Get compound information by CAS Registry Number.
-        
+
         Args:
             cas (str): CAS Registry Number (e.g., "50-78-2")
-        
+
         Returns:
-            dict: Compound information, or None if not found
-        
+            dict: The :meth:`get_by_cid` record, or None if not found. A CAS
+            number PubChem gives to several compounds returns the first one.
+
         Example:
             >>> db = PubChemID()
             >>> result = db.get_by_cas("50-78-2")  # Aspirin
             >>> print(result['inchi'])
+            InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)
+            >>> db.get_by_cas("50782") is None       # the hyphens are required
+            True
         """
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT cid FROM cas_numbers WHERE cas = ? LIMIT 1
         """, (cas,))
-        
+
         row = cursor.fetchone()
         if not row:
             return None
-        
+
         return self.get_by_cid(row[0])
-    
+
     def get_by_inchikey(self, inchikey: str) -> Optional[Dict[str, Any]]:
         """
         Get compound information by InChIKey.
-        
+
         Args:
             inchikey (str): Standard InChIKey (27 characters)
-        
+
         Returns:
-            dict: Compound information, or None if not found
-        
+            dict: The :meth:`get_by_cid` record, or None if not found.
+
         Example:
             >>> db = PubChemID()
             >>> result = db.get_by_inchikey("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")
             >>> print(result['cmpdname'])
+            Aspirin
         """
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT * FROM compounds WHERE inchikey = ?
         """, (inchikey,))
-        
+
         row = cursor.fetchone()
         if not row:
             return None
-        
+
         cid = row['cid']
         return self.get_by_cid(cid)
-    
+
     def get_by_inchi(self, inchi: str) -> Optional[Dict[str, Any]]:
         """
         Get compound information by InChI string.
-        
+
         Args:
             inchi (str): Standard InChI string
-        
+
         Returns:
-            dict: Compound information, or None if not found
-        
+            dict: The :meth:`get_by_cid` record, or None if not found. The
+            match is exact: a truncated or non-standard InChI finds nothing.
+
         Example:
             >>> db = PubChemID()
-            >>> result = db.get_by_inchi("InChI=1S/C9H8O4/c1-6(10)...")
-            >>> print(result['cmpdname'])
+            >>> inchi = "InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)"
+            >>> print(db.get_by_inchi(inchi)['cmpdname'])
+            Aspirin
+            >>> db.get_by_inchi("InChI=1S/C9H8O4/c1-6(10)") is None
+            True
         """
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT * FROM compounds WHERE inchi = ?
         """, (inchi,))
-        
+
         row = cursor.fetchone()
         if not row:
             return None
-        
+
         cid = row['cid']
         return self.get_by_cid(cid)
 
     def get_by_smiles(self, smiles: str) -> Optional[Dict[str, Any]]:
         """
         Get compound information by SMILES string.
-        
+
+        The match is on the stored string, not the structure, so only
+        PubChem's own SMILES for a compound finds it. :meth:`smiles_to_cas`
+        compares structures instead.
+
         Args:
             smiles (str): SMILES string
-        
+
         Returns:
-            dict: Compound information, or None if not found
-        
+            dict: The :meth:`get_by_cid` record, or None if not found.
+
         Example:
             >>> db = PubChemID()
             >>> result = db.get_by_smiles("CC(=O)OC1=CC=CC=C1C(=O)O")  # Aspirin
             >>> print(result['cmpdname'])
+            Aspirin
+            >>> db.get_by_smiles("CCO")['cid'], db.get_by_smiles("OCC")
+            (702, None)
         """
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT * FROM compounds WHERE smiles = ?
         """, (smiles,))
-        
+
         row = cursor.fetchone()
         if not row:
             return None
-        
+
         cid = row['cid']
         return self.get_by_cid(cid)
-    
+
     def search_by_name(self, name: str, exact: bool = False, limit: int = 10) -> List[Dict[str, Any]]:
         """
         Search compounds by name or synonym.
-        
+
+        Compound titles are searched first, then synonyms, until ``limit`` is
+        reached. An exact match is case-sensitive: ``"Aspirin"`` is the title
+        and ``"aspirin"`` a synonym, and both find CID 2244. A partial match
+        is SQL ``LIKE``, case-insensitive for ASCII letters, and returns
+        compounds in database order, not by closeness.
+
         Args:
             name (str): Compound name or synonym to search for
             exact (bool): If True, exact match only. If False, partial match (case-insensitive)
             limit (int): Maximum number of results to return
-        
+
         Returns:
-            list: List of matching compounds
-        
+            list: :meth:`get_by_cid` records, each compound once. Empty when
+            nothing matches.
+
         Example:
             >>> db = PubChemID()
-            >>> results = db.search_by_name("aspirin", exact=False)
-            >>> for r in results:
+            >>> for r in db.search_by_name("aspirin", limit=3):
             ...     print(r['cid'], r['cmpdname'])
+            2244 Aspirin
+            6247 Calcium aspirin
+            21975 Carbaspirin Calcium
+            >>> [r['cid'] for r in db.search_by_name("aspirin", exact=True)]
+            [2244]
         """
         cursor = self.conn.cursor()
-        
+
         results = []
-        
+
         if exact:
             # Search in main compound name
             cursor.execute("""
                 SELECT cid FROM compounds WHERE cmpdname = ? LIMIT ?
             """, (name, limit))
-            
+
             cids = [r[0] for r in cursor.fetchall()]
-            
+
             # Also search in synonyms
             if len(cids) < limit:
                 cursor.execute("""
@@ -712,137 +760,314 @@ class PubChemID(SQLiteClient):
         else:
             # Partial match with LIKE
             search_term = f"%{name}%"
-            
+
             # Search in main compound name
             cursor.execute("""
                 SELECT cid FROM compounds WHERE cmpdname LIKE ? LIMIT ?
             """, (search_term, limit))
-            
+
             cids = [r[0] for r in cursor.fetchall()]
-            
+
             # Also search in synonyms
             if len(cids) < limit:
                 cursor.execute("""
                     SELECT DISTINCT cid FROM synonyms WHERE synonym LIKE ? LIMIT ?
                 """, (search_term, limit - len(cids)))
                 cids.extend([r[0] for r in cursor.fetchall()])
-        
+
+        # A compound can match both its title and a synonym.
+        cids = list(dict.fromkeys(cids))
+
         # Get full compound info for each CID
         for cid in cids[:limit]:
             compound = self.get_by_cid(cid)
             if compound:
                 results.append(compound)
-        
+
         return results
-    
+
     def search_by_formula(self, formula: str, limit: int = 100) -> List[Dict[str, Any]]:
         """
         Search compounds by molecular formula.
-        
+
         Args:
             formula (str): Molecular formula (e.g., "C9H8O4")
             limit (int): Maximum number of results to return
-        
+
         Returns:
-            list: List of matching compounds
-        
+            list: :meth:`get_by_cid` records for compounds whose formula is
+            exactly ``formula``, in database order. The formula must be
+            written as PubChem writes it (Hill order).
+
         Example:
             >>> db = PubChemID()
-            >>> results = db.search_by_formula("C9H8O4")
-            >>> print(f"Found {len(results)} compounds with formula C9H8O4")
+            >>> results = db.search_by_formula("C9H8O4", limit=5)
+            >>> len(results), all(r['mf'] == 'C9H8O4' for r in results)
+            (5, True)
+            >>> 'Aspirin' in [r['cmpdname'] for r in db.search_by_formula("C9H8O4")]
+            True
         """
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT cid FROM compounds WHERE mf = ? LIMIT ?
         """, (formula, limit))
-        
+
         results = []
         for row in cursor.fetchall():
             compound = self.get_by_cid(row[0])
             if compound:
                 results.append(compound)
-        
+
         return results
-    
+
     # Conversion methods
-    
+
     def cas_to_cid(self, cas: str) -> Optional[int]:
-        """Convert CAS number to PubChem CID."""
+        """
+        Convert CAS number to PubChem CID.
+
+        Args:
+            cas: CAS Registry Number, with hyphens.
+
+        Returns:
+            The CID, or None if the CAS number is not in the database.
+
+        Example:
+            >>> db = PubChemID()
+            >>> db.cas_to_cid("50-78-2")
+            2244
+        """
         result = self.get_by_cas(cas)
         return result['cid'] if result else None
-    
+
     def cas_to_inchi(self, cas: str) -> Optional[str]:
-        """Convert CAS number to InChI."""
+        """
+        Convert CAS number to InChI.
+
+        Args:
+            cas: CAS Registry Number, with hyphens.
+
+        Returns:
+            The standard InChI, or None if not found.
+
+        Example:
+            >>> db = PubChemID()
+            >>> db.cas_to_inchi("50-78-2")
+            'InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)'
+        """
         result = self.get_by_cas(cas)
         return result['inchi'] if result else None
-    
+
     def cas_to_inchikey(self, cas: str) -> Optional[str]:
-        """Convert CAS number to InChIKey."""
+        """
+        Convert CAS number to InChIKey.
+
+        Args:
+            cas: CAS Registry Number, with hyphens.
+
+        Returns:
+            The standard InChIKey, or None if not found.
+
+        Example:
+            >>> db = PubChemID()
+            >>> db.cas_to_inchikey("50-78-2")
+            'BSYNRYMUTXBXSQ-UHFFFAOYSA-N'
+        """
         result = self.get_by_cas(cas)
         return result['inchikey'] if result else None
-    
+
     def cas_to_smiles(self, cas: str) -> Optional[str]:
-        """Convert CAS number to SMILES."""
+        """
+        Convert CAS number to SMILES.
+
+        Args:
+            cas: CAS Registry Number, with hyphens.
+
+        Returns:
+            PubChem's isomeric SMILES, or None if not found.
+
+        Example:
+            >>> db = PubChemID()
+            >>> db.cas_to_smiles("50-78-2")
+            'CC(=O)OC1=CC=CC=C1C(=O)O'
+        """
         result = self.get_by_cas(cas)
         return result['smiles'] if result else None
-    
+
     def inchikey_to_cid(self, inchikey: str) -> Optional[int]:
-        """Convert InChIKey to PubChem CID."""
+        """
+        Convert InChIKey to PubChem CID.
+
+        Args:
+            inchikey: Standard InChIKey.
+
+        Returns:
+            The CID, or None if not found.
+
+        Example:
+            >>> db = PubChemID()
+            >>> db.inchikey_to_cid("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")
+            2244
+        """
         result = self.get_by_inchikey(inchikey)
         return result['cid'] if result else None
-    
+
     def inchikey_to_cas(self, inchikey: str) -> Optional[List[str]]:
-        """Convert InChIKey to CAS number(s)."""
+        """
+        Convert InChIKey to CAS number(s).
+
+        Args:
+            inchikey: Standard InChIKey.
+
+        Returns:
+            The compound's CAS numbers (possibly empty), or None if the InChIKey is not found.
+
+        Example:
+            >>> db = PubChemID()
+            >>> db.inchikey_to_cas("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")
+            ['50-78-2']
+        """
         result = self.get_by_inchikey(inchikey)
         return result['cas_numbers'] if result else None
-    
+
     def inchi_to_cid(self, inchi: str) -> Optional[int]:
-        """Convert InChI to PubChem CID."""
+        """
+        Convert InChI to PubChem CID.
+
+        Args:
+            inchi: Standard InChI, matched exactly.
+
+        Returns:
+            The CID, or None if not found.
+
+        Example:
+            >>> db = PubChemID()
+            >>> db.inchi_to_cid("InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3")
+            702
+        """
         result = self.get_by_inchi(inchi)
         return result['cid'] if result else None
-    
+
     def inchi_to_cas(self, inchi: str) -> Optional[List[str]]:
-        """Convert InChI to CAS number(s)."""
+        """
+        Convert InChI to CAS number(s).
+
+        Args:
+            inchi: Standard InChI, matched exactly.
+
+        Returns:
+            The compound's CAS numbers, or None if the InChI is not found.
+
+        Example:
+            >>> db = PubChemID()
+            >>> db.inchi_to_cas("InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3")
+            ['64-17-5']
+        """
         result = self.get_by_inchi(inchi)
         return result['cas_numbers'] if result else None
-    
+
     def cid_to_cas(self, cid: int) -> Optional[List[str]]:
-        """Convert PubChem CID to CAS number(s)."""
+        """
+        Convert PubChem CID to CAS number(s).
+
+        Args:
+            cid: PubChem Compound ID.
+
+        Returns:
+            The compound's distinct CAS numbers, or None if the CID is not found. A compound can have several: retired numbers, and numbers for mixtures PubChem maps to it.
+
+        Example:
+            >>> db = PubChemID()
+            >>> db.cid_to_cas(712)
+            ['50-00-0', '30525-89-4', '53026-80-5', '8013-13-6', '12795-06-1']
+        """
         result = self.get_by_cid(cid)
         return result['cas_numbers'] if result else None
-    
+
     def cid_to_inchikey(self, cid: int) -> Optional[str]:
-        """Convert PubChem CID to InChIKey."""
+        """
+        Convert PubChem CID to InChIKey.
+
+        Args:
+            cid: PubChem Compound ID.
+
+        Returns:
+            The standard InChIKey, or None if not found.
+
+        Example:
+            >>> db = PubChemID()
+            >>> db.cid_to_inchikey(2244)
+            'BSYNRYMUTXBXSQ-UHFFFAOYSA-N'
+        """
         result = self.get_by_cid(cid)
         return result['inchikey'] if result else None
-    
+
     def cid_to_inchi(self, cid: int) -> Optional[str]:
-        """Convert PubChem CID to InChI."""
+        """
+        Convert PubChem CID to InChI.
+
+        Args:
+            cid: PubChem Compound ID.
+
+        Returns:
+            The standard InChI, or None if not found.
+
+        Example:
+            >>> db = PubChemID()
+            >>> db.cid_to_inchi(702)
+            'InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3'
+        """
         result = self.get_by_cid(cid)
         return result['inchi'] if result else None
-    
+
     def cid_to_smiles(self, cid: int) -> Optional[str]:
-        """Convert PubChem CID to SMILES."""
+        """
+        Convert PubChem CID to SMILES.
+
+        Args:
+            cid: PubChem Compound ID.
+
+        Returns:
+            PubChem's isomeric SMILES, or None if not found.
+
+        Example:
+            >>> db = PubChemID()
+            >>> db.cid_to_smiles(2244)
+            'CC(=O)OC1=CC=CC=C1C(=O)O'
+        """
         result = self.get_by_cid(cid)
         return result['smiles'] if result else None
-    
+
     def smiles_to_cid(self, smiles: str) -> Optional[int]:
-        """Convert SMILES string to PubChem CID."""
+        """
+        Convert SMILES string to PubChem CID.
+
+        Args:
+            smiles: SMILES, matched as a string against PubChem's; see :meth:`get_by_smiles`.
+
+        Returns:
+            The CID, or None if not found.
+
+        Example:
+            >>> db = PubChemID()
+            >>> db.smiles_to_cid("CCO")
+            702
+        """
         result = self.get_by_smiles(smiles)
         return result['cid'] if result else None
-    
+
     # Batch conversion methods
-    
+
     def batch_cas_to_cid(self, cas_list: List[str]) -> Dict[str, Optional[int]]:
         """
         Convert multiple CAS numbers to CIDs.
-        
+
         Args:
             cas_list (list): List of CAS numbers
-        
+
         Returns:
-            dict: Mapping of CAS -> CID (None if not found)
-        
+            dict: Mapping of CAS -> CID (None if not found), in input order.
+
         Example:
             >>> db = PubChemID()
             >>> results = db.batch_cas_to_cid(["50-78-2", "50-00-0"])
@@ -853,66 +1078,97 @@ class PubChemID(SQLiteClient):
         for cas in cas_list:
             results[cas] = self.cas_to_cid(cas)
         return results
-    
+
     def batch_cas_to_inchikey(self, cas_list: List[str]) -> Dict[str, Optional[str]]:
-        """Convert multiple CAS numbers to InChIKeys."""
+        """
+        Convert multiple CAS numbers to InChIKeys.
+
+        Args:
+            cas_list (list): List of CAS numbers
+
+        Returns:
+            dict: Mapping of CAS -> InChIKey (None if not found)
+
+        Example:
+            >>> db = PubChemID()
+            >>> db.batch_cas_to_inchikey(["50-78-2", "0-00-0"])
+            {'50-78-2': 'BSYNRYMUTXBXSQ-UHFFFAOYSA-N', '0-00-0': None}
+        """
         results = {}
         for cas in cas_list:
             results[cas] = self.cas_to_inchikey(cas)
         return results
-    
+
     def batch_cid_to_cas(self, cid_list: List[int]) -> Dict[int, Optional[List[str]]]:
-        """Convert multiple CIDs to CAS numbers."""
+        """
+        Convert multiple CIDs to CAS numbers.
+
+        Args:
+            cid_list (list): List of PubChem CIDs
+
+        Returns:
+            dict: Mapping of CID -> list of CAS numbers (None if not found)
+
+        Example:
+            >>> db = PubChemID()
+            >>> db.batch_cid_to_cas([2244, 702])
+            {2244: ['50-78-2'], 702: ['64-17-5']}
+        """
         results = {}
         for cid in cid_list:
             results[cid] = self.cid_to_cas(cid)
         return results
-    
+
     def batch_smiles_to_cid(self, smiles_list: List[str]) -> Dict[str, Optional[int]]:
         """
         Convert multiple SMILES strings to CIDs.
-        
+
         Args:
             smiles_list (list): List of SMILES strings
-        
+
         Returns:
             dict: Mapping of SMILES -> CID (None if not found)
-        
+
         Example:
             >>> db = PubChemID()
             >>> results = db.batch_smiles_to_cid(["CC(=O)OC1=CC=CC=C1C(=O)O", "C"])
             >>> print(results)
+            {'CC(=O)OC1=CC=CC=C1C(=O)O': 2244, 'C': 297}
         """
         results = {}
         for smiles in smiles_list:
             results[smiles] = self.smiles_to_cid(smiles)
         return results
-    
+
     def get_by_cas_batch(self, cas_list: List[str]) -> 'pd.DataFrame':
         """
         Get complete compound information for multiple CAS numbers as a DataFrame.
-        
+
         One row per CAS number found, carrying every column of the
         ``compounds`` table. Which columns those are depends on how the
         database was made: one built from PubChem's FTP site has
         ``monoisotopicmass``, a Zenodo copy has the eight descriptor columns
         instead (``xlogp``, ``polararea`` and the like).
-        
+
         Args:
             cas_list (list): List of CAS Registry Numbers
-        
+
         Returns:
             pandas.DataFrame: ``cid``, ``cas`` and then the ``compounds``
             columns --- ``cmpdname``, ``mf``, ``inchi``, ``smiles``,
             ``inchikey``, ``iupacname``, ``mw``, ``exactmass``, ``cidcdate``
             and whichever others the database has. Empty, with those columns,
             when nothing is found.
-        
+
         Example:
             >>> db = PubChemID()
             >>> cas_list = ["50-78-2", "50-00-0", "64-17-5"]
             >>> df = db.get_by_cas_batch(cas_list)
             >>> print(df[['cas', 'cmpdname', 'mf', 'mw']])
+                   cas      cmpdname      mf       mw
+            0  50-78-2       Aspirin  C9H8O4  180.160
+            1  50-00-0  Formaldehyde    CH2O   30.026
+            2  64-17-5       Ethanol   C2H6O   46.070
         """
         rows = []
         for cas in cas_list:
@@ -932,25 +1188,28 @@ class PubChemID(SQLiteClient):
     def get_id_table_from_cas(self, cas: str) -> Optional['pd.DataFrame']:
         """
         Get identifier table for a CAS number (similar to ZeroPM format).
-        
+
         Args:
             cas (str): CAS Registry Number
-        
+
         Returns:
-            pandas.DataFrame: Table with columns [cid, cas, inchi, inchikey, smiles, 
+            pandas.DataFrame: Table with columns [cid, cas, inchi, inchikey, smiles,
                              cmpdname, mf, mw] or None if not found
-        
+
         Example:
             >>> db = PubChemID()
             >>> df = db.get_id_table_from_cas("50-78-2")
-            >>> print(df)
+            >>> df[['cid', 'cas', 'cmpdname', 'mf', 'mw']].to_dict('records')
+            [{'cid': 2244, 'cas': '50-78-2', 'cmpdname': 'Aspirin', 'mf': 'C9H8O4', 'mw': 180.16}]
+            >>> db.get_id_table_from_cas("0-00-0") is None
+            True
         """
         import pandas as pd
-        
+
         result = self.get_by_cas(cas)
         if not result:
             return None
-        
+
         # Create DataFrame with main identifiers and properties
         df = pd.DataFrame([{
             'cid': result['cid'],
@@ -962,59 +1221,68 @@ class PubChemID(SQLiteClient):
             'mf': result.get('mf', ''),
             'mw': result.get('mw', None)
         }])
-        
+
         return df
-    
+
     def batch_get_id_table_from_cas(self, cas_list: List[str]) -> 'pd.DataFrame':
         """
         Get identifier tables for multiple CAS numbers.
-        
+
         Args:
             cas_list (list): List of CAS Registry Numbers
-        
+
         Returns:
-            pandas.DataFrame: Combined table for all CAS numbers
-        
+            pandas.DataFrame: One :meth:`get_id_table_from_cas` row per CAS
+            number found; CAS numbers not found are left out. Empty, with the
+            same columns, when none is found.
+
         Example:
             >>> db = PubChemID()
-            >>> df = db.batch_get_id_table_from_cas(["50-78-2", "50-00-0"])
-            >>> print(df)
+            >>> df = db.batch_get_id_table_from_cas(["50-78-2", "0-00-0", "64-17-5"])
+            >>> print(df[['cid', 'cas', 'cmpdname', 'mf']])
+                cid      cas cmpdname      mf
+            0  2244  50-78-2  Aspirin  C9H8O4
+            1   702  64-17-5  Ethanol   C2H6O
         """
         import pandas as pd
-        
+
         tables = []
         for cas in cas_list:
             df = self.get_id_table_from_cas(cas)
             if df is not None:
                 tables.append(df)
-        
+
         if not tables:
             # Return empty DataFrame with correct columns
-            return pd.DataFrame(columns=['cid', 'cas', 'inchi', 'inchikey', 
+            return pd.DataFrame(columns=['cid', 'cas', 'inchi', 'inchikey',
                                         'smiles', 'cmpdname', 'mf', 'mw'])
-        
+
         return pd.concat(tables, ignore_index=True)
-    
+
     def get_by_smiles_batch(self, smiles_list: List[str]) -> 'pd.DataFrame':
         """
         Get complete compound information for multiple SMILES strings as a DataFrame.
-        
+
         One row per SMILES found, carrying the compound's first CAS number and
         every column of the ``compounds`` table; see :meth:`get_by_cas_batch`
         for how those columns depend on where the database came from.
-        
+
         Args:
             smiles_list (list): List of SMILES strings
-        
+
         Returns:
             pandas.DataFrame: ``cid``, ``cas`` and then the ``compounds``
             columns. Empty, with those columns, when nothing is found.
-        
+
         Example:
             >>> db = PubChemID()
             >>> smiles_list = ["CC(=O)OC1=CC=CC=C1C(=O)O", "C", "CCO"]
             >>> df = db.get_by_smiles_batch(smiles_list)
             >>> print(df[['smiles', 'cmpdname', 'mf', 'mw']])
+                                 smiles cmpdname      mf       mw
+            0  CC(=O)OC1=CC=CC=C1C(=O)O  Aspirin  C9H8O4  180.160
+            1                         C  Methane     CH4   16.043
+            2                       CCO  Ethanol   C2H6O   46.070
         """
         rows = []
         for smiles in smiles_list:
@@ -1023,21 +1291,28 @@ class PubChemID(SQLiteClient):
                 cas_numbers = result.get('cas_numbers') or [None]
                 rows.append({'cas': cas_numbers[0], **self._compound_columns(result)})
         return pd.DataFrame(rows, columns=['cid', 'cas'] + self._compound_column_names()[1:])
-    
+
     def smiles_to_cas(self, smiles: str) -> Optional[List[str]]:
         """
         Convert SMILES string to CAS number(s).
-        
+
+        Unlike :meth:`smiles_to_cid`, this compares structures: the SMILES is
+        converted to a standard InChI with RDKit and looked up by that, so any
+        valid SMILES for the compound finds it.
+
         Args:
             smiles (str): SMILES string
-        
+
         Returns:
-            list: List of CAS numbers, or None if not found
-        
+            list: List of CAS numbers, or None if not found, if RDKit cannot
+            parse the SMILES, or if RDKit is not installed.
+
         Example:
             >>> db = PubChemID()
-            >>> cas_list = db.smiles_to_cas("CC(=O)OC1=CC=CC=C1C(=O)O")  # Aspirin
-            >>> print(cas_list)
+            >>> db.smiles_to_cas("CC(=O)OC1=CC=CC=C1C(=O)O")  # Aspirin
+            ['50-78-2']
+            >>> db.smiles_to_cas("OCC"), db.smiles_to_cid("OCC")
+            (['64-17-5'], None)
         """
         # First convert SMILES to InChI using RDKit
         try:
@@ -1048,26 +1323,29 @@ class PubChemID(SQLiteClient):
             inchi = Chem.MolToInchi(mol)
         except Exception:
             return None
-        
+
         # Then look up by InChI
         return self.inchi_to_cas(inchi)
-    
+
     def name_to_cas(self, name: str, exact: bool = True) -> Optional[List[str]]:
         """
         Convert chemical name to CAS number(s).
-        
+
         Args:
             name (str): Chemical name or synonym
             exact (bool): If True, exact match only. If False, returns first match from search.
-        
+
         Returns:
-            list: List of CAS numbers, or None if not found
-        
+            list: The first matching compound's CAS numbers, or None if no
+            compound matches. See :meth:`search_by_name` for how names match.
+
         Example:
             >>> db = PubChemID()
-            >>> cas_list = db.name_to_cas("aspirin")
-            >>> print(cas_list)
-        
+            >>> db.name_to_cas("aspirin")
+            ['50-78-2']
+            >>> db.name_to_cas("no such compound") is None
+            True
+
         Note:
             For exact=False, only the first match from the search is returned.
             Use search_by_name() for more control over multiple matches.
@@ -1076,104 +1354,100 @@ class PubChemID(SQLiteClient):
         if not results:
             return None
         return results[0].get('cas_numbers')
-    
+
     def formula_to_cas(self, formula: str, limit: int = 100) -> Optional[List[str]]:
         """
         Convert molecular formula to CAS numbers.
-        
+
         Note: Molecular formulas are not unique - many isomers can share the same formula.
         This method returns CAS numbers for all compounds matching the formula.
-        
+
         Args:
             formula (str): Molecular formula (e.g., "C9H8O4", "CH2O")
             limit (int): Maximum number of compounds to retrieve
-        
+
         Returns:
-            list: List of CAS numbers for all compounds with this formula, or None if not found
-        
+            list: The distinct CAS numbers of the first ``limit`` compounds
+            with this formula, sorted as strings, or None if none is found
+
         Example:
             >>> db = PubChemID()
             >>> cas_list = db.formula_to_cas("C9H8O4")
-            >>> print(f"Found {len(cas_list)} CAS numbers for C9H8O4")
-        
+            >>> "50-78-2" in cas_list, cas_list == sorted(cas_list)
+            (True, True)
+
         Warning:
             Can return many results for common formulas. Use limit parameter to control.
         """
         results = self.search_by_formula(formula, limit=limit)
         if not results:
             return None
-        
+
         # Collect all unique CAS numbers from all matching compounds
         all_cas = []
         for compound in results:
             cas_numbers = compound.get('cas_numbers', [])
             if cas_numbers:
                 all_cas.extend(cas_numbers)
-        
+
         # Remove duplicates and sort
         unique_cas = sorted(set(all_cas))
         return unique_cas if unique_cas else None
-    
+
     def batch_smiles_to_cas(self, smiles_list: List[str]) -> Dict[str, Optional[List[str]]]:
         """
         Convert multiple SMILES strings to CAS numbers.
-        
+
         Args:
             smiles_list (list): List of SMILES strings
-        
+
         Returns:
             dict: Mapping of SMILES -> list of CAS numbers (None if not found)
-        
+
         Example:
             >>> db = PubChemID()
-            >>> smiles = ["C", "CO", "CCO"]
-            >>> results = db.batch_smiles_to_cas(smiles)
-            >>> for smi, cas in results.items():
-            ...     print(f"{smi}: {cas}")
+            >>> db.batch_smiles_to_cas(["OCC", "not a smiles"])
+            {'OCC': ['64-17-5'], 'not a smiles': None}
         """
         return {smiles: self.smiles_to_cas(smiles) for smiles in smiles_list}
-    
+
     def batch_name_to_cas(self, name_list: List[str], exact: bool = True) -> Dict[str, Optional[List[str]]]:
         """
         Convert multiple chemical names to CAS numbers.
-        
+
         Args:
             name_list (list): List of chemical names
             exact (bool): If True, exact match only
-        
+
         Returns:
             dict: Mapping of name -> list of CAS numbers (None if not found)
-        
+
         Example:
             >>> db = PubChemID()
-            >>> names = ["aspirin", "caffeine", "glucose"]
-            >>> results = db.batch_name_to_cas(names)
-            >>> for name, cas in results.items():
-            ...     print(f"{name}: {cas}")
+            >>> db.batch_name_to_cas(["aspirin", "ethanol", "xyzzy"])
+            {'aspirin': ['50-78-2'], 'ethanol': ['64-17-5'], 'xyzzy': None}
         """
         return {name: self.name_to_cas(name, exact=exact) for name in name_list}
-    
+
     def batch_formula_to_cas(self, formula_list: List[str], limit: int = 100) -> Dict[str, Optional[List[str]]]:
         """
         Convert multiple molecular formulas to CAS numbers.
-        
+
         Args:
             formula_list (list): List of molecular formulas
             limit (int): Maximum number of compounds per formula
-        
+
         Returns:
             dict: Mapping of formula -> list of CAS numbers (None if not found)
-        
+
         Example:
             >>> db = PubChemID()
-            >>> formulas = ["H2O", "CH4", "C9H8O4"]
-            >>> results = db.batch_formula_to_cas(formulas)
-            >>> for formula, cas_list in results.items():
-            ...     if cas_list:
-            ...         print(f"{formula}: {len(cas_list)} compounds")
+            >>> results = db.batch_formula_to_cas(["H2O", "CH4", "XeF9"])
+            >>> "7732-18-5" in results["H2O"], "74-82-8" in results["CH4"], results["XeF9"]
+            (True, True, None)
         """
         return {formula: self.formula_to_cas(formula, limit=limit) for formula in formula_list}
-    
+
     @property
     def api(self) -> 'PubChemAPI':
         """
@@ -1185,6 +1459,12 @@ class PubChemID(SQLiteClient):
         Returns:
             The :class:`PubChemAPI` instance passed to ``__init__``, or one
             created with default settings.
+
+        Example:
+            >>> from provesid import PubChemAPI
+            >>> api = PubChemAPI()
+            >>> PubChemID(api=api).api is api
+            True
         """
         if self._api is None:
             self._api = PubChemAPI()
@@ -1208,8 +1488,9 @@ class PubChemID(SQLiteClient):
                 local database can answer, :attr:`offline_properties`.
             use_online_fallback: When True (default), fall back to PUG-REST for
                 anything the local database cannot answer. When False, the
-                lookup is strictly offline and an unavailable property is simply
-                absent from the result.
+                lookup is strictly offline, and a request the local database
+                cannot answer in full --- an unknown CID, or any property
+                outside :attr:`offline_properties` --- returns None.
 
         Returns:
             A dict carrying ``CID``, a ``Source`` of ``'offline'`` or
@@ -1218,7 +1499,8 @@ class PubChemID(SQLiteClient):
             which is how PubChem itself reports it — so ``'XLogP' not in
             result`` means PubChem computes no logP for this compound, not that
             the lookup fell short. Returns None when neither source knows the
-            CID.
+            CID, or when ``use_online_fallback`` is False and the request needs
+            the network.
 
         Raises:
             ValueError: If ``cid`` is not an integer, or ``properties`` is an
@@ -1232,8 +1514,10 @@ class PubChemID(SQLiteClient):
             >>> db.properties(2244, ['MolecularFormula', 'MolecularWeight'])
             {'CID': 2244, 'Source': 'offline', 'MolecularFormula': 'C9H8O4', 'MolecularWeight': 180.16}
             >>> # XLogP is PubChem's model output, never served from disk
-            >>> db.properties(2244, ['XLogP'])['Source']
+            >>> db.properties(2244, ['XLogP'])['Source']            # doctest: +SKIP
             'online'
+            >>> db.properties(2244, ['XLogP'], use_online_fallback=False) is None
+            True
         """
         rows = self.properties_for_cids([cid], properties,
                                         use_online_fallback=use_online_fallback)
@@ -1411,8 +1695,8 @@ class PubChemID(SQLiteClient):
             PubChemError: If an online request could not be completed.
 
         Example:
-            >>> db = PubChemID()                                   # doctest: +SKIP
-            >>> db.descriptors(2244, ['MolLogP', 'TPSA'])          # doctest: +SKIP
+            >>> db = PubChemID()
+            >>> db.descriptors(2244, ['MolLogP', 'TPSA'])
             {'CID': 2244, 'Source': 'rdkit', 'MolLogP': 1.3101, 'TPSA': 63.6}
             >>> db.descriptors(2244, ['XLogP'], source='pubchem')  # doctest: +SKIP
             {'CID': 2244, 'Source': 'online', 'XLogP': 1.2}
@@ -1456,9 +1740,9 @@ class PubChemID(SQLiteClient):
             PubChemError: If an online request could not be completed.
 
         Example:
-            >>> db = PubChemID()                                   # doctest: +SKIP
+            >>> db = PubChemID()
             >>> for row in db.descriptors_for_cids([2244, 702], ['HeavyAtomCount']):
-            ...     print(row)                                     # doctest: +SKIP
+            ...     print(row)
             {'CID': 2244, 'Source': 'rdkit', 'HeavyAtomCount': 13}
             {'CID': 702, 'Source': 'rdkit', 'HeavyAtomCount': 3}
         """
@@ -1517,8 +1801,8 @@ class PubChemID(SQLiteClient):
             PubChemError: If an online request could not be completed.
 
         Example:
-            >>> db = PubChemID()                                   # doctest: +SKIP
-            >>> db.descriptors_table([2244, 702], ['TPSA'])        # doctest: +SKIP
+            >>> db = PubChemID()
+            >>> db.descriptors_table([2244, 702], ['TPSA'])
                 CID Source   TPSA
             0  2244  rdkit  63.60
             1   702  rdkit  20.23
@@ -1756,32 +2040,38 @@ class PubChemID(SQLiteClient):
     def get_stats(self) -> Dict[str, int]:
         """
         Get database statistics.
-        
+
         Returns:
-            dict: Statistics about the database
-        
+            dict: ``total_compounds``, ``total_cas_numbers`` (rows in the CAS
+            table), ``compounds_with_cas``, ``total_synonyms``,
+            ``compounds_with_inchikey``, ``database_path`` and
+            ``database_size_mb``. The counts depend on the release.
+
         Example:
             >>> db = PubChemID()
             >>> stats = db.get_stats()
-            >>> print(f"Total compounds: {stats['total_compounds']:,}")
+            >>> print(f"Total compounds: {stats['total_compounds']:,}")  # doctest: +SKIP
+            Total compounds: 1,589,910
+            >>> stats['compounds_with_cas'] <= stats['total_compounds']
+            True
         """
         cursor = self.conn.cursor()
-        
+
         cursor.execute("SELECT COUNT(*) FROM compounds")
         total_compounds = cursor.fetchone()[0]
-        
+
         cursor.execute("SELECT COUNT(*) FROM cas_numbers")
         total_cas = cursor.fetchone()[0]
-        
+
         cursor.execute("SELECT COUNT(DISTINCT cid) FROM cas_numbers")
         compounds_with_cas = cursor.fetchone()[0]
-        
+
         cursor.execute("SELECT COUNT(*) FROM synonyms")
         total_synonyms = cursor.fetchone()[0]
-        
+
         cursor.execute("SELECT COUNT(*) FROM compounds WHERE inchikey IS NOT NULL AND inchikey != ''")
         compounds_with_inchikey = cursor.fetchone()[0]
-        
+
         return {
             'total_compounds': total_compounds,
             'total_cas_numbers': total_cas,

@@ -36,6 +36,22 @@ $env:CAS_API_KEY="your-cas-api-key-here"
 python -m pytest tests/ -v --ignore=tests/test_cascommonchem.py
 ```
 
+## Running the Docstring Examples
+
+Every public object's docstring carries an example, and they can be run as
+doctests:
+
+```bash
+python -m pytest --doctest-modules src/provesid
+```
+
+The ordinary run above never collects them. Examples that need the network
+are marked `# doctest: +SKIP`. Examples that read an offline database run
+against the installed copy; a module whose database is not installed is
+skipped, never downloaded (`src/conftest.py`). The outputs shown were taken
+from the databases as installed on the day they were written, so a later
+release can change a count or an ordering without anything being wrong.
+
 ## Test Categories
 
 ### Core API Tests

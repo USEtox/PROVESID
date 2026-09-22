@@ -20,8 +20,8 @@ without touching PubChem.
 Example:
     >>> parse_value("138-140 °C", "Melting Point")
     ParsedValue(text='138-140 °C', value=None, value_min=138.0, value_max=140.0, unit='°C', ...)
-    >>> parse_value("8.5X10-5 mm Hg at 25 °C", "Vapor Pressure").value_si
-    0.011332400...
+    >>> round(parse_value("8.5X10-5 mm Hg at 25 °C", "Vapor Pressure").value_si, 7)
+    0.0113324
     >>> parse_value("Insoluble in water", "Solubility").qualitative
     'insoluble'
 """
@@ -218,7 +218,7 @@ class ParsedValue:
 
     Example:
         >>> v = parse_value("2.47 cP at 20 °C", "Viscosity")
-        >>> v.value, v.unit, v.value_si, v.unit_si, v.temperature_c
+        >>> v.value, v.unit, round(v.value_si, 5), v.unit_si, v.temperature_c
         (2.47, 'cP', 0.00247, 'Pa·s', 20.0)
     """
 
@@ -243,6 +243,12 @@ class ParsedValue:
 
         Returns:
             True when either a single value or a range was parsed.
+
+        Example:
+            >>> parse_value("138-140 °C", "Melting Point").is_numeric
+            True
+            >>> parse_value("Insoluble in water", "Solubility").is_numeric
+            False
         """
         return self.value is not None or self.value_min is not None
 
@@ -253,6 +259,12 @@ class ParsedValue:
 
         Returns:
             True when the two ends differ.
+
+        Example:
+            >>> parse_value("138-140 °C", "Melting Point").is_range
+            True
+            >>> parse_value("135 °C", "Melting Point").is_range
+            False
         """
         return (self.value is None and self.value_min is not None
                 and self.value_max is not None)

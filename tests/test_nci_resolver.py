@@ -153,16 +153,24 @@ class TestNCIChemicalIdentifierResolver:
             assert isinstance(inchi, str)
             assert inchi.startswith('InChI=')
             
-            # Try to convert back to SMILES - this may fail for some InChI formats
-            try:
-                smiles = resolver.resolve(inchi, 'smiles')
-                assert isinstance(smiles, str)
-                assert 'C' in smiles and 'O' in smiles
-            except (NCIResolverNotFoundError, NCIResolverError):
-                # Some InChI formats might not be convertible back
-                pytest.skip("InChI to SMILES conversion not supported for this format")
-        except (NCIResolverNotFoundError, NCIResolverError):
-            pytest.skip("NCI resolver not available or InChI conversion not supported")
+            # And back. This used to be skipped as "not supported for this
+            # format"; it was the client percent-encoding the InChI's slashes.
+            smiles = resolver.resolve(inchi, 'smiles')
+            assert smiles == 'CCO'
+        except NCIResolverNotFoundError:
+            raise
+        except NCIResolverError:
+            pytest.skip("NCI resolver not available")
+
+    def test_slashes_stay_path_separators(self, resolver):
+        """
+        CACTUS's server answers 404 to a path holding ``%2F``, so an InChI or
+        a SMILES with stereo bonds has to keep its slashes as they are.
+        """
+        url = resolver._build_url('InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3', 'smiles')
+        assert url.endswith('/InChI%3D1S/C2H6O/c1-2-3/h3H%2C2H2%2C1H3/smiles')
+        assert '/C/C%3DC/C/' in resolver._build_url('C/C=C/C', 'stdinchikey')
+        assert '%23' in resolver._build_url('C#C', 'smiles')
 
 
 class TestConvenienceFunctions:

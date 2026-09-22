@@ -1,3 +1,23 @@
+"""
+OPSIN, which turns systematic chemical names into structures.
+
+Two ways in. :class:`OPSIN` calls the hosted web service at EBI, one request
+per name, with pacing, retries and caching. :class:`PYOPSIN` runs the same
+parser locally through ``py2opsin``, which bundles OPSIN's jar and needs a
+Java runtime but no network, and parses a list in one JVM start.
+
+OPSIN reads names; it does not look them up. ``"ethanol"`` and
+``"2-acetyloxybenzoic acid"`` parse, while a trade name such as
+``"aspirin"`` does not.
+
+Example:
+    >>> from provesid.opsin import OPSIN, PYOPSIN
+    >>> PYOPSIN().get_std_inchikey("ethanol")                 # doctest: +SKIP
+    'LFQSCWFLJHTTHZ-UHFFFAOYSA-N'
+    >>> OPSIN().get_id("ethanol")["smiles"]                   # doctest: +SKIP
+    'C(C)O'
+"""
+
 import logging
 import time
 from typing import Any
@@ -177,6 +197,10 @@ class OPSIN:
         Args:
             use_cache: Whether to use the cache for lookups (default True).
                 When False, skips the cache lookup but still stores results.
+
+        Example:
+            >>> OPSIN(use_cache=False).use_cache
+            False
         """
         # This module used to name the Cambridge host, opsin.ch.cam.ac.uk,
         # which answers every request with a 301 to here --- so asking here
@@ -228,11 +252,31 @@ class OPSIN:
                 self.CACHE_SCHEMA_VERSION)
 
     def clear_cache(self):
-        """Clear the cache for all OPSIN methods"""
+        """
+        Delete every cached OPSIN answer, in memory and on disk.
+
+        The same as ``provesid.clear_cache(service='opsin')``.
+
+        Example:
+            >>> opsin = OPSIN()
+            >>> opsin.clear_cache()
+            >>> opsin.get_cache_info()['file_count']
+            0
+        """
         clear_cache(service='opsin')
-    
+
     def get_cache_info(self):
-        """Get information about the current cache state"""
+        """
+        Size and location of the OPSIN cache.
+
+        Returns:
+            dict: As :func:`provesid.cache.get_cache_info` reports it for
+            ``service='opsin'``.
+
+        Example:
+            >>> OPSIN().get_cache_info()['cache_directory'].endswith('opsin')
+            True
+        """
         return get_cache_info(service='opsin')
 
     @cached(service='opsin', skip_if=_not_resolved)
@@ -257,7 +301,7 @@ class OPSIN:
 
         Example:
             >>> OPSIN().get_id("ethanol")["smiles"]        # doctest: +SKIP
-            'CCO'
+            'C(C)O'
             >>> OPSIN().get_id("notachemical")["status"]   # doctest: +SKIP
             'FAILURE'
         """
@@ -308,7 +352,7 @@ class OPSIN:
             "stdinchikey": "",
             "smiles": ""
         }
-    
+
     @cached(service='opsin', skip_if=_any_not_resolved)
     def get_id_from_list(self, iupac_names: list, timeout=30, pause_time=0.5):
         """
@@ -327,8 +371,9 @@ class OPSIN:
             not a missing row.
 
         Example:
-            >>> OPSIN().get_id_from_list(["ethanol", "benzene"])   # doctest: +SKIP
-            [{'iupac_name': 'ethanol', ...}, {'iupac_name': 'benzene', ...}]
+            >>> records = OPSIN().get_id_from_list(["ethanol", "benzene"])  # doctest: +SKIP
+            >>> [(r["iupac_name"], r["status"]) for r in records]           # doctest: +SKIP
+            [('ethanol', 'SUCCESS'), ('benzene', 'SUCCESS')]
         """
         results = []
         for iupac_name in iupac_names:
@@ -340,46 +385,167 @@ class OPSIN:
             results.append(res)
             time.sleep(pause_time)
         return results
-    
+
 class PYOPSIN:
     """
-    This class uses py2opsin (https://github.com/JacksonBurns/py2opsin) package 
-    that can be installed via pip:
-    pip install py2opsin
-    It provides all functionalities as the OPSIN class above -and some more- but works offline 
-    and faster. You need to have Java installed on your system.
-    Note:
-    output_format (str, optional) – One of “SMILES”, “ExtendedSMILES”, 
-    “CML”, “InChI”, “StdInChI”, or “StdInChIKey”. Defaults to “SMILES”.
+    OPSIN run locally through ``py2opsin``: offline, and faster for many names.
+
+    ``py2opsin`` (https://github.com/JacksonBurns/py2opsin, ``pip install
+    py2opsin``) bundles OPSIN's jar and calls it through Java, so a Java
+    runtime must be installed. Each method starts the JVM once, about half a
+    second, whether it is given one name or a list; pass a list to parse many.
+
+    Every method accepts a name or a list of names and returns a string or a
+    list of strings to match. A name OPSIN cannot parse gives ``""`` and a
+    ``RuntimeWarning`` from ``py2opsin``; nothing is raised.
+
+    Example:
+        >>> opsin = PYOPSIN()
+        >>> opsin.get_smiles("ethanol")                            # doctest: +SKIP
+        'C(C)O'
+        >>> opsin.get_smiles(["ethanol", "benzene"])               # doctest: +SKIP
+        ['C(C)O', 'C1=CC=CC=C1']
     """
     def __init__(self, jar_fpath = "default"):
+        """
+        Initialize the local OPSIN parser.
+
+        Args:
+            jar_fpath: Path to an OPSIN jar, or ``"default"`` for the one
+                ``py2opsin`` ships.
+
+        Example:
+            >>> PYOPSIN().jar_fpath
+            'default'
+        """
         self.jar_fpath = jar_fpath
 
     def get_smiles(self, iupac_name: str):
+        """
+        Parse a name to SMILES, as OPSIN writes it (not canonicalised).
+
+        Args:
+            iupac_name: A name, or a list of names.
+
+        Returns:
+            The SMILES, or a list of them; ``""`` for a name OPSIN cannot parse.
+
+        Example:
+            >>> PYOPSIN().get_smiles("ethanol")                    # doctest: +SKIP
+            'C(C)O'
+            >>> PYOPSIN().get_smiles("notachemical12345")          # doctest: +SKIP
+            ''
+        """
         smiles = py2opsin(iupac_name, output_format="SMILES", jar_fpath=self.jar_fpath)
         return smiles
-    
+
     def get_extended_smiles(self, iupac_name: str):
+        """
+        Parse a name to ChemAxon extended SMILES, which keeps atom labels.
+
+        Args:
+            iupac_name: A name, or a list of names.
+
+        Returns:
+            The extended SMILES, or a list of them; ``""`` on failure.
+
+        Example:
+            >>> PYOPSIN().get_extended_smiles("ethanol")           # doctest: +SKIP
+            'C(C)O |$_AV:1;2;O$|'
+        """
         ext_smiles = py2opsin(iupac_name, output_format="ExtendedSMILES", jar_fpath=self.jar_fpath)
         return ext_smiles
-    
+
     def get_inchi(self, iupac_name: str):
+        """
+        Parse a name to a non-standard InChI (``InChI=1/...``).
+
+        Args:
+            iupac_name: A name, or a list of names.
+
+        Returns:
+            The InChI, or a list of them; ``""`` on failure.
+
+        Example:
+            >>> PYOPSIN().get_inchi("ethanol")                     # doctest: +SKIP
+            'InChI=1/C2H6O/c1-2-3/h3H,2H2,1H3'
+        """
         inchi = py2opsin(iupac_name, output_format="InChI", jar_fpath=self.jar_fpath)
         return inchi
-    
+
     def get_std_inchi(self, iupac_name: str):
+        """
+        Parse a name to a standard InChI (``InChI=1S/...``).
+
+        Args:
+            iupac_name: A name, or a list of names.
+
+        Returns:
+            The standard InChI, or a list of them; ``""`` on failure.
+
+        Example:
+            >>> PYOPSIN().get_std_inchi("ethanol")                 # doctest: +SKIP
+            'InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3'
+        """
         std_inchi = py2opsin(iupac_name, output_format="StdInChI", jar_fpath=self.jar_fpath)
         return std_inchi
-    
+
     def get_std_inchikey(self, iupac_name: str):
+        """
+        Parse a name to a standard InChIKey.
+
+        Args:
+            iupac_name: A name, or a list of names.
+
+        Returns:
+            The InChIKey, or a list of them; ``""`` on failure.
+
+        Example:
+            >>> PYOPSIN().get_std_inchikey("ethanol")              # doctest: +SKIP
+            'LFQSCWFLJHTTHZ-UHFFFAOYSA-N'
+        """
         std_inchikey = py2opsin(iupac_name, output_format="StdInChIKey", jar_fpath=self.jar_fpath)
         return std_inchikey
-    
+
     def get_CML(self, iupac_name: str):
+        """
+        Parse a name to a Chemical Markup Language document.
+
+        Args:
+            iupac_name: A name, or a list of names.
+
+        Returns:
+            The CML as an XML string, or a list of them; ``""`` on failure.
+
+        Example:
+            >>> PYOPSIN().get_CML("ethanol")[:38]                  # doctest: +SKIP
+            "<?xml version='1.0' encoding='UTF-8'?>"
+        """
         cml = py2opsin(iupac_name, output_format="CML", jar_fpath=self.jar_fpath)
         return cml
 
     def get_id(self, iupac_name: str):
+        """
+        Parse one name to every representation OPSIN writes.
+
+        Six parser runs, one per representation. For more than one name use
+        :meth:`get_id_from_list`, which costs the same six runs for the whole
+        list.
+
+        Args:
+            iupac_name: The systematic name.
+
+        Returns:
+            dict: ``iupac_name``, ``status`` (``"SUCCESS"`` when a SMILES came
+            back, else ``"FAILURE"``), ``message`` (always empty here),
+            ``smiles``, ``extended_smiles``, ``inchi``, ``stdinchi``,
+            ``stdinchikey`` and ``cml``.
+
+        Example:
+            >>> record = PYOPSIN().get_id("ethanol")               # doctest: +SKIP
+            >>> record["status"], record["smiles"], record["stdinchikey"]  # doctest: +SKIP
+            ('SUCCESS', 'C(C)O', 'LFQSCWFLJHTTHZ-UHFFFAOYSA-N')
+        """
         res = self._empty_res()
         res["iupac_name"] = iupac_name
         res["smiles"] = self.get_smiles(iupac_name)
@@ -391,12 +557,27 @@ class PYOPSIN:
         if res["smiles"] == "":
             res["status"] = "FAILURE"
         else:
-            res["status"] = "SUCCESS"                
+            res["status"] = "SUCCESS"
         return res
 
     def get_id_from_list(self, iupac_names: list):
         """
-        This function does not need a loop since the py2opsin package handles lists internally.
+        Parse many names to every representation, six parser runs in all.
+
+        py2opsin takes the whole list per run, so this does not loop over
+        :meth:`get_id`.
+
+        Args:
+            iupac_names: The systematic names.
+
+        Returns:
+            list: One :meth:`get_id` dict per name, in order, each with its own
+            ``status``.
+
+        Example:
+            >>> records = PYOPSIN().get_id_from_list(["ethanol", "notachemical12345"])  # doctest: +SKIP
+            >>> [(r["iupac_name"], r["smiles"], r["status"]) for r in records]           # doctest: +SKIP
+            [('ethanol', 'C(C)O', 'SUCCESS'), ('notachemical12345', '', 'FAILURE')]
         """
         res = self.get_id(iupac_names)
         # convert to list of dicts
@@ -410,14 +591,16 @@ class PYOPSIN:
             single_res["stdinchi"] = res["stdinchi"][i]
             single_res["stdinchikey"] = res["stdinchikey"][i]
             single_res["cml"] = res["cml"][i]
-            single_res["status"] = res["status"][i]
+            # get_id gives one status for the whole list; indexing it gave
+            # each name a letter of "SUCCESS".
+            single_res["status"] = "SUCCESS" if single_res["smiles"] else "FAILURE"
             results.append(single_res)
         return results
 
     @staticmethod
     def _empty_res():
         """
-        “SMILES”, “ExtendedSMILES”, 
+        “SMILES”, “ExtendedSMILES”,
     “CML”, “InChI”, “StdInChI”, or “StdInChIKey”. Defaults to “SMILES”.
         create an empty response dictionary of the following format:
         {

@@ -523,3 +523,23 @@ class TestOPSINCacheKey:
     def test_the_key_carries_no_memory_address(self):
         """The defect the cache-key fix was written for, pinned here too."""
         assert "0x" not in str(OPSIN().__cache_key__())
+
+
+@pytest.mark.unit
+def test_pyopsin_list_gives_each_name_its_own_status(monkeypatch):
+    """
+    get_id computes one status for the whole list; get_id_from_list used to
+    index that string, so the three names below came back 'S', 'U' and 'C'.
+    """
+    import provesid.opsin as opsin_module
+    from provesid.opsin import PYOPSIN
+
+    answers = {"ethanol": "C(C)O", "notachemical12345": "", "benzene": "C1=CC=CC=C1"}
+    monkeypatch.setattr(
+        opsin_module, "py2opsin",
+        lambda names, output_format, jar_fpath: [answers[name] for name in names],
+    )
+
+    records = PYOPSIN().get_id_from_list(list(answers))
+    assert [record["status"] for record in records] == ["SUCCESS", "FAILURE", "SUCCESS"]
+    assert [record["smiles"] for record in records] == list(answers.values())

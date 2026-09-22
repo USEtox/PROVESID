@@ -14,6 +14,7 @@ matches any of them, case-insensitively, in tens of microseconds. A chemical
 
 The index is built after a download. A database downloaded earlier gets it
 on its first exact name lookup: about 20 s, once, adding 290 MiB to the file.
+It also answers retired CAS numbers: ``get_by_alternate_casrn``.
 
 Run with::
 
@@ -51,3 +52,10 @@ with CompToxID() as db:
 
     # get_by_name still means the preferred name, and only that.
     print("\nget_by_name('Acetaldoxime'):", db.get_by_name("Acetaldoxime"))
+
+    # A retired CAS number is no chemical's CASRN, but CompTox still lists it.
+    # Search("cas") falls back to this whenever get_by_casrn misses.
+    for cas in ["39400-72-1", "11126-35-5"]:
+        hit = db.get_by_alternate_casrn(cas)
+        print(f"{cas}: get_by_casrn={db.get_by_casrn(cas)}, "
+              f"alternate -> {hit['PREFERRED_NAME']} (current CAS {hit['CASRN']})")

@@ -164,3 +164,18 @@ the index existed gets it on its first exact name lookup, which takes about
 20 s once and adds 290 MiB; call `db.build_name_index()` to pay that at a time
 of your choosing. On a read-only file, exact lookups fall back to preferred
 names alone, with one warning.
+
+The same table answers **retired and alternate CAS numbers**, the ones
+CompTox lists among a chemical's identifiers but not as its `CASRN`:
+
+```python
+with CompToxID() as db:
+    db.get_by_casrn("39400-72-1")                                # None: not a current number
+    db.get_by_alternate_casrn("39400-72-1")["PREFERRED_NAME"]    # 'Atrazine'
+```
+
+`get_by_alternate_casrn` answers only when exactly one chemical lists the
+number. Four of the 83,933 such numbers are listed by two unrelated
+chemicals, and those four go unanswered. `Search("cas")` asks it whenever
+`get_by_casrn` misses, so a retired number in an old dataset resolves
+offline.

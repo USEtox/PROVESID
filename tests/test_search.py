@@ -63,6 +63,9 @@ class _CompToxStub:
     def get_by_casrn(self, cas):
         return self._row
 
+    def get_by_alternate_casrn(self, cas):
+        return None
+
     def get_by_inchikey(self, ik):
         return self._row
 

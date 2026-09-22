@@ -21,11 +21,11 @@ logging.basicConfig(level=logging.WARNING)
 logging.getLogger("provesid.search").setLevel(logging.DEBUG)
 
 # Old datasets often carry CAS numbers that CAS has since deleted or merged.
-# The offline databases index current numbers only; CACTUS still lists the
-# retired ones.
+# CompTox lists most of them beside the current number, so they are answered
+# offline too; the network is asked only about what no database holds.
 cas_list = [
     "50-78-2",     # Aspirin: in every offline database, so never asked online
-    "39400-72-1",  # A retired CAS number of atrazine (current: 1912-24-9)
+    "39400-72-1",  # A retired CAS number of atrazine: CompTox lists it, so offline
     "0000-00-0",   # Not a compound: every source misses, online included
 ]
 

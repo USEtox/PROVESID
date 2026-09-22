@@ -3413,7 +3413,7 @@ shows reliably is that nothing regressed.
 
 ### 25.5 Still open
 
-- **Retired CAS numbers, offline.** The index already maps `39400-72-1` to
+- ~~**Retired CAS numbers, offline.**~~ **Done, §26.** The index already maps `39400-72-1` to
   atrazine. §23.4 found that all 8 retired numbers it tried missed offline,
   and that only CACTUS resolved them. Consulting the index from the `cas`
   cell when `get_by_casrn` misses would answer them without the network.
@@ -3432,3 +3432,111 @@ shows reliably is that nothing regressed.
   PHENYRAMIDOL, the "Evasprin" compound of the regression this test file
   was written for. This happened before §25 as well. The fuzzy-name path
   still lets a substring-sharing synonym outrank the intended compound.
+
+---
+
+## 26. Landed on 2026-09-22 — retired CAS numbers, offline (§25.5)
+
+§25's name index already held every CAS number CompTox lists, current or
+not. This change lets a CAS query use it. It is the offline counterpart of
+the job §23.4 found only CACTUS could do.
+
+### 26.1 What landed
+
+- `CompToxID.get_by_alternate_casrn(casrn)` returns the chemical that lists
+  `casrn` among its `IDENTIFIER` tokens (name-index `kind` 2), but only
+  when **exactly one** chemical does. It returns `None` when the input is
+  not shaped like a CAS number, when no chemical lists it, when two do, or
+  when there is no index. `get_by_casrn` is unchanged.
+- `sources.py`'s CompTox `cas` cell is now `get_by_casrn(v) or
+  get_by_alternate_casrn(v)`. A number that is some chemical's own `CASRN`
+  therefore belongs to that chemical, whatever else lists it. The new path
+  runs only on a miss, so no current number can change answer.
+- `examples/search/online_fallback_demo.py` had used `39400-72-1` as its
+  example of what only CACTUS knows. That number is now answered offline,
+  and the comments say so. `examples/comptox/name_index_demo.py` and
+  `docs/api/sqlite_clients.md` show the new method.
+
+### 26.2 How ambiguous the listed numbers are
+
+On the installed release, 1 303 984 CAS-shaped identifier tokens are
+listed, and 1 220 051 of them are also some chemical's `CASRN`. That leaves
+**83 933** that appear only in `IDENTIFIER`, and so only the new path can
+answer them. 83 929 are listed by a single chemical. Four are listed by two
+unrelated ones, for example `5990-67-0` by both tetrandrine and a
+piperidinyl pyridinecarboxylate. They look like data errors, and they go
+unanswered rather than guessed. One of the 83 933 fails the CAS checksum.
+It is still answered, because a typo'd number CompTox recorded is a
+number some dataset may carry.
+
+A first draft took any single match. The test suite caught the flaw: an
+identifier token is not necessarily a CAS number. "Aspirin" is listed by
+exactly one chemical as a *synonym*, so the method returned that chemical as
+the owner of the "CAS number" `Aspirin`. The input is now required to be
+CAS-shaped.
+
+### 26.3 Before and after
+
+300 numbers drawn with seed 0 from the 83 929 unambiguous ones, which is
+the only population whose answers can change, plus the three retired
+numbers §23.4 named, whose structures CACTUS had confirmed. "Before" is
+this code with `get_by_alternate_casrn` returning `None`, which is exactly
+the old lookup. Truth is the structure of the chemical CompTox lists the
+number under. That is circular for CompTox's own answers, so the
+informative rows are agreement with the other sources and the three known
+numbers.
+
+| preset | before (right / wrong / no structure / none) | after |
+|---|---|---|
+| balanced | 6 / 1 / 1 / 292 | 244 / 0 / 53 / 3 |
+| strict | 1 / 0 / 1 / 298 | 12 / 0 / 1 / 287 |
+
+"No structure" covers two cases. 45 are substances CompTox gives a
+DTXSID but no InChIKey, such as mixtures and UVCBs. 8 are structures from
+another source for chemicals CompTox holds no InChIKey for.
+
+- **Agreement.** Before the change, another source answered 8 of the 300.
+  Afterwards CompTox agrees with it on 7, and 6 of those gain a
+  corroborating vote. That vote is what moves 11 answers into `strict`.
+- **The one disagreement** is `68459-97-2`. PubChem draws it as a 1:2:1
+  zinc chloride / diazo-amine compound. CompTox lists it as an alternate
+  number of the bis-diazonium tetrachlorozincate (`15280-31-6`). That is
+  the same zinc chloride diazonium salt with a different stoichiometry.
+  Both answers have one source, so the tie now goes to CompTox. Neither is
+  clearly wrong.
+- **The three known numbers** (`39400-72-1` and `11121-31-6` for atrazine,
+  `11126-35-5` for aspirin) went from none to right in balanced. They stay
+  none in strict, correctly, because CompTox is their only witness.
+- Timing: 300 queries took 0.4 s before and 0.6 s after.
+
+### 26.4 Validation
+
+- `tests/test_comptox_name_index.py`: 29 passed (22 + 7). The new tests
+  cover a retired number found, an ambiguous number unanswered, an unknown
+  number, a listed synonym not treated as a CAS number, the `cas` cell
+  preferring a chemical's own `CASRN` over another chemical's listing, the
+  cell's fallback, and no index meaning no answer.
+- `_CompToxStub` in `test_search.py` gained `get_by_alternate_casrn`.
+  Without it, every CAS miss against the stub would have been logged as a
+  failed lookup.
+- `pytest tests/`: **1486 passed, 34 skipped, 0 failed** (7 min 53 s).
+- Both demos were run. Search on the four default sources with
+  `online_fallback=True` answers `39400-72-1` from CompTox and sends only
+  the nonsense number online.
+
+### 26.5 Still open
+
+- **`CASRN` reports the number queried, not the current one.**
+  `_resolve_cas` sets `result["CASRN"] = cas`, so atrazine found by
+  `39400-72-1` is reported as `CASRN = 39400-72-1`. The current `1912-24-9`
+  is available in the candidate. The online fallback does the same, so
+  this is §23.5's question, and the two should be settled together: should
+  a row say what was asked, or what the compound is? A `CASRN_current`
+  column, or a note in `source_details`, would give both.
+- **A CAS example for the online fallback.** Of 3 000 ZeroPM CAS numbers,
+  only 4 miss all four default databases, and CACTUS answered none of
+  them. Only one of the four was even sent online. The other three produced
+  an offline candidate with neither a structure nor a DTXSID, and under
+  §23's rule that blocks the fallback. Whether a candidate with no
+  identifiers at all should count as "found" deserves a look.
+- §24.5's other items, §23.5, §4.13 and §22.6 are unchanged.

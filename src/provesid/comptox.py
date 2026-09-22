@@ -31,6 +31,7 @@ Example:
 """
 
 import os
+import re
 import sqlite3
 import logging
 import threading
@@ -44,6 +45,9 @@ from .utils import user_dataset_path
 #: The table :meth:`CompToxID.build_name_index` adds to the database: one row
 #: per distinct name of each chemical, keyed by :func:`name_key`.
 NAME_INDEX_TABLE = "chemical_names"
+
+#: The shape of a CAS Registry Number, for inputs that must be one.
+_CAS_NUMBER = re.compile(r"\d{2,7}-\d{2}-\d")
 
 #: Where a name came from, in the order an exact lookup ranks its matches: a
 #: chemical *called* the query outranks one that merely lists it as a synonym.
@@ -498,6 +502,66 @@ class CompToxID(SQLiteClient):
             return None
 
         result = dict(row)
+        result["identifiers"] = self._parse_identifiers(result.get("IDENTIFIER"))
+        return result
+
+    def get_by_alternate_casrn(self, casrn: str) -> Optional[Dict[str, Any]]:
+        """
+        Get the chemical that lists a CAS number other than its own ``CASRN``.
+
+        CAS deletes and merges registry numbers, and old datasets still carry
+        the numbers it retired. CompTox keeps them, together with alternate
+        numbers, among a chemical's ``IDENTIFIER`` tokens, where
+        :meth:`get_by_casrn` does not look. For example, atrazine is
+        ``1912-24-9`` but also lists ``39400-72-1``. This method reads the name
+        index (see :meth:`build_name_index`) for such a number.
+
+        It answers only when **exactly one** chemical lists the number.
+        Of the 83,933 numbers CompTox holds only in ``IDENTIFIER``, four are
+        listed by two unrelated chemicals, and picking one of the two would
+        be a guess. Call :meth:`get_by_casrn` first: a number that is some
+        chemical's own ``CASRN`` belongs to that chemical, whatever else
+        lists it.
+
+        Args:
+            casrn (str): CAS Registry Number (e.g., "39400-72-1")
+
+        Returns:
+            dict: Chemical information, or None if ``casrn`` is not shaped
+            like a CAS number, no chemical lists it, more than one does, or the
+            name index is unavailable (a read-only database that predates it).
+
+        Example:
+            >>> with CompToxID() as db:                     # doctest: +SKIP
+            ...     db.get_by_alternate_casrn("39400-72-1")["PREFERRED_NAME"]
+            'Atrazine'
+        """
+        # IDENTIFIER also holds synonyms; without this, a name one chemical
+        # lists would come back as its "alternate CAS number".
+        if not _CAS_NUMBER.fullmatch(casrn.strip()):
+            return None
+        if not self._ensure_name_index():
+            return None
+        cursor = self.conn.cursor()
+        cursor.execute(
+            f"""
+            SELECT c.* FROM {NAME_INDEX_TABLE} n
+            JOIN chemicals c ON c.rowid = n.chemical_rowid
+            WHERE n.name_key = ? AND n.kind = ?
+            LIMIT 2
+        """,
+            (name_key(casrn), NAME_KINDS["identifier"]),
+        )
+        rows = cursor.fetchall()
+        if len(rows) != 1:
+            if rows:
+                self.logger.debug(
+                    "CAS %s is listed by more than one CompTox chemical; not guessing.",
+                    casrn,
+                )
+            return None
+
+        result = dict(rows[0])
         result["identifiers"] = self._parse_identifiers(result.get("IDENTIFIER"))
         return result
 

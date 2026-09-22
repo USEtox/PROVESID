@@ -39,7 +39,13 @@ _ROWS = [
         # Lists "Aspirin" as a synonym: must rank after the chemical called it.
         "DTXSID": "DTXSID0000001", "PREFERRED_NAME": "Aspirin mixture", "CASRN": "0-00-1",
         "INCHIKEY": None, "IUPAC_NAME": None, "SMILES": None, "MOLECULAR_FORMULA": None,
-        "IDENTIFIER": "Aspirin | Gesaprim",
+        "IDENTIFIER": "Aspirin | Gesaprim | 99999-99-7",
+    },
+    {
+        # Lists the same stray number as the mixture: ambiguous, so unanswered.
+        "DTXSID": "DTXSID0000002", "PREFERRED_NAME": "Unrelated", "CASRN": "0-00-2",
+        "INCHIKEY": None, "IUPAC_NAME": None, "SMILES": None, "MOLECULAR_FORMULA": None,
+        "IDENTIFIER": "99999-99-7 | 0-00-1",
     },
 ]
 
@@ -93,13 +99,14 @@ def test_build_name_index_counts_distinct_names_per_chemical(db):
     # Aspirin: aspirin, 2-acetyloxybenzoic acid, 50-78-2, 11126-35-5,
     # acetylsalicylic acid, asa (the second "aspirin" is a duplicate) = 6.
     # Atrazine: atrazine, 1912-24-9, 39400-72-1, atrazin, gesaprim = 5.
-    # Mixture: aspirin mixture, aspirin, gesaprim = 3.
-    assert db.build_name_index() == 14
+    # Mixture: aspirin mixture, aspirin, gesaprim, 99999-99-7 = 4.
+    # Unrelated: unrelated, 99999-99-7, 0-00-1 = 3.
+    assert db.build_name_index() == 18
     assert db.has_name_index
 
 
 def test_build_name_index_twice_is_a_no_op(db):
-    assert db.build_name_index() == db.build_name_index() == 14
+    assert db.build_name_index() == db.build_name_index() == 18
 
 
 def test_each_name_keeps_the_first_kind_it_appeared_under(db):
@@ -136,7 +143,7 @@ def test_concurrent_first_lookups_build_once(db):
     for t in threads:
         t.join()
     assert [_names(r) for r in results] == [["Aspirin"]] * 4
-    assert db.conn.execute(f"SELECT COUNT(*) FROM {NAME_INDEX_TABLE}").fetchone()[0] == 14
+    assert db.conn.execute(f"SELECT COUNT(*) FROM {NAME_INDEX_TABLE}").fetchone()[0] == 18
 
 
 @pytest.mark.skipif(os.name == "nt" or os.geteuid() == 0,
@@ -194,3 +201,46 @@ def test_get_by_name_still_means_the_preferred_name(db):
 def test_search_name_cell_reaches_synonyms(db):
     candidates = LOOKUPS["name"]["comptox"](db, Query("Acetylsalicylic acid", k=5, label="name"))
     assert [c["DTXSID"] for c in candidates] == ["DTXSID5020108"]
+
+
+# ── Retired and alternate CAS numbers ────────────────────────────────────────
+
+
+def test_a_retired_cas_number_finds_the_chemical_that_lists_it(db):
+    assert db.get_by_casrn("39400-72-1") is None
+    assert db.get_by_alternate_casrn("39400-72-1")["DTXSID"] == "DTXSID9020112"
+
+
+def test_a_number_listed_by_two_chemicals_is_not_guessed(db):
+    assert db.get_by_alternate_casrn("99999-99-7") is None
+
+
+def test_an_unknown_number_finds_nothing(db):
+    assert db.get_by_alternate_casrn("12345-67-8") is None
+
+
+def test_only_identifier_tokens_count_as_alternate_numbers(db):
+    # The mixture lists "Aspirin" as an identifier token, and it is still no CAS number.
+    assert db.get_by_alternate_casrn("Aspirin") is None
+
+
+def test_the_cas_cell_prefers_a_chemical_s_own_casrn(db):
+    # 0-00-1 is the mixture's own CASRN and also listed by "Unrelated".
+    (cand,) = LOOKUPS["cas"]["comptox"](db, Query("0-00-1", k=1, label="cas"))
+    assert cand["DTXSID"] == "DTXSID0000001"
+
+
+def test_the_cas_cell_falls_back_to_a_retired_number(db):
+    (cand,) = LOOKUPS["cas"]["comptox"](db, Query("39400-72-1", k=1, label="cas"))
+    assert cand["DTXSID"] == "DTXSID9020112"
+
+
+@pytest.mark.skipif(os.name == "nt" or os.geteuid() == 0,
+                    reason="needs POSIX permissions and a non-root user")
+def test_no_index_means_no_alternate_lookup(db_path):
+    os.chmod(db_path, stat.S_IRUSR)
+    try:
+        with CompToxID(db_path=db_path, auto_download=False) as client:
+            assert client.get_by_alternate_casrn("39400-72-1") is None
+    finally:
+        os.chmod(db_path, stat.S_IRUSR | stat.S_IWUSR)

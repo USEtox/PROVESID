@@ -374,7 +374,11 @@ def _cas_or_name_cids(api: Any, value: str) -> Any:
 LOOKUPS: Dict[str, Dict[str, Lookup]] = {
     "cas": {
         "chebi": lambda c, q: _top(candidate_from_chebi_row, c.search_by_cas(q.value), q.k),
-        "comptox": lambda c, q: _one(candidate_from_comptox_row, c.get_by_casrn(q.value)),
+        # A retired or alternate number, when it is no chemical's own CASRN.
+        "comptox": lambda c, q: _one(
+            candidate_from_comptox_row,
+            c.get_by_casrn(q.value) or c.get_by_alternate_casrn(q.value),
+        ),
         "pubchem": lambda c, q: _one(candidate_from_pubchem_row, c.get_by_cas(q.value)),
         "zeropm": lambda c, q: _zeropm_table(q.label, c.get_id_table_from_cas(q.value)),
         "pubchem_online": _pubchem_online(_cas_or_name_cids),

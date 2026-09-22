@@ -32,6 +32,12 @@ Search("name", fuzzy=True, use_zeropm=True).search("caffiene")
 A `zeropm=` client passed to the constructor is ignored (with a warning) unless
 `use_zeropm=True` is also set.
 
+What each source can be asked, and by which identifier, is one table in
+`provesid.sources` (see [Source lookup table](#source-lookup-table) below).
+A gap in it is a source with no index for that identifier, which `Search`
+reaches through one it does have, such as ChEMBL through the SMILES another
+source found for a CAS number.
+
 ::: provesid.search.Search
     options:
       show_source: false
@@ -51,6 +57,18 @@ A `zeropm=` client passed to the constructor is ignored (with a warning) unless
 ::: provesid.search.strip_salts
     options:
       show_source: false
+
+---
+
+## Source lookup table
+
+::: provesid.sources
+    options:
+      show_source: false
+      members:
+        - Query
+        - LOOKUPS
+        - rank_rows_by_completeness
 
 ---
 

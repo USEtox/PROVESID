@@ -766,6 +766,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PubChemAPI.get_cache_info`.
 
 ### Changed
+- **`Search` asks its sources through one table, `provesid.sources.LOOKUPS`.**
+  The 47 hand-written `if client: try: ... except: log` blocks in nine
+  methods of `search.py` became one row per (lookup kind, source) and a single
+  driver, `Search._collect`. Adding a source is now one column in
+  `sources.py` rather than an edit to every resolver. Results are unchanged:
+  437 result rows over seven identifier types and seven configurations
+  (default, ZeroPM, fuzzy, fuzzy with ZeroPM, InChIKey skeleton, Tanimoto,
+  strict with salt stripping) were compared with the previous code on the real
+  databases, and all of them are identical. The dead `_candidates_from_name`,
+  `_fuzzy_name_candidates` and `_most_complete_row` were deleted, and
+  `search.py` shrank from 3 392 to 2 721 lines. Only the wording of the
+  warning logged when one source fails changed, to
+  `"<Source> <kind> lookup failed for <query>: <error>"`.
 - **Breaking: `PubChemID` and `ChebiSDF` have modules of their own.** The
   offline database clients were split off from the online clients they shared
   a file with: `PubChemID`, `rdkit_descriptors`, `RDKIT_DESCRIPTORS` and

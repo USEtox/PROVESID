@@ -18,7 +18,6 @@ from provesid.search import (
     OUTPUT_COLUMNS,
     Search,
     _any_candidate,
-    _most_complete_row,
     normalize_structure,
     strip_salts,
 )
@@ -348,7 +347,7 @@ class TestSearchInit:
     def test_injected_clients_not_reinitialised(self):
         chebi = _ChebiStub()
         s = Search("cas", chebi=chebi, show_progress=False)
-        assert s._chebi is chebi
+        assert s._clients["chebi"] is chebi
         assert s._clients_initialized
 
     def test_strip_salts_default_false(self):
@@ -1089,29 +1088,13 @@ class TestSaltStrippingIntegration:
 
 class TestHelpers:
     def test_any_candidate_true(self):
-        assert _any_candidate({"a": {"x": 1}, "b": None}) is True
+        assert _any_candidate({"a": [{"x": 1}], "b": []}) is True
 
     def test_any_candidate_false(self):
-        assert _any_candidate({"a": None, "b": None}) is False
+        assert _any_candidate({"a": [], "b": []}) is False
 
     def test_any_candidate_empty(self):
         assert _any_candidate({}) is False
-
-    def test_most_complete_row_picks_best(self):
-        rows = [
-            {"a": 1, "b": None, "c": None},
-            {"a": 1, "b": 2, "c": 3},
-            {"a": 1, "b": 2, "c": None},
-        ]
-        best = _most_complete_row(rows)
-        assert best["c"] == 3
-
-    def test_most_complete_row_single_item(self):
-        rows = [{"a": 1}]
-        assert _most_complete_row(rows) == {"a": 1}
-
-    def test_most_complete_row_empty(self):
-        assert _most_complete_row([]) == {}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1232,13 +1215,13 @@ class TestZeroPMOptIn:
     def test_zeropm_client_ignored_when_not_opted_in(self, caplog):
         with caplog.at_level("WARNING", logger="provesid.search"):
             s = Search("cas", show_progress=False, zeropm=_ZeroPMStub())
-        assert s._zeropm is None
+        assert s._clients["zeropm"] is None
         assert any("use_zeropm=False" in r.getMessage() for r in caplog.records)
 
     def test_zeropm_client_kept_when_opted_in(self):
         stub = _ZeroPMStub()
         s = Search("cas", show_progress=False, use_zeropm=True, zeropm=stub)
-        assert s._zeropm is stub
+        assert s._clients["zeropm"] is stub
 
     def test_zeropm_absent_from_reported_availability(self):
         s = _make_search()

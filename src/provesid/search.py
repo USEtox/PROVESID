@@ -58,7 +58,7 @@ import logging
 import re
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
 
 import pandas as pd
 from tqdm import tqdm
@@ -69,29 +69,20 @@ from .comptox import CompToxID
 from .datasets import DATASETS, fetch_command, human_bytes, require
 from .opsin import PYOPSIN
 from .pubchem_id import PubChemID
+from .sources import LOOKUPS, SOURCE_DISPLAY, SOURCE_KEYS, Query
 from .sqlite_client import DatabaseClosedError
 from .zeropm import ZeroPM
 from .tools import (
     apply_candidate_to_result,
     candidate_compatible_with_consensus,
-    candidate_from_chebi_row,
     candidate_from_chembl_row,
-    candidate_from_comptox_row,
     candidate_from_pubchem_row,
-    candidate_from_zeropm_name_table,
-    candidate_from_zeropm_smiles,
     compute_consensus,
-    extract_cas_values,
-    first_cas,
-    inchi_to_smiles,
     inchikey_from_smiles,
     is_missing,
     make_candidate,
-    normalize_synonyms,
     pick_first,
-    smiles_to_canonical_and_mass,
     text_similarity,
-    to_float,
 )
 
 # ── Optional RDKit ─────────────────────────────────────────────────────────────
@@ -112,12 +103,10 @@ except ImportError:  # pragma: no cover
 # ── Optional rapidfuzz ─────────────────────────────────────────────────────────
 try:
     from rapidfuzz import fuzz as _fuzz
-    from rapidfuzz import process as _rfprocess
 
     RAPIDFUZZ_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _fuzz = None  # type: ignore[assignment]
-    _rfprocess = None  # type: ignore[assignment]
     RAPIDFUZZ_AVAILABLE = False
 
 # ── Patterns & constants ───────────────────────────────────────────────────────
@@ -216,6 +205,9 @@ _ABBREVIATIONS: Dict[str, str] = {
 }
 
 log = logging.getLogger(__name__)
+
+#: Source key -> that source's candidates, best first (``Search._collect``).
+Hits = Dict[str, List[Dict[str, Any]]]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -458,21 +450,16 @@ class Search:
         ["cas", "name", "smiles", "inchi", "inchikey", "dtxsid", "formula"]
     )
 
-    #: Every source the resolver knows how to query.
-    _ALL_SOURCE_KEYS: List[str] = ["chebi", "comptox", "pubchem", "zeropm", "chembl"]
+    #: Every source the resolver knows how to query.  What each one can be
+    #: asked is the lookup table in :mod:`provesid.sources`.
+    _ALL_SOURCE_KEYS: List[str] = SOURCE_KEYS
 
     #: Sources queried unless ``use_zeropm=True`` re-adds ZeroPM.  ZeroPM is a
     #: regulatory-inventory harvest rather than a curated compound database, so
     #: its rows are kept out of the default corroboration vote.
     _DEFAULT_SOURCE_KEYS: List[str] = ["chebi", "comptox", "pubchem", "chembl"]
 
-    _SOURCE_DISPLAY: Dict[str, str] = {
-        "chebi": "ChEBI",
-        "comptox": "CompTox",
-        "pubchem": "PubChemID",
-        "zeropm": "ZeroPM",
-        "chembl": "ChEMBL",
-    }
+    _SOURCE_DISPLAY: Dict[str, str] = SOURCE_DISPLAY
 
     # rapidfuzz scorer whitelist (name -> scorer callable resolved lazily).
     _FUZZY_SCORERS: frozenset = frozenset(
@@ -701,12 +688,15 @@ class Search:
             else list(self._DEFAULT_SOURCE_KEYS)
         )
 
-        # Client references — may be None until _ensure_clients() is called.
-        self._chebi = chebi
-        self._comptox = comptox
-        self._pubchem = pubchem
-        self._zeropm = zeropm
-        self._chembl = chembl
+        # Source key -> client, or None until _ensure_clients() builds it (or
+        # for good, when it cannot be built).
+        self._clients: Dict[str, Any] = {
+            "chebi": chebi,
+            "comptox": comptox,
+            "pubchem": pubchem,
+            "zeropm": zeropm,
+            "chembl": chembl,
+        }
 
         # Source keys whose client this instance constructed, and may
         # therefore close.  A client the caller passed in belongs to the
@@ -717,7 +707,7 @@ class Search:
 
         # Track whether automatic client init has been attempted.
         self._clients_initialized: bool = any(
-            c is not None for c in [chebi, comptox, pubchem, zeropm, chembl]
+            c is not None for c in self._clients.values()
         )
 
         # Sources that actually came up, filled in by _ensure_clients().
@@ -745,7 +735,7 @@ class Search:
         Returns:
             Dataset names, in :attr:`_SOURCE_KEYS` order.
         """
-        return [key for key in self._SOURCE_KEYS if getattr(self, f"_{key}") is None]
+        return [key for key in self._SOURCE_KEYS if self._clients[key] is None]
 
     def _ensure_clients(self) -> None:
         """Lazily initialise all offline source clients.
@@ -772,6 +762,8 @@ class Search:
             )
 
         if not self._clients_initialized:
+            # Looked up here rather than held on the class, so a test that
+            # patches ``provesid.search.PubChemID`` patches what is built.
             factories: Dict[str, Any] = {
                 "chebi": ChebiSDF,
                 "comptox": CompToxID,
@@ -781,17 +773,12 @@ class Search:
             }
             auto = self.datasets == "auto"
             for key in self._SOURCE_KEYS:
-                attr, factory = f"_{key}", factories[key]
-                if getattr(self, attr) is None:
+                if self._clients[key] is None:
                     try:
-                        setattr(
-                            self,
-                            attr,
-                            factory(
-                                data_dir=self.data_dir,
-                                redownload=self.redownload,
-                                auto_download=auto,
-                            ),
+                        self._clients[key] = factories[key](
+                            data_dir=self.data_dir,
+                            redownload=self.redownload,
+                            auto_download=auto,
                         )
                         self._owned_clients.append(key)
                     except FileNotFoundError as exc:
@@ -820,10 +807,10 @@ class Search:
             self._clients_initialized = True
 
         self.sources_available = [
-            key for key in self._SOURCE_KEYS if getattr(self, f"_{key}") is not None
+            key for key in self._SOURCE_KEYS if self._clients[key] is not None
         ]
         self.sources_unavailable = [
-            key for key in self._SOURCE_KEYS if getattr(self, f"_{key}") is None
+            key for key in self._SOURCE_KEYS if self._clients[key] is None
         ]
 
         # Corroboration drives confidence, so a missing source silently lowers
@@ -867,15 +854,13 @@ class Search:
         self._closed = True
 
         for key in self._owned_clients:
-            attr = f"_{key}"
-            client = getattr(self, attr, None)
-            close = getattr(client, "close", None)
+            close = getattr(self._clients[key], "close", None)
             if close is not None:
                 try:
                     close()
                 except Exception as exc:  # pragma: no cover - close rarely fails
                     log.warning("Error closing the %s client: %s", key, exc)
-            setattr(self, attr, None)
+            self._clients[key] = None
 
         self._owned_clients = []
 
@@ -1370,32 +1355,79 @@ class Search:
         cand["query_match_score"] = float(query_match_score)
         return cand
 
-    def _pool_from_candidates_dict(
+    def _collect(
         self,
-        candidates: Dict[str, Optional[Dict[str, Any]]],
-        match_method: str,
+        kind: str,
+        value: str,
         *,
-        default_score: float = 1.0,
-    ) -> List[Dict[str, Any]]:
-        """Convert a per-source ``{key: candidate}`` dict into a tagged pool.
+        label: Optional[str] = None,
+        k: int = 1,
+        sources: Optional[List[str]] = None,
+    ) -> Hits:
+        """Ask every available source one question from the lookup table.
+
+        This is the only place a source is queried.  Each source that has a
+        client and a row for ``kind`` in :data:`provesid.sources.LOOKUPS` is
+        asked in turn.  One that raises is logged and left out, so a broken
+        database costs its own vote rather than the query.
 
         Args:
-            candidates: Mapping of source key → candidate (or ``None``).
+            kind: Lookup kind, a key of :data:`~provesid.sources.LOOKUPS`,
+                such as ``"cas"`` or ``"fuzzy_name"``.
+            value: The identifier to look up.
+            label: Name for a ZeroPM candidate, when it should not be
+                ``value`` (see :class:`~provesid.sources.Query`).
+            k: Candidates to take from each source.
+            sources: Restrict the question to these source keys.  Defaults
+                to every queried source.
+
+        Returns:
+            Source key -> that source's candidates, best first.  Sources that
+            were asked and found nothing map to an empty list; sources that
+            were not asked, or failed, are absent.
+        """
+        lookups = LOOKUPS[kind]
+        query = Query(value, label=label, k=k, fuzzy_cutoff=self.fuzzy_score_cutoff)
+        hits: Hits = {}
+        for key in self._SOURCE_KEYS if sources is None else sources:
+            client, lookup = self._clients.get(key), lookups.get(key)
+            if client is None or lookup is None:
+                continue
+            try:
+                hits[key] = lookup(client, query)
+            except Exception as exc:
+                log.warning(
+                    "%s %s lookup failed for %r: %s",
+                    self._SOURCE_DISPLAY[key], kind, value, exc,
+                )
+        return hits
+
+    def _pool(
+        self,
+        hits: Hits,
+        match_method: str,
+        score: Union[float, Callable[[Dict[str, Any]], float]] = 1.0,
+    ) -> List[Dict[str, Any]]:
+        """Flatten per-source hits into a tagged candidate pool.
+
+        Candidates are pooled in :attr:`_SOURCE_KEYS` order and, within a
+        source, in the order the source ranked them.
+
+        Args:
+            hits: Source key -> candidates, as :meth:`_collect` returns.
             match_method: Match method to tag each candidate with.
-            default_score: ``query_match_score`` assigned to every candidate
-                (1.0 for exact-identifier matches; a similarity for fuzzy/
-                Tanimoto matches).
+            score: The ``query_match_score`` of every candidate: a number
+                (1.0 for exact-identifier matches), or a function of the
+                candidate for matches whose quality varies, such as names.
 
         Returns:
             List of tagged candidate records.
         """
         pool: List[Dict[str, Any]] = []
         for key in self._SOURCE_KEYS:
-            cand = candidates.get(key)
-            if cand is None:
-                continue
-            self._tag_candidate(cand, key, 0, match_method, default_score)
-            pool.append(cand)
+            for rank, cand in enumerate(hits.get(key) or []):
+                cand_score = score(cand) if callable(score) else score
+                pool.append(self._tag_candidate(cand, key, rank, match_method, cand_score))
         return pool
 
     def _name_score(self, query: str, cand: Dict[str, Any]) -> float:
@@ -1466,54 +1498,16 @@ class Search:
         Returns:
             List of tagged candidate records (one per source that matched).
         """
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
-
-        if self._chebi is not None:
-            try:
-                row = self._chebi.search_by_inchikey(inchikey)
-                if row:
-                    candidates["chebi"] = candidate_from_chebi_row(row)
-            except Exception as exc:
-                log.warning("ChEBI OPSIN-InChIKey lookup failed: %s", exc)
-        if self._comptox is not None:
-            try:
-                row = self._comptox.get_by_inchikey(inchikey)
-                if row:
-                    candidates["comptox"] = candidate_from_comptox_row(row)
-            except Exception as exc:
-                log.warning("CompTox OPSIN-InChIKey lookup failed: %s", exc)
-        if self._pubchem is not None:
-            try:
-                row = self._pubchem.get_by_inchikey(inchikey)
-                if row:
-                    candidates["pubchem"] = candidate_from_pubchem_row(row)
-            except Exception as exc:
-                log.warning("PubChemID OPSIN-InChIKey lookup failed: %s", exc)
-        if self._zeropm is not None:
-            try:
-                table = self._zeropm.get_id_table_from_inchikey(inchikey)
-                candidates["zeropm"] = candidate_from_zeropm_name_table(inchikey, table)
-            except Exception as exc:
-                log.warning("ZeroPM OPSIN-InChIKey lookup failed: %s", exc)
-        if self._chembl is not None:
-            try:
-                row = self._chembl.search_by_inchikey(inchikey)
-                if row:
-                    candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
-            except Exception as exc:
-                log.warning("ChEMBL OPSIN-InChIKey lookup failed: %s", exc)
-
-        return self._pool_from_candidates_dict(
-            candidates, match_method, default_score=query_match_score
-        )
+        return self._pool(self._collect("inchikey", inchikey), match_method, query_match_score)
 
     # ── CAS resolver ─────────────────────────────────────────────────────────
 
     def _resolve_cas(self, cas: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """Resolve a CAS Registry Number into a unified identifier record.
 
-        Queries ChEBI → CompTox → PubChemID (→ ZeroPM when ``use_zeropm=True``)
-        with waterfall priority, then enriches via ChEMBL.
+        Queries ChEBI, CompTox and PubChemID (and ZeroPM when
+        ``use_zeropm=True``) by CAS number.  ChEMBL records no CAS numbers,
+        so it is asked for the first SMILES the others found.
 
         Args:
             cas: CAS Registry Number string.
@@ -1525,55 +1519,12 @@ class Search:
         result["match_method"] = "exact_cas"
         result["CASRN"] = cas
 
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
+        hits = self._collect("cas", cas)
+        smiles = _first_smiles_from_candidates(hits)
+        if not is_missing(smiles):
+            hits.update(self._collect("smiles", str(smiles), sources=["chembl"]))
 
-        # ChEBI
-        if self._chebi is not None:
-            try:
-                rows = self._chebi.search_by_cas(cas)
-                if rows:
-                    candidates["chebi"] = candidate_from_chebi_row(rows[0])
-            except Exception as exc:
-                log.warning("ChEBI CAS lookup failed for %r: %s", cas, exc)
-
-        # CompTox
-        if self._comptox is not None:
-            try:
-                row = self._comptox.get_by_casrn(cas)
-                if row:
-                    candidates["comptox"] = candidate_from_comptox_row(row)
-            except Exception as exc:
-                log.warning("CompTox CAS lookup failed for %r: %s", cas, exc)
-
-        # PubChemID
-        if self._pubchem is not None:
-            try:
-                row = self._pubchem.get_by_cas(cas)
-                if row:
-                    candidates["pubchem"] = candidate_from_pubchem_row(row)
-            except Exception as exc:
-                log.warning("PubChemID CAS lookup failed for %r: %s", cas, exc)
-
-        # ZeroPM
-        if self._zeropm is not None:
-            try:
-                table = self._zeropm.get_id_table_from_cas(cas)
-                candidates["zeropm"] = candidate_from_zeropm_name_table(cas, table)
-            except Exception as exc:
-                log.warning("ZeroPM CAS lookup failed for %r: %s", cas, exc)
-
-        # ChEMBL — enrichment via SMILES after primary sources
-        smiles_so_far = _first_smiles_from_candidates(candidates)
-        if self._chembl is not None and not is_missing(smiles_so_far):
-            try:
-                row = self._chembl.search_by_smiles(str(smiles_so_far))
-                if row:
-                    candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
-            except Exception as exc:
-                log.warning("ChEMBL CAS enrichment failed for %r: %s", cas, exc)
-
-        pool = self._pool_from_candidates_dict(candidates, "exact_cas")
-        return result, pool, None
+        return result, self._pool(hits, "exact_cas"), None
 
     # ── Name resolver ─────────────────────────────────────────────────────────
 
@@ -1634,207 +1585,39 @@ class Search:
             List of candidate records tagged with ``_source_key``,
             ``_origin_rank``, ``_match_method`` and ``query_match_score``.
         """
-        pool: List[Dict[str, Any]] = []
         k = self.top_k_per_source
-
-        def add(cand, source_key, rank, method):
-            if cand is None:
-                return
-            self._tag_candidate(cand, source_key, rank, method, self._name_score(name, cand))
-            pool.append(cand)
-
-        # ── Exact pass ──────────────────────────────────────────────────────
-        if self._chebi is not None:
-            try:
-                rows = self._chebi.search_by_name(name, exact=True) or []
-                if not rows:
-                    rows = self._chebi.search_by_synonym(name, exact=True) or []
-                for rank, row in enumerate(rows[:k]):
-                    add(candidate_from_chebi_row(row), "chebi", rank, "exact_name")
-            except Exception as exc:
-                log.warning("ChEBI name lookup failed for %r: %s", name, exc)
-
-        if self._comptox is not None:
-            try:
-                rows = self._comptox.search_by_name(name, exact=True, limit=k) or []
-                if not rows:
-                    row = self._comptox.get_by_name(name)
-                    rows = [row] if row else []
-                for rank, row in enumerate(rows[:k]):
-                    add(candidate_from_comptox_row(row), "comptox", rank, "exact_name")
-            except Exception as exc:
-                log.warning("CompTox name lookup failed for %r: %s", name, exc)
-
-        if self._pubchem is not None:
-            try:
-                rows = self._pubchem.search_by_name(name, exact=True, limit=k) or []
-                for rank, row in enumerate(rows[:k]):
-                    add(candidate_from_pubchem_row(row), "pubchem", rank, "exact_name")
-            except Exception as exc:
-                log.warning("PubChemID name lookup failed for %r: %s", name, exc)
-
-        if self._zeropm is not None:
-            try:
-                table = self._zeropm.get_id_table_from_name(name)
-                add(candidate_from_zeropm_name_table(name, table), "zeropm", 0, "exact_name")
-            except Exception as exc:
-                log.warning("ZeroPM name lookup failed for %r: %s", name, exc)
-
-        if self._chembl is not None:
-            try:
-                rows = self._chembl.search_by_name(name, limit=k, exact=True) or []
-                for rank, row in enumerate(rows[:k]):
-                    add(candidate_from_chembl_row(row, self._chembl), "chembl", rank, "exact_name")
-            except Exception as exc:
-                log.warning("ChEMBL name lookup failed for %r: %s", name, exc)
+        pool = self._pool(
+            self._collect("name", name, k=k),
+            "exact_name",
+            lambda cand: self._name_score(name, cand),
+        )
 
         # ── Fuzzy widening ──────────────────────────────────────────────────
         # "Strong" means a candidate is genuinely *called* the query name, not
         # merely that it scored highly: WRatio gives a substring hit 85.7, so a
         # score-based test lets one spurious synonym match suppress the widening
         # that would find the right compound.
-        cutoff = self.fuzzy_score_cutoff / 100.0
         strong = any(_matches_name_exactly(name, c) for c in pool)
         if self.fuzzy and not strong:
-            norm_name = self._normalize_name(name)
+            # ZeroPM is the only source that does true fuzzy *retrieval*, and
+            # reports the similarity it matched on; that score is kept rather
+            # than re-derived from the name ZeroPM's candidate was given.  It
+            # is off unless use_zeropm=True, which is the cost of dropping it:
+            # a typo that shares no substring with the real name stays
+            # unresolved.
+            def fuzzy_score(cand: Dict[str, Any]) -> float:
+                reported = cand.get("query_match_score")
+                return reported if reported is not None else self._name_score(name, cand)
 
-            def add_fuzzy(cand, source_key, rank, score=None):
-                """Add a fuzzy candidate, keeping only those at or above cutoff.
-
-                ``score`` overrides the name-similarity estimate; pass it when
-                the source already reported a true similarity, so it is not
-                re-derived from a candidate whose recorded name is the query.
-                """
-                if cand is None:
-                    return
-                if score is None:
-                    score = self._name_score(name, cand)
-                if score < cutoff:
-                    return
-                self._tag_candidate(cand, source_key, rank, "fuzzy_name", score)
-                pool.append(cand)
-
-            if self._chebi is not None:
-                try:
-                    rows = self._chebi.search_by_name(norm_name, exact=False) or []
-                    if not rows:
-                        rows = self._chebi.search_by_synonym(norm_name, exact=False) or []
-                    for rank, row in enumerate(rows[:k]):
-                        add_fuzzy(candidate_from_chebi_row(row), "chebi", rank)
-                except Exception as exc:
-                    log.warning("ChEBI fuzzy name lookup failed for %r: %s", name, exc)
-
-            if self._comptox is not None:
-                try:
-                    rows = self._comptox.search_by_name(norm_name, exact=False, limit=k) or []
-                    for rank, row in enumerate(rows[:k]):
-                        add_fuzzy(candidate_from_comptox_row(row), "comptox", rank)
-                except Exception as exc:
-                    log.warning("CompTox fuzzy name lookup failed for %r: %s", name, exc)
-
-            if self._pubchem is not None:
-                try:
-                    rows = self._pubchem.search_by_name(norm_name, exact=False, limit=k) or []
-                    for rank, row in enumerate(rows[:k]):
-                        add_fuzzy(candidate_from_pubchem_row(row), "pubchem", rank)
-                except Exception as exc:
-                    log.warning("PubChemID fuzzy name lookup failed for %r: %s", name, exc)
-
-            # ZeroPM is the only source that does true fuzzy *retrieval* (the
-            # others are substring-matched with exact=False), so it is the one
-            # that can reach a typo like "asprin" -> "aspirin".  It is off
-            # unless use_zeropm=True, which is the cost of dropping it: a typo
-            # that shares no substring with the real name stays unresolved.
-            if self._zeropm is not None:
-                try:
-                    table = self._zeropm.get_id_table_from_similar_name(
-                        norm_name,
-                        number_of_results=k,
-                        score_cutoff=self.fuzzy_score_cutoff,
-                    )
-                    if table is not None and not table.empty:
-                        # Label the candidate with what ZeroPM actually matched,
-                        # not with the query, and use its reported similarity.
-                        matched_name = str(table["matched_name"].iloc[0])
-                        matched_score = float(table["match_score"].iloc[0]) / 100.0
-                        add_fuzzy(
-                            candidate_from_zeropm_name_table(matched_name, table),
-                            "zeropm",
-                            0,
-                            score=matched_score,
-                        )
-                except Exception as exc:
-                    log.warning("ZeroPM fuzzy name lookup failed for %r: %s", name, exc)
-
-            if self._chembl is not None:
-                try:
-                    rows = self._chembl.search_by_name(norm_name, limit=k, exact=False) or []
-                    for rank, row in enumerate(rows[:k]):
-                        add_fuzzy(candidate_from_chembl_row(row, self._chembl), "chembl", rank)
-                except Exception as exc:
-                    log.warning("ChEMBL fuzzy name lookup failed for %r: %s", name, exc)
+            cutoff = self.fuzzy_score_cutoff / 100.0
+            widened = self._pool(
+                self._collect("fuzzy_name", self._normalize_name(name), k=k),
+                "fuzzy_name",
+                fuzzy_score,
+            )
+            pool.extend(c for c in widened if c["query_match_score"] >= cutoff)
 
         return pool
-
-    def _candidates_from_name(
-        self, name: str, exact: bool = True
-    ) -> Dict[str, Optional[Dict[str, Any]]]:
-        """Build candidates dict from a name query across all sources.
-
-        Args:
-            name: Chemical name to search.
-            exact: Whether to use exact matching.
-
-        Returns:
-            Dict mapping source keys to candidate records.
-        """
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
-
-        if self._chebi is not None:
-            try:
-                rows = self._chebi.search_by_name(name, exact=exact)
-                if not rows:
-                    rows = self._chebi.search_by_synonym(name, exact=exact)
-                if rows:
-                    candidates["chebi"] = candidate_from_chebi_row(rows[0])
-            except Exception as exc:
-                log.warning("ChEBI name lookup failed for %r: %s", name, exc)
-
-        if self._comptox is not None:
-            try:
-                row = self._comptox.get_by_name(name)
-                if row is None:
-                    matches = self._comptox.search_by_name(name, exact=False, limit=5)
-                    row = matches[0] if matches else None
-                if row:
-                    candidates["comptox"] = candidate_from_comptox_row(row)
-            except Exception as exc:
-                log.warning("CompTox name lookup failed for %r: %s", name, exc)
-
-        if self._pubchem is not None:
-            try:
-                rows = self._pubchem.search_by_name(name, exact=exact, limit=5)
-                if rows:
-                    candidates["pubchem"] = candidate_from_pubchem_row(rows[0])
-            except Exception as exc:
-                log.warning("PubChemID name lookup failed for %r: %s", name, exc)
-
-        if self._zeropm is not None:
-            try:
-                table = self._zeropm.get_id_table_from_name(name)
-                candidates["zeropm"] = candidate_from_zeropm_name_table(name, table)
-            except Exception as exc:
-                log.warning("ZeroPM name lookup failed for %r: %s", name, exc)
-
-        if self._chembl is not None:
-            try:
-                rows = self._chembl.search_by_name(name, limit=5)
-                if rows:
-                    candidates["chembl"] = candidate_from_chembl_row(rows[0], self._chembl)
-            except Exception as exc:
-                log.warning("ChEMBL name lookup failed for %r: %s", name, exc)
-
-        return candidates
 
     # ── SMILES resolver ───────────────────────────────────────────────────────
 
@@ -1842,9 +1625,9 @@ class Search:
         """Resolve a SMILES string into a unified identifier record.
 
         Canonicalises the input, derives an InChIKey, and queries sources by
-        InChIKey (ChEBI) or canonical SMILES.  Falls back to Tanimoto
-        similarity search when ``self.similarity_threshold > 0`` and no exact
-        match is found.
+        SMILES (retrying CompTox and PubChemID with the canonical form) and
+        ChEBI by the InChIKey.  Falls back to Tanimoto similarity search when
+        ``self.similarity_threshold > 0`` and no exact match is found.
 
         Args:
             smiles: SMILES string.
@@ -1860,77 +1643,30 @@ class Search:
         canonical = norm["canonical_smiles"] or smiles
         inchikey = norm["inchikey"] or inchikey_from_smiles(smiles)
 
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
-        match_method = "exact_smiles"
-
-        # ChEBI — lookup by InChIKey
-        if self._chebi is not None and not is_missing(inchikey):
-            try:
-                row = self._chebi.search_by_inchikey(str(inchikey))
-                if row:
-                    candidates["chebi"] = candidate_from_chebi_row(row)
-            except Exception as exc:
-                log.warning("ChEBI SMILES lookup failed for %r: %s", smiles, exc)
-
-        # CompTox
-        if self._comptox is not None:
-            try:
-                row = self._comptox.get_by_smiles(smiles)
-                if row is None and not is_missing(canonical):
-                    row = self._comptox.get_by_smiles(canonical)
-                if row:
-                    candidates["comptox"] = candidate_from_comptox_row(row)
-            except Exception as exc:
-                log.warning("CompTox SMILES lookup failed for %r: %s", smiles, exc)
-
-        # PubChemID
-        if self._pubchem is not None:
-            try:
-                row = self._pubchem.get_by_smiles(smiles)
-                if row is None and not is_missing(canonical):
-                    row = self._pubchem.get_by_smiles(canonical)
-                if row:
-                    candidates["pubchem"] = candidate_from_pubchem_row(row)
-            except Exception as exc:
-                log.warning("PubChemID SMILES lookup failed for %r: %s", smiles, exc)
-
-        # ZeroPM
-        if self._zeropm is not None:
-            try:
-                candidates["zeropm"] = candidate_from_zeropm_smiles(smiles, self._zeropm)
-            except Exception as exc:
-                log.warning("ZeroPM SMILES lookup failed for %r: %s", smiles, exc)
-
-        # ChEMBL
-        if self._chembl is not None:
-            try:
-                row = self._chembl.search_by_smiles(smiles)
-                if row:
-                    candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
-            except Exception as exc:
-                log.warning("ChEMBL SMILES lookup failed for %r: %s", smiles, exc)
+        hits = self._collect("smiles", smiles)
+        if canonical != smiles:
+            retry = [key for key in ("comptox", "pubchem") if hits.get(key) == []]
+            hits.update(self._collect("smiles", canonical, sources=retry))
+        if not is_missing(inchikey):
+            hits.update(self._collect("inchikey", str(inchikey), sources=["chebi"]))
 
         # Tanimoto similarity fallback
-        if not _any_candidate(candidates) and self.similarity_threshold > 0:
-            sim_candidates, tanimoto_score = self._tanimoto_candidates(smiles)
-            if _any_candidate(sim_candidates):
+        if not _any_candidate(hits) and self.similarity_threshold > 0:
+            similar, tanimoto_score = self._tanimoto_candidates(smiles)
+            if _any_candidate(similar):
                 score = tanimoto_score if tanimoto_score is not None else 0.0
-                pool = self._pool_from_candidates_dict(
-                    sim_candidates, "tanimoto", default_score=score
-                )
-                return result, pool, None
+                return result, self._pool(similar, "tanimoto", score), None
 
-        pool = self._pool_from_candidates_dict(candidates, match_method)
-        return result, pool, None
+        return result, self._pool(hits, "exact_smiles"), None
 
     # ── InChI resolver ────────────────────────────────────────────────────────
 
     def _resolve_inchi(self, inchi: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """Resolve an InChI string into a unified identifier record.
 
-        Converts the InChI to InChIKey via RDKit and delegates to
-        :meth:`_resolve_inchikey`.  Also queries sources that store InChI
-        directly (ChEBI, CompTox, PubChemID).
+        Queries the sources that store InChI directly (ChEBI, PubChemID and,
+        when enabled, ZeroPM), then CompTox by the InChIKey and ChEMBL by the
+        SMILES that RDKit derives from the InChI.
 
         Args:
             inchi: InChI string (must start with ``"InChI="``).
@@ -1960,54 +1696,13 @@ class Search:
         if not is_missing(smiles):
             result["SMILES"] = smiles
 
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
+        hits = self._collect("inchi", inchi)
+        if not is_missing(inchikey):
+            hits.update(self._collect("inchikey", str(inchikey), sources=["comptox"]))
+        if not is_missing(smiles):
+            hits.update(self._collect("smiles", str(smiles), sources=["chembl"]))
 
-        # ChEBI
-        if self._chebi is not None:
-            try:
-                row = self._chebi.search_by_inchi(inchi)
-                if row:
-                    candidates["chebi"] = candidate_from_chebi_row(row)
-            except Exception as exc:
-                log.warning("ChEBI InChI lookup failed for %r: %s", inchi[:40], exc)
-
-        # CompTox — lookup by InChIKey if derived
-        if self._comptox is not None and not is_missing(inchikey):
-            try:
-                row = self._comptox.get_by_inchikey(str(inchikey))
-                if row:
-                    candidates["comptox"] = candidate_from_comptox_row(row)
-            except Exception as exc:
-                log.warning("CompTox InChI lookup failed: %s", exc)
-
-        # PubChemID
-        if self._pubchem is not None:
-            try:
-                row = self._pubchem.get_by_inchi(inchi)
-                if row:
-                    candidates["pubchem"] = candidate_from_pubchem_row(row)
-            except Exception as exc:
-                log.warning("PubChemID InChI lookup failed: %s", exc)
-
-        # ZeroPM
-        if self._zeropm is not None:
-            try:
-                table = self._zeropm.get_id_table_from_inchi(inchi)
-                candidates["zeropm"] = candidate_from_zeropm_name_table(inchi, table)
-            except Exception as exc:
-                log.warning("ZeroPM InChI lookup failed: %s", exc)
-
-        # ChEMBL — via SMILES
-        if self._chembl is not None and not is_missing(smiles):
-            try:
-                row = self._chembl.search_by_smiles(str(smiles))
-                if row:
-                    candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
-            except Exception as exc:
-                log.warning("ChEMBL InChI lookup failed: %s", exc)
-
-        pool = self._pool_from_candidates_dict(candidates, "inchi")
-        return result, pool, None
+        return result, self._pool(hits, "inchi"), None
 
     # ── InChIKey resolver ─────────────────────────────────────────────────────
 
@@ -2016,7 +1711,8 @@ class Search:
 
         Queries all offline sources by InChIKey.  Falls back to 14-character
         skeleton matching when ``self.inchikey_skeleton`` is True and no exact
-        match is found.
+        match is found.  The skeleton is the connectivity block, so it finds
+        the compound regardless of stereochemistry, isotopes or charge.
 
         Args:
             inchikey: Full 27-character InChIKey
@@ -2029,62 +1725,15 @@ class Search:
         result["match_method"] = "exact_inchikey"
         result["InChIKey"] = inchikey
 
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
+        hits = self._collect("inchikey", inchikey)
         match_method = "exact_inchikey"
 
-        # ChEBI
-        if self._chebi is not None:
-            try:
-                row = self._chebi.search_by_inchikey(inchikey)
-                if row:
-                    candidates["chebi"] = candidate_from_chebi_row(row)
-            except Exception as exc:
-                log.warning("ChEBI InChIKey lookup failed for %r: %s", inchikey, exc)
+        if not _any_candidate(hits) and self.inchikey_skeleton:
+            skeleton_hits = self._collect("inchikey_skeleton", inchikey)
+            if _any_candidate(skeleton_hits):
+                hits, match_method = skeleton_hits, "inchikey_skeleton"
 
-        # CompTox
-        if self._comptox is not None:
-            try:
-                row = self._comptox.get_by_inchikey(inchikey)
-                if row:
-                    candidates["comptox"] = candidate_from_comptox_row(row)
-            except Exception as exc:
-                log.warning("CompTox InChIKey lookup failed for %r: %s", inchikey, exc)
-
-        # PubChemID
-        if self._pubchem is not None:
-            try:
-                row = self._pubchem.get_by_inchikey(inchikey)
-                if row:
-                    candidates["pubchem"] = candidate_from_pubchem_row(row)
-            except Exception as exc:
-                log.warning("PubChemID InChIKey lookup failed for %r: %s", inchikey, exc)
-
-        # ZeroPM
-        if self._zeropm is not None:
-            try:
-                table = self._zeropm.get_id_table_from_inchikey(inchikey)
-                candidates["zeropm"] = candidate_from_zeropm_name_table(inchikey, table)
-            except Exception as exc:
-                log.warning("ZeroPM InChIKey lookup failed for %r: %s", inchikey, exc)
-
-        # ChEMBL
-        if self._chembl is not None:
-            try:
-                row = self._chembl.search_by_inchikey(inchikey)
-                if row:
-                    candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
-            except Exception as exc:
-                log.warning("ChEMBL InChIKey lookup failed for %r: %s", inchikey, exc)
-
-        # InChIKey skeleton fallback
-        if not _any_candidate(candidates) and self.inchikey_skeleton:
-            skel_candidates, skeleton = self._skeleton_candidates(inchikey)
-            if _any_candidate(skel_candidates):
-                candidates = skel_candidates
-                match_method = "inchikey_skeleton"
-
-        pool = self._pool_from_candidates_dict(candidates, match_method)
-        return result, pool, None
+        return result, self._pool(hits, match_method), None
 
     # ── DTXSID resolver ───────────────────────────────────────────────────────
 
@@ -2104,59 +1753,16 @@ class Search:
         result["match_method"] = "dtxsid"
         result["DTXSID"] = dtxsid
 
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
-
-        # CompTox primary
-        if self._comptox is not None:
-            try:
-                row = self._comptox.get_by_dtxsid(dtxsid)
-                if row:
-                    candidates["comptox"] = candidate_from_comptox_row(row)
-            except Exception as exc:
-                log.warning("CompTox DTXSID lookup failed for %r: %s", dtxsid, exc)
-
-        # Cross-reference other sources by InChIKey
-        comptox_cand = candidates.get("comptox")
-        inchikey = comptox_cand.get("InChIKey") if comptox_cand else None
-
+        hits = self._collect("dtxsid", dtxsid)
+        comptox = hits.get("comptox") or []
+        inchikey = comptox[0].get("InChIKey") if comptox else None
         if not is_missing(inchikey):
-            # ChEBI
-            if self._chebi is not None:
-                try:
-                    row = self._chebi.search_by_inchikey(str(inchikey))
-                    if row:
-                        candidates["chebi"] = candidate_from_chebi_row(row)
-                except Exception as exc:
-                    log.warning("ChEBI DTXSID cross-ref failed: %s", exc)
+            others = [key for key in self._SOURCE_KEYS if key != "comptox"]
+            hits.update(
+                self._collect("inchikey", str(inchikey), label=dtxsid, sources=others)
+            )
 
-            # PubChemID
-            if self._pubchem is not None:
-                try:
-                    row = self._pubchem.get_by_inchikey(str(inchikey))
-                    if row:
-                        candidates["pubchem"] = candidate_from_pubchem_row(row)
-                except Exception as exc:
-                    log.warning("PubChemID DTXSID cross-ref failed: %s", exc)
-
-            # ZeroPM
-            if self._zeropm is not None:
-                try:
-                    table = self._zeropm.get_id_table_from_inchikey(str(inchikey))
-                    candidates["zeropm"] = candidate_from_zeropm_name_table(dtxsid, table)
-                except Exception as exc:
-                    log.warning("ZeroPM DTXSID cross-ref failed: %s", exc)
-
-            # ChEMBL
-            if self._chembl is not None:
-                try:
-                    row = self._chembl.search_by_inchikey(str(inchikey))
-                    if row:
-                        candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
-                except Exception as exc:
-                    log.warning("ChEMBL DTXSID cross-ref failed: %s", exc)
-
-        pool = self._pool_from_candidates_dict(candidates, "dtxsid")
-        return result, pool, None
+        return result, self._pool(hits, "dtxsid"), None
 
     # ── Formula resolver ──────────────────────────────────────────────────────
 
@@ -2180,106 +1786,12 @@ class Search:
         result["match_method"] = "formula"
         result["molecular_formula"] = formula
 
-        pool: List[Dict[str, Any]] = []
-        k = self.top_k_per_source
-
-        def add(cand, source_key, rank):
-            if cand is None:
-                return
-            # Completeness drives the query_match_score for formula matches.
-            score = self._completeness_score(cand)
-            self._tag_candidate(cand, source_key, rank, "formula", score)
-            pool.append(cand)
-
-        if self._chebi is not None:
-            try:
-                rows = self._chebi.search_by_formula(formula) or []
-                for rank, row in enumerate(_rank_rows_by_completeness(rows)[:k]):
-                    add(candidate_from_chebi_row(row), "chebi", rank)
-            except Exception as exc:
-                log.warning("ChEBI formula lookup failed for %r: %s", formula, exc)
-
-        if self._comptox is not None:
-            try:
-                rows = self._comptox.search_by_formula(formula) or []
-                for rank, row in enumerate(_rank_rows_by_completeness(rows)[:k]):
-                    add(candidate_from_comptox_row(row), "comptox", rank)
-            except Exception as exc:
-                log.warning("CompTox formula lookup failed for %r: %s", formula, exc)
-
-        if self._pubchem is not None:
-            try:
-                rows = self._pubchem.search_by_formula(formula) or []
-                for rank, row in enumerate(_rank_rows_by_completeness(rows)[:k]):
-                    add(candidate_from_pubchem_row(row), "pubchem", rank)
-            except Exception as exc:
-                log.warning("PubChemID formula lookup failed for %r: %s", formula, exc)
-
-        return result, pool, None
+        # Completeness drives the query_match_score for formula matches, which
+        # have no name to compare against.
+        hits = self._collect("formula", formula, k=self.top_k_per_source)
+        return result, self._pool(hits, "formula", self._completeness_score), None
 
     # ── Fuzzy name search ─────────────────────────────────────────────────────
-
-    def _fuzzy_name_candidates(
-        self, name: str
-    ) -> Tuple[Dict[str, Optional[Dict[str, Any]]], Optional[float]]:
-        """Search for a chemical name using fuzzy matching via rapidfuzz.
-
-        Normalises the query name, queries each source for fuzzy name matches,
-        and returns the best candidate per source plus the overall fuzzy score.
-
-        Args:
-            name: Chemical name to search (may contain typos or variations).
-
-        Returns:
-            Tuple of:
-            - Dict mapping source keys to the best fuzzy-matched candidate.
-            - Best fuzzy score in [0, 1], or ``None`` if rapidfuzz is
-              unavailable.
-        """
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
-
-        if not RAPIDFUZZ_AVAILABLE or _rfprocess is None:
-            log.warning("rapidfuzz not available; fuzzy name matching skipped.")
-            return candidates, None
-
-        norm_name = self._normalize_name(name)
-        best_score: float = 0.0
-
-        # ZeroPM has a built-in similar-name method
-        if self._zeropm is not None:
-            try:
-                results = self._zeropm.query_similar_name(norm_name)
-                if results is not None and not (
-                    isinstance(results, pd.DataFrame) and results.empty
-                ):
-                    # query_similar_name may return a list or DataFrame
-                    if isinstance(results, pd.DataFrame) and not results.empty:
-                        table = results
-                    else:
-                        table = None
-                    if table is not None:
-                        cand = candidate_from_zeropm_name_table(name, table)
-                        if cand:
-                            candidates["zeropm"] = cand
-                            best_score = max(best_score, 0.7)
-            except Exception as exc:
-                log.warning("ZeroPM fuzzy name search failed for %r: %s", name, exc)
-
-        # For other sources we use rapidfuzz directly against their search methods
-        # (they accept fuzzy/partial inputs via exact=False)
-        fuzzy_candidates = self._candidates_from_name(norm_name, exact=False)
-        for key, cand in fuzzy_candidates.items():
-            if cand is not None and candidates.get(key) is None:
-                candidates[key] = cand
-
-        # Compute best name similarity score across all found candidates
-        for cand in candidates.values():
-            if cand is None:
-                continue
-            sim = text_similarity(name, cand.get("name"))
-            best_score = max(best_score, sim)
-
-        return candidates, best_score if best_score > 0 else None
 
     def _normalize_name(self, name: str) -> str:
         """Normalise a chemical name for fuzzy matching.
@@ -2307,7 +1819,7 @@ class Search:
 
     def _tanimoto_candidates(
         self, query_smiles: str
-    ) -> Tuple[Dict[str, Optional[Dict[str, Any]]], Optional[float]]:
+    ) -> Tuple[Hits, Optional[float]]:
         """Find structurally similar compounds using Tanimoto similarity.
 
         Computes a Morgan fingerprint for ``query_smiles`` and queries each
@@ -2319,7 +1831,8 @@ class Search:
 
         Returns:
             Tuple of:
-            - Candidates dict (best match per source at or above threshold).
+            - Source key -> candidates (the best match per source at or
+              above threshold).
             - Best Tanimoto score observed, or ``None`` if RDKit is unavailable.
 
         Note:
@@ -2327,7 +1840,7 @@ class Search:
             future Parquet + vectorised fingerprint approach will be faster for
             large datasets.
         """
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
+        candidates: Hits = {}
 
         if not RDKIT_AVAILABLE or Chem is None or DataStructs is None or AllChem is None:
             log.warning("RDKit not available; Tanimoto search skipped.")
@@ -2357,97 +1870,34 @@ class Search:
                 return 0.0
 
         # ChEMBL provides a native similarity search
-        if self._chembl is not None:
+        chembl = self._clients.get("chembl")
+        if chembl is not None:
             try:
-                row = self._chembl.search_by_smiles(query_smiles)
+                row = chembl.search_by_smiles(query_smiles)
                 if row:
                     t = _tanimoto_from_smiles(row.get("canonical_smiles"))
                     if t >= self.similarity_threshold:
-                        candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
+                        candidates["chembl"] = [candidate_from_chembl_row(row, chembl)]
                         best_tanimoto = max(best_tanimoto, t)
             except Exception as exc:
                 log.warning("ChEMBL Tanimoto search failed: %s", exc)
 
         # PubChemID — try canonical SMILES lookup as a proxy
-        if self._pubchem is not None:
+        pubchem = self._clients.get("pubchem")
+        if pubchem is not None:
             try:
                 norm = normalize_structure(query_smiles)
                 if not is_missing(norm["canonical_smiles"]):
-                    row = self._pubchem.get_by_smiles(norm["canonical_smiles"])
+                    row = pubchem.get_by_smiles(norm["canonical_smiles"])
                     if row:
                         t = _tanimoto_from_smiles(row.get("smiles") or row.get("canonical_smiles"))
                         if t >= self.similarity_threshold:
-                            candidates["pubchem"] = candidate_from_pubchem_row(row)
+                            candidates["pubchem"] = [candidate_from_pubchem_row(row)]
                             best_tanimoto = max(best_tanimoto, t)
             except Exception as exc:
                 log.warning("PubChemID Tanimoto search failed: %s", exc)
 
         return candidates, best_tanimoto if best_tanimoto > 0 else None
-
-    # ── InChIKey skeleton search ──────────────────────────────────────────────
-
-    def _skeleton_candidates(
-        self, inchikey: str
-    ) -> Tuple[Dict[str, Optional[Dict[str, Any]]], str]:
-        """Search by the 14-character InChIKey skeleton (connectivity layer).
-
-        The first block of an InChIKey encodes the molecular skeleton.
-        Matching on this prefix finds compounds with the same connectivity
-        regardless of stereochemistry, isotopes, or charge.
-
-        Args:
-            inchikey: Full 27-character InChIKey.
-
-        Returns:
-            Tuple of:
-            - Candidates dict populated from skeleton matches.
-            - The 14-character skeleton prefix used.
-
-        Example::
-
-            candidates, skeleton = s._skeleton_candidates(
-                "BSYNRYMUTXBXSQ-UHFFFAOYSA-N"
-            )
-            # skeleton == "BSYNRYMUTXBXSQ"
-        """
-        skeleton = inchikey[:14]
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
-
-        # CompTox — SQL LIKE query on inchikey column
-        if self._comptox is not None:
-            try:
-                row = self._comptox.get_by_inchikey(inchikey)
-                if row is None:
-                    # Partial-match: try all keys that start with skeleton
-                    rows = _comptox_skeleton_search(self._comptox, skeleton)
-                    row = rows[0] if rows else None
-                if row:
-                    candidates["comptox"] = candidate_from_comptox_row(row)
-            except Exception as exc:
-                log.warning("CompTox skeleton search failed for %r: %s", skeleton, exc)
-
-        # PubChemID
-        if self._pubchem is not None:
-            try:
-                row = self._pubchem.get_by_inchikey(inchikey)
-                if row is None:
-                    rows = _pubchem_skeleton_search(self._pubchem, skeleton)
-                    row = rows[0] if rows else None
-                if row:
-                    candidates["pubchem"] = candidate_from_pubchem_row(row)
-            except Exception as exc:
-                log.warning("PubChemID skeleton search failed for %r: %s", skeleton, exc)
-
-        # ChEBI — index-based prefix scan
-        if self._chebi is not None:
-            try:
-                rows = _chebi_skeleton_search(self._chebi, skeleton)
-                if rows:
-                    candidates["chebi"] = candidate_from_chebi_row(rows[0])
-            except Exception as exc:
-                log.warning("ChEBI skeleton search failed for %r: %s", skeleton, exc)
-
-        return candidates, skeleton
 
     # ── Source details ────────────────────────────────────────────────────────
 
@@ -3129,24 +2579,6 @@ def _matches_name_exactly(query: str, cand: Dict[str, Any]) -> bool:
     return any(normalise(name) == target for name in _candidate_names(cand))
 
 
-def _rank_rows_by_completeness(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Sort source rows by number of non-null fields (most complete first).
-
-    Args:
-        rows: List of raw source record dicts.
-
-    Returns:
-        New list ordered by descending completeness; stable for ties.
-    """
-    if not rows:
-        return []
-    return sorted(
-        rows,
-        key=lambda r: sum(1 for v in r.values() if not is_missing(v)),
-        reverse=True,
-    )
-
-
 def _has_attachment_point(smiles: Any) -> bool:
     """Whether a SMILES describes a *group* rather than a whole compound.
 
@@ -3255,138 +2687,35 @@ def _cluster_candidates(
     return [{"members": members} for members in groups.values()]
 
 
-def _any_candidate(candidates: Dict[str, Optional[Dict[str, Any]]]) -> bool:
-    """Return True if at least one candidate is non-None.
+def _any_candidate(hits: Hits) -> bool:
+    """Return True if any source found at least one candidate.
 
     Args:
-        candidates: Dict mapping source keys to candidate records.
+        hits: Source key -> candidates, as ``Search._collect`` returns.
 
     Returns:
-        True when at least one value is not None.
+        True when at least one source's list is non-empty.
     """
-    return any(v is not None for v in candidates.values())
+    return any(hits.values())
 
 
-def _first_smiles_from_candidates(
-    candidates: Dict[str, Optional[Dict[str, Any]]]
-) -> Optional[str]:
-    """Return the first non-missing SMILES found among the candidates.
+def _first_smiles_from_candidates(hits: Hits) -> Optional[str]:
+    """Return the first non-missing SMILES among each source's top candidate.
 
-    Priority order: chebi, comptox, pubchem, zeropm, chembl.
+    Priority order is :data:`provesid.sources.SOURCE_KEYS`: chebi, comptox,
+    pubchem, zeropm, chembl.
 
     Args:
-        candidates: Dict mapping source keys to candidate records.
+        hits: Source key -> candidates, as ``Search._collect`` returns.
 
     Returns:
         SMILES string or None.
     """
-    for key in ["chebi", "comptox", "pubchem", "zeropm", "chembl"]:
-        cand = candidates.get(key)
-        if cand is None:
+    for key in SOURCE_KEYS:
+        cands = hits.get(key)
+        if not cands:
             continue
-        smiles = cand.get("SMILES") or cand.get("canonical_smiles")
+        smiles = cands[0].get("SMILES") or cands[0].get("canonical_smiles")
         if not is_missing(smiles):
             return smiles
     return None
-
-
-def _most_complete_row(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Select the most data-complete row from a list of source records.
-
-    Completeness is measured as the number of non-null values in the row.
-
-    Args:
-        rows: List of source record dicts.
-
-    Returns:
-        The row with the most non-null fields, or the first row if the list
-        has only one element.
-    """
-    if not rows:
-        return {}
-    if len(rows) == 1:
-        return rows[0]
-    return max(rows, key=lambda r: sum(1 for v in r.values() if not is_missing(v)))
-
-
-def _comptox_skeleton_search(
-    comptox: CompToxID, skeleton: str
-) -> List[Dict[str, Any]]:
-    """Search CompTox for InChIKeys sharing the same 14-character skeleton.
-
-    This function queries the CompTox SQLite database with a LIKE predicate on
-    the inchikey column.
-
-    Args:
-        comptox: Initialised :class:`~provesid.CompToxID` client.
-        skeleton: 14-character InChIKey connectivity prefix.
-
-    Returns:
-        List of matching rows (may be empty).
-    """
-    try:
-        import sqlite3
-
-        conn = comptox._conn  # type: ignore[attr-defined]
-        cur = conn.execute(
-            "SELECT * FROM chemicals WHERE INCHIKEY LIKE ? LIMIT 20",
-            (f"{skeleton}%",),
-        )
-        cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, row)) for row in cur.fetchall()]
-    except Exception as exc:
-        log.warning("CompTox skeleton search (SQL) failed: %s", exc)
-        return []
-
-
-def _pubchem_skeleton_search(
-    pubchem: PubChemID, skeleton: str
-) -> List[Dict[str, Any]]:
-    """Search PubChemID SQLite for InChIKeys sharing the same skeleton.
-
-    Args:
-        pubchem: Initialised :class:`~provesid.PubChemID` client.
-        skeleton: 14-character InChIKey connectivity prefix.
-
-    Returns:
-        List of matching rows (may be empty).
-    """
-    try:
-        conn = pubchem._conn  # type: ignore[attr-defined]
-        cur = conn.execute(
-            "SELECT * FROM compounds WHERE inchikey LIKE ? LIMIT 20",
-            (f"{skeleton}%",),
-        )
-        cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, row)) for row in cur.fetchall()]
-    except Exception as exc:
-        log.warning("PubChemID skeleton search (SQL) failed: %s", exc)
-        return []
-
-
-def _chebi_skeleton_search(
-    chebi: ChebiSDF, skeleton: str
-) -> List[Dict[str, Any]]:
-    """Search the ChebiSDF in-memory index for skeleton-matching InChIKeys.
-
-    Args:
-        chebi: Initialised :class:`~provesid.ChebiSDF` client.
-        skeleton: 14-character InChIKey connectivity prefix.
-
-    Returns:
-        List of matching compound dicts (may be empty).
-    """
-    try:
-        results = []
-        ik_index: Dict[str, Any] = chebi.index.get("inchikey_to_id", {})  # type: ignore[attr-defined]
-        for ik, chebi_id in ik_index.items():
-            if ik.startswith(skeleton):
-                compound = chebi.get_compound_by_id(chebi_id)
-                if compound:
-                    results.append(compound)
-                if len(results) >= 20:
-                    break
-        return results
-    except Exception as exc:
-        log.warning("ChEBI skeleton search failed: %s", exc)
-        return []

@@ -243,7 +243,7 @@ existing `sources_available` machinery already gives the honest reporting this
 needs. Log each fallback at DEBUG, and count them in `df.attrs` so a user can see
 how much network a batch actually used.
 
-### 4.5 The `Search` source ladders (§5 B.2, still open) (M)
+### 4.5 The `Search` source ladders (§5 B.2) (M) — **done, §22**
 
 Unchanged since August, and now the largest remaining piece of duplication in the
 package. `search.py` holds seven `_resolve_<type>` methods, each a hand-written
@@ -451,7 +451,7 @@ Steps are independently committable and leave the suite green.
 | 10 | ~~`PubChemID.descriptors()` — RDKit descriptors on demand~~ **done, §19** | 8.6 | M |
 | 11 | ~~`CheMBL(source="mysql")` — the streaming route, verified against step 5~~ **done, §20** | 9.7 | M |
 | 12 | ~~split `pubchem.py` → `+ pubchem_id.py`; `chebi.py` → `+ chebi_sdf.py`~~ **done, §21** | 4.12 | M |
-| 13 | `sources.py`; collapse the `Search` ladders | 4.5 | M |
+| 13 | ~~`sources.py`; collapse the `Search` ladders~~ **done, §22** | 4.5 | M |
 | 14 | `Search(online_fallback=...)` as a row in the source table | 4.4 | M |
 | 15 | `Search.PRESETS` | 4.6 | S |
 | 16 | circuit breaker on the shared `RateLimiter` | 4.12 | M |
@@ -2879,3 +2879,152 @@ annotation. The annotation is correct because the method returns
 - The historical table in `datasets.py`'s module docstring still lists
   `pubchem.py` and `chebi.py` as download sites. It records what was true when
   §13 found the five copies, so it was left as history rather than rewritten.
+
+---
+
+## 22. Landed on 2026-09-21 — step 13, `sources.py` and the `Search` ladders (§4.5)
+
+The August plan's B.2, done in the shape it proposed. `search.py` was 3 392
+lines and is now 2 721. `sources.py` is 378, so the package is 293 lines
+shorter. `search.py` had 55 hand-written `if self._x is not None: try: ...
+except Exception: log.warning(...)` blocks. Of those, 47 in nine live methods
+became one table and one driver, six more in two dead methods were deleted,
+and two remain in `_tanimoto_candidates` (§22.3).
+
+### 22.1 What landed
+
+- `src/provesid/sources.py`. `LOOKUPS[kind][source](client, query)` returns
+  that source's candidates, best first, already adapted by the `tools`
+  `candidate_from_*` helpers, and an empty list on a miss. There are nine
+  kinds: `cas`, `inchikey`, `inchikey_skeleton`, `inchi`, `smiles`, `dtxsid`,
+  `name`, `fuzzy_name` and `formula`. The module docstring prints the table as
+  a grid, so the gaps can be read at a glance. Lookups do not catch
+  exceptions. The three skeleton searches that read `_conn` directly and
+  `rank_rows_by_completeness` moved here from `search.py`.
+- `Query(value, label, k, fuzzy_cutoff)`, a frozen dataclass, instead of the
+  bare `(client, query)` lambdas B.2 sketched. B.2's sketch had no way to
+  express two things the ladders really did: name and formula lookups take
+  `top_k_per_source` rows, and a ZeroPM candidate is named after the user's
+  query, which for DTXSID is not the InChIKey ZeroPM was asked by (§22.2).
+- `Search._collect(kind, value, *, label, k, sources)` is the only place a
+  source is queried. A failing source is logged as `"<Source> <kind> lookup
+  failed for <value>: <error>"` and left out, and the others still vote.
+  `Search._pool(hits, method, score)` flattens the result in source order and
+  then rank order. `score` is either a number or a function of the candidate,
+  which covers exact identifiers (1.0), names (`_name_score`) and formulas
+  (`_completeness_score`) without three copies of an `add()` closure.
+- The five `self._chebi` … `self._chembl` attributes became one
+  `self._clients` dict, and `getattr(self, f"_{key}")` is gone. The factory
+  map stays local to `_ensure_clients`, and not only out of habit (§22.5).
+- The resolvers now read as what they are. The CAS resolver, for example,
+  does this:
+
+  ```python
+  hits = self._collect("cas", cas)
+  smiles = _first_smiles_from_candidates(hits)
+  if not is_missing(smiles):
+      hits.update(self._collect("smiles", str(smiles), sources=["chembl"]))
+  return result, self._pool(hits, "exact_cas"), None
+  ```
+
+  `_resolve_cas` went from 66 lines to 24, and most of what remains is its
+  docstring. `_skeleton_candidates` is gone, because it was exactly one row
+  of the table.
+- Deleted as dead, as B.2 asked: `_candidates_from_name`,
+  `_fuzzy_name_candidates`, `_most_complete_row` and its three tests, the
+  `rapidfuzz.process` import, and the six unused `tools` imports B.2 listed.
+  Four adapters that only the ladders used are now imported by `sources.py`
+  instead.
+- `tests/test_sources.py` has 21 tests: the table's shape, one lookup per
+  adapter shape, `Query`, the driver's failure isolation, and pool ordering.
+  `docs/api/search.md` gained a "Source lookup table" section rendered from
+  the module. `CHANGELOG.md` has an entry under *Changed*.
+
+### 22.2 Cross-source routes stay in the resolver
+
+Not every cell of the grid is filled. ChEMBL has no CAS numbers, ChEBI is
+asked about a SMILES by its InChIKey, CompTox is asked about an InChI by its
+InChIKey, and the DTXSID resolver asks everyone except CompTox by the
+InChIKey that CompTox returned. Those routes depend on what another source
+answered first, so they are not table rows. They are one `_collect(...,
+sources=[...])` line each in the resolver, which is where the dependency is
+visible. Putting them in the table would have needed a small language for
+"ask after", and there are only five such routes.
+
+The DTXSID route is the reason `Query.label` exists. HEAD named ZeroPM's
+candidate after the DTXSID even though ZeroPM was asked by InChIKey. The
+name is meaningless either way, but a refactor that changes output is not a
+refactor. So the label is carried through, and a test pins it.
+
+### 22.3 Deliberately left alone
+
+- `_tanimoto_candidates`. It scores each row against a fingerprint, applies
+  the threshold per source and returns the best score. That is a similarity
+  search with two source-specific probes, not a lookup, and turning it into a
+  table row would hide the scoring. It now reads `self._clients` and returns
+  the new hits shape, and is otherwise unchanged.
+- **§4.13 is still open.** `_clients_initialized` is still one flag, so
+  passing one client still disables lazy construction of the others. Fixing
+  it needs a way to tell "not passed" apart from "passed `None`", because
+  three test helpers pass `chebi=None, ...` precisely to get a one-source
+  `Search`. That is a behaviour change with its own design question, so it
+  was kept out of a commit whose claim is "no behaviour change".
+- §4.4's online fallback is now one more row per kind plus a flag, as §4.5
+  predicted. That is step 14.
+
+### 22.4 Equivalence on the real databases
+
+The stub tests show that the code paths run. They cannot show that 47 blocks
+were transcribed correctly, and in particular they cannot show which
+`exact=`, `limit=` or `or`-fallback each source used. So HEAD was checked
+out into a separate worktree, and the same script ran on both trees against
+the installed ChEBI, CompTox, PubChemID, ChEMBL 36 and ZeroPM. It covered
+7 configurations × 7 identifier types with `n_hits="all"`, so every
+candidate that survives clustering is compared and not just the winner. The
+configurations were default, `use_zeropm`, `fuzzy`, `fuzzy`+`use_zeropm`,
+`inchikey_skeleton`, `similarity_threshold=0.5`, and
+`min_source_support=2`+`strip_salts`. The 47 queries included misses, typos,
+salts, an unparsable SMILES, InChIKeys with made-up second blocks (for
+the skeleton path) and a made-up DTXSID.
+
+**All 437 result rows are identical in every column**, with one exception
+that is not a difference. With ZeroPM on, the `Synonyms` string of two SMILES
+queries lists the same names in a different order. Running HEAD twice gives
+two different orders as well, because `candidate_from_zeropm_smiles` collects
+synonyms through a set and Python randomises string hashing per process. That
+is an existing nondeterminism in `tools.py`. It is worth fixing, but not
+here.
+
+### 22.5 Validation
+
+- Baseline before any edit: the eight `Search`-touching test files,
+  **409 passed**.
+- `tests/test_sources.py`, `test_search.py` and `test_search_multihit.py`
+  after the change: 154 passed.
+- `pytest tests/`: **1388 passed, 35 skipped, 21 failed** (85 min). 18 of
+  the failures are §20.6's live `pubchem.ncbi.nlm.nih.gov` failures in
+  `test_pubchem.py` and `test_pubchemview.py`, the same set §21.5 recorded.
+  The other three were this change's, and are fixed. One read
+  `getattr(search, f"_{key}")` in `test_sqlite_lifecycle.py`. The other two
+  are worth recording. The first draft moved the client factory map onto the
+  class as `_CLIENT_FACTORIES`. That captured `ChebiSDF`, `PubChemID` and the
+  rest at import time. `test_dataset_manager.py`'s `recording_clients`
+  fixture patches `provesid.search.PubChemID` and friends, so the two
+  dataset-policy tests silently built the **real** clients against a
+  `tmp_path`, instead of recording the calls. That is why the run took 85
+  minutes rather than §21.5's 12. The map is back inside `_ensure_clients`,
+  where the lookup happens at call time, with a comment saying why. After the
+  fix, `test_dataset_manager`, `test_sqlite_lifecycle`, `test_sources`,
+  `test_search` and `test_search_multihit` gave 247 passed in 3.7 s.
+- `pytest --doctest-modules src/provesid/sources.py`: 2 passed.
+- `ruff check --select F,E9` on both modules: clean.
+- `mkdocs build --strict`: clean.
+
+### 22.6 Still open
+
+- §4.13, above.
+- The ZeroPM synonym order (§22.4) should be sorted or insertion-ordered in
+  `tools.candidate_from_zeropm_smiles`.
+- `comptox_skeleton_search` and `pubchem_skeleton_search` still reach into
+  `_conn`. A public `search_by_inchikey_prefix` on each client would let the
+  table call a method, as every other row does.

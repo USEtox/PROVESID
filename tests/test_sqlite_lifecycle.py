@@ -450,7 +450,7 @@ class TestSearchClosesWhatItOpened:
 
         with Search("cas", datasets="present") as search:
             search.search("50-00-0")
-            owned = {key: getattr(search, f"_{key}") for key in search._owned_clients}
+            owned = {key: search._clients[key] for key in search._owned_clients}
 
         assert owned, "Search constructed no clients; the test proves nothing"
         for key, client in owned.items():

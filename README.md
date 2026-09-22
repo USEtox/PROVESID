@@ -188,7 +188,7 @@ Power-user controls:
 - Set `PROVESID_CACHE_DIR` to override the default cache directory. Cached API
   responses live under `~/.cache/provesid/<service>/` (and the platform
   equivalents), separately from the datasets, because they are disposable —
-  see [Advanced caching](./docs/advanced_caching.md).
+  see [Caching](./docs/guide/caching.md).
 - Pass `data_dir=...` to `ChebiSDF`, `CheMBL`, `CompToxID`, `PubChemID`,
   `ZeroPM`, or `Search`.
 - Use `redownload=True` in constructors, or `download_database(..., force=True)` /

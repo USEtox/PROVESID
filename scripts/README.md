@@ -23,7 +23,7 @@ RDKit), `--no-synonyms`, `--keep-downloads`, `--force`.
 
 **Cost:** 15.4 GB transferred, one file at a time; a 2.5 GB database, plus
 7.4 GB free at the worst moment; about 12 minutes of processing on top of the
-download. See `docs/api/pubchem.md#the-local-database` for what
+download. See `docs/guide/datasets.md` for what
 goes in and how, and `PubChemID(db_path=...).provenance()` for what a finished
 database records about itself.
 
@@ -75,7 +75,7 @@ bash scripts/install_chebifier.sh
 - No index patching needed anymore: `chebai-graph==1.0.0` predates the property
   index drift that broke the `v244` GNN checkpoints.
   `provesid.taxonomy.ensure_v244_indices()` still runs as a safety net and
-  reports `ok` on a clean install. Root-cause writeup: `docs/chebifier.md`.
+  reports `ok` on a clean install. Root-cause writeup: `docs/guide/chebifier.md`.
 - Model weights are **not** installed here; they download on first
   `BaseEnsemble()` use into the shared PROVESID dataset dir
   (`PROVESID_DATA_DIR` to override). See the taxonomy plan §10.2.

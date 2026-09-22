@@ -70,7 +70,7 @@ files = [
     "tests/test_chembl.py - Comprehensive test suite (450+ lines)",
     "examples/chembl/README.md - Usage guide",
     "examples/chembl/chembl_tutorial.ipynb - Interactive tutorial",
-    "docs/api/chembl.md - API documentation"
+    "docs/api/chembl.md and docs/guide/datasets.md - documentation"
 ]
 for file in files:
     print(f"   - {file}")

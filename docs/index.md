@@ -1,75 +1,67 @@
 # PROVESID
 
-PROVESID is a Python package for chemical identifier resolution, property retrieval, and local dataset lookup across multiple chemistry data systems.
+PROVESID resolves chemical identifiers and retrieves chemical data, **offline
+first**. It keeps local copies of PubChem, EPA CompTox, ChEBI, ChEMBL and
+ZeroPM, answers from them, and asks the online services only when you let it.
 
-## What PROVESID Covers
+```python
+from provesid import Search
 
-PROVESID includes interfaces for online APIs and local/offline databases.
+df = Search("cas").search(["50-00-0", "64-17-5", "1912-24-9"])
+df[["query", "name", "canonical_smiles", "InChIKey", "confidence"]]
+```
 
-### Online interfaces
+```text
+       query          name         canonical_smiles                     InChIKey  confidence
+0    50-00-0  formaldehyde                      C=O  WSFSSNUMVMOOMR-UHFFFAOYSA-N      0.9000
+1    64-17-5       ethanol                      CCO  LFQSCWFLJHTTHZ-UHFFFAOYSA-N      0.8906
+2  1912-24-9      atrazine  CCNc1nc(Cl)nc(NC(C)C)n1  MXWJVTOOROXGIU-UHFFFAOYSA-N      0.9000
+```
 
-- `PubChemAPI` for PUG-REST queries (compound, substance, assay, and identifier workflows)
-- `PubChemView` for experimental property extraction with references and tabular outputs
-- `NCIChemicalIdentifierResolver` for identifier conversion through NCI resolver endpoints
-- `CASCommonChem` for CAS Common Chemistry lookups
-- `ChEBI` for ChEBI API access
-- `OPSIN` and `PYOPSIN` for chemical name-to-structure conversion
-- `ClassyFireAPI` for chemical taxonomy/classification
+`Search` asks every installed database about each identifier, keeps the
+structure they agree on, and reports how many agreed. No request leaves the
+machine unless you pass `online_fallback=True`.
 
-### Offline and local dataset interfaces
-
-- `CheMBL` local SQLite interface (auto-download supported)
-- `PubChemID` local SQLite identifier database (CID/CAS/InChI/InChIKey and metadata)
-- `CompToxID` local SQLite interface (auto-download supported)
-- `ZeroPM` local SQLite interface (auto-download supported)
-- `REACHDossierID` local REACH dossier dataset lookup
-- `ChebiSDF` local ChEBI SDF parser
-
-## Recommended Installation Method
-
-Use `uv` as the primary installation workflow:
+## Install
 
 ```bash
 uv pip install provesid
 ```
 
-For development from source:
+or, from source, `uv pip install -e .` in a clone of
+[the repository](https://github.com/USEtox/PROVESID). The package itself is
+small. The databases are not, and none is downloaded until you ask:
 
-```bash
-git clone https://github.com/USEtox/PROVESID.git
-cd PROVESID
-uv pip install -e .
+```python
+from provesid import datasets
+
+datasets.plan()                                  # what each would cost
+datasets.fetch(["pubchem", "comptox", "chebi"])  # install by name
 ```
 
-`uv` is recommended because PROVESID can work with large local data files and database assets. Using `uv` helps avoid repeated package/data copies across many environments.
+They go into one per-user directory shared by every virtual environment on the
+machine. See [Installing the offline databases](guide/datasets.md).
 
-## Start Here
+## What is in it
 
-- [Quick Start](quickstart.md)
-- [Online and Offline Data Methods](data_methods.md)
-- [Advanced Caching](advanced_caching.md)
+**Offline.** `Search` over `PubChemID`, `CompToxID`, `ChebiSDF` and `CheMBL`,
+with `ZeroPM` on request; each client can also be used directly. PubChem
+properties and RDKit descriptors without the network. `REACHDossierID` for
+REACH dossiers, and optional ChEBI classification with Chebifier.
 
-## Tutorials
+**Online.** `PubChemAPI` (PUG-REST), `PubChemView` (experimental properties,
+parsed into numbers with SI units), `NCIChemicalIdentifierResolver`, `ChEBI`,
+`CASCommonChem`, `OPSIN` and `ClassyFireAPI`. They share one transport that
+paces requests per host, retries what is worth retrying, and stops asking a
+host that has said to wait; their answers are cached on disk.
 
-- [PubChem Tutorial](examples/pubchem/pubchem_tutorial.md)
-- [CAS Common Chemistry Tutorial](examples/CCC/CAS_Common_Chemistry_tutorial.md)
-- [ChEBI Tutorial](examples/ChEBI/ChEBI_tutorial.md)
-- [ChEBI SDF Tutorial](examples/ChEBI/chebi_sdf_tutorial.md)
-- [ClassyFire Tutorial](examples/ClassyFire/classyfire_tutorial.md)
-- [OPSIN Tutorial](examples/OPSIN/opsin_tutorial.md)
-- [Chemical ID Resolver Tutorial](examples/resolver/chem_id_resolver_tutorial.md)
-- [ChEMBL Tutorial](examples/chembl/chembl_tutorial.md)
-- [PubChem View Tutorial](examples/pubchemview/pubchem_view_tutorial.md)
-- [ZeroPM Tutorial](examples/zeropm/zeropm-example.md)
+## Where to go next
 
-## API Reference
-
-- [API Overview](api/index.md)
-- [PubChem API](api/pubchem.md)
-- [PubChem View](api/pubchemview.md)
-- [NCI Resolver](api/nci_resolver.md)
-- [CAS Common Chemistry](api/cascommonchem.md)
-- [ChEBI](api/chebi.md)
-- [ClassyFire](api/classyfire.md)
-- [OPSIN](api/opsin.md)
-- [ChEMBL](api/chembl.md)
+- [Quick start](quickstart.md) — a tour, offline first.
+- Guides — [datasets](guide/datasets.md), [`Search`](guide/search.md),
+  [the local databases](guide/local-databases.md),
+  [experimental properties](guide/experimental-properties.md),
+  [network behaviour](guide/network.md), [caching](guide/caching.md),
+  [API keys](guide/api-keys.md), [Chebifier](guide/chebifier.md).
+- Tutorials — one per service, from the repository's `examples/` folder.
+- [API reference](api/index.md) — generated from the docstrings.

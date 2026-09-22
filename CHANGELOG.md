@@ -790,6 +790,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PubChemAPI.get_cache_info`.
 
 ### Changed
+- **The documentation is rebuilt around the docstrings.** Every API page is
+  now a short lead and a `:::` directive: `docs/api/` goes from 4 045
+  hand-written lines, which had drifted from the code, to 207, and every
+  public module has a page, including the
+  offline half that had none (`PubChemID`, `CompToxID`, `ZeroPM`,
+  `REACHDossierID`, `datasets`, `taxonomy`, `cache`, `config`, `tools`).
+  What the docstrings do not say moved into eight guides under
+  `docs/guide/`: installing the offline databases (new), `Search`, using the
+  local databases directly, experimental properties from PubChem, network
+  behaviour, caching, API keys and Chebifier. The home page and the quick
+  start lead with `Search` and `datasets` rather than the online clients.
+  - `docs/examples/` (symlinks to `examples/`) is deleted; a MkDocs hook,
+    `scripts/mkdocs_hooks.py`, serves the tutorials straight from
+    `examples/` at the same URLs. The `.py` demos are no longer rendered as
+    notebook pages.
+  - `docs/plans/` moved to `plans/`, and the "Modernization" section left
+    the nav.
+  - Docstrings are parsed with `docstring_style: auto`: `chembl`, `comptox`,
+    `reach` and `zeropm` are NumPy-style and had been rendered as Google,
+    with their example outputs read as Markdown links. A Google `Returns:`
+    section is one value, where each wrapped line used to render as a
+    separate returned value.
+  - `mkdocs build --strict` now also fails on a link to a missing page or
+    heading.
 - **`Search` asks its sources through one table, `provesid.sources.LOOKUPS`.**
   The 47 hand-written `if client: try: ... except: log` blocks in nine
   methods of `search.py` became one row per (lookup kind, source) and a single

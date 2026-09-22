@@ -3,7 +3,7 @@
 # install_chebifier.sh — install the optional chebifier backend for PROVESID,
 # including the graph (GNN) models, on Linux/CPU.
 #
-# See: docs/chebifier.md  and
+# See: docs/guide/chebifier.md  and
 #      plans/2026-07-02-chemical-taxonomy-classyfire-chebifier.md  (§10)
 #
 # Since chebifier 1.2.2 this is essentially two pip commands, because upstream

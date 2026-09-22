@@ -15,7 +15,7 @@ of PROVESID; install it with::
 which wraps ``pip install 'chebifier[models]'`` plus the ``torch_scatter`` wheel
 the graph models need from the PyG index.
 
-See ``docs/chebifier.md`` for the full installation story and known issues, and
+See ``docs/guide/chebifier.md`` for the full installation story and known issues, and
 ``plans/2026-07-02-chemical-taxonomy-classyfire-chebifier.md`` (§10) for the
 design rationale.
 
@@ -58,7 +58,7 @@ from .utils import user_dataset_path
 
 logger = logging.getLogger(__name__)
 
-#: chebifier release this backend is validated against (see docs/chebifier.md).
+#: chebifier release this backend is validated against (see docs/guide/chebifier.md).
 CHEBIFIER_PINNED_VERSION = "1.2.2"
 
 #: Columns of the tidy taxonomy table returned by ``classify`` (shared with the
@@ -230,7 +230,7 @@ def ensure_v244_indices() -> Dict[str, str]:
     hand-upgraded ``chebai_graph``: the version pinned by ``chebifier[models]``
     (1.0.0) already matches, so every property reports ``"ok"`` on a clean
     install. The operation is idempotent and a no-op when the indices already
-    match or when ``chebai_graph`` is not installed. See ``docs/chebifier.md`` for
+    match or when ``chebai_graph`` is not installed. See ``docs/guide/chebifier.md`` for
     the full root-cause writeup.
 
     Returns:

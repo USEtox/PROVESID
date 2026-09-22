@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # Local documentation validation helper:
-# 1) strict MkDocs build (non-executed)
+# 1) strict MkDocs build (non-executed); the tutorials are read from examples/
+#    by scripts/mkdocs_hooks.py
 # 2) MyST tutorial round-trip conversion to .ipynb
 # Optional: strict MkDocs build with notebook execution enabled (--execute)
 
@@ -16,16 +17,16 @@ fi
 
 TUTORIAL_FILES=(
   "docs/quickstart.md"
-  "docs/examples/CCC/CAS_Common_Chemistry_tutorial.md"
-  "docs/examples/ChEBI/ChEBI_tutorial.md"
-  "docs/examples/ChEBI/chebi_sdf_tutorial.md"
-  "docs/examples/ClassyFire/classyfire_tutorial.md"
-  "docs/examples/OPSIN/opsin_tutorial.md"
-  "docs/examples/pubchem/pubchem_tutorial.md"
-  "docs/examples/pubchemview/pubchem_view_tutorial.md"
-  "docs/examples/resolver/chem_id_resolver_tutorial.md"
-  "docs/examples/chembl/chembl_tutorial.md"
-  "docs/examples/zeropm/zeropm-example.md"
+  "examples/CCC/CAS_Common_Chemistry_tutorial.md"
+  "examples/ChEBI/ChEBI_tutorial.md"
+  "examples/ChEBI/chebi_sdf_tutorial.md"
+  "examples/ClassyFire/classyfire_tutorial.md"
+  "examples/OPSIN/opsin_tutorial.md"
+  "examples/pubchem/pubchem_tutorial.md"
+  "examples/pubchemview/pubchem_view_tutorial.md"
+  "examples/resolver/chem_id_resolver_tutorial.md"
+  "examples/chembl/chembl_tutorial.md"
+  "examples/zeropm/zeropm-example.md"
 )
 
 echo "[1/3] Running strict docs build (non-executed)"

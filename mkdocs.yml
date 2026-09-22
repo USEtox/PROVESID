@@ -28,43 +28,58 @@ theme:
 
 nav:
   - Home: index.md
-  - Getting Started:
-    - Quick Start: quickstart.md
-    - Online and Offline Data Methods: data_methods.md
-    - Advanced Caching: advanced_caching.md
+  - Quick Start: quickstart.md
+  - Guides:
+    - Installing the offline databases: guide/datasets.md
+    - Resolving identifiers with Search: guide/search.md
+    - Using the local databases directly: guide/local-databases.md
+    - Experimental properties from PubChem: guide/experimental-properties.md
+    - Network behaviour: guide/network.md
+    - Caching: guide/caching.md
+    - API keys: guide/api-keys.md
+    - Chebifier taxonomy: guide/chebifier.md
+  # The tutorials live in examples/, not docs/: scripts/mkdocs_hooks.py
+  # serves them at these paths.
   - Tutorials:
-    - PubChem Tutorial: examples/pubchem/pubchem_tutorial.md
-    - CAS Common Chemistry: examples/CCC/CAS_Common_Chemistry_tutorial.md
-    - ChEBI Tutorial: examples/ChEBI/ChEBI_tutorial.md
-    - ChEBI SDF Tutorial: examples/ChEBI/chebi_sdf_tutorial.md
-    - ClassyFire Tutorial: examples/ClassyFire/classyfire_tutorial.md
-    - Chebifier Taxonomy: chebifier.md
-    - OPSIN Tutorial: examples/OPSIN/opsin_tutorial.md
+    - PubChem: examples/pubchem/pubchem_tutorial.md
+    - PubChem View: examples/pubchemview/pubchem_view_tutorial.md
+    - ChEMBL: examples/chembl/chembl_tutorial.md
+    - ChEBI: examples/ChEBI/ChEBI_tutorial.md
+    - ChEBI SDF: examples/ChEBI/chebi_sdf_tutorial.md
+    - ZeroPM: examples/zeropm/zeropm-example.md
     - Chemical ID Resolver: examples/resolver/chem_id_resolver_tutorial.md
-    - ChEMBL Tutorial: examples/chembl/chembl_tutorial.md
-    - PubChem View Tutorial: examples/pubchemview/pubchem_view_tutorial.md
-    - ZeroPM Tutorial: examples/zeropm/zeropm-example.md
-  - Modernization:
-    - Examples Migration Plan: plans/examples-migration-plan.md
-    - Docs Refresh Plan: plans/docs-refresh-plan.md
+    - CAS Common Chemistry: examples/CCC/CAS_Common_Chemistry_tutorial.md
+    - OPSIN: examples/OPSIN/opsin_tutorial.md
+    - ClassyFire: examples/ClassyFire/classyfire_tutorial.md
   - API Reference:
     - Overview: api/index.md
-    - PubChem API: api/pubchem.md
-    - PubChem View: api/pubchemview.md
-    - ChEMBL: api/chembl.md
-    - NCI Resolver: api/nci_resolver.md
-    - Common Chemistry: api/cascommonchem.md
-    - ClassyFire: api/classyfire.md
-    - OPSIN: api/opsin.md
-    - ChEBI: api/chebi.md
     - Search: api/search.md
-    - HTTP Transport: api/http.md
-    - SQLite Clients: api/sqlite_clients.md
+    - Datasets: api/datasets.md
+    - Offline databases:
+      - PubChemID: api/pubchem_id.md
+      - CompToxID: api/comptox.md
+      - ChebiSDF: api/chebi_sdf.md
+      - CheMBL: api/chembl.md
+      - ZeroPM: api/zeropm.md
+      - REACHDossierID: api/reach.md
+      - SQLiteClient: api/sqlite_clients.md
+    - Online services:
+      - PubChemAPI: api/pubchem.md
+      - PubChemView: api/pubchemview.md
+      - NCI resolver: api/nci_resolver.md
+      - ChEBI: api/chebi.md
+      - CAS Common Chemistry: api/cascommonchem.md
+      - OPSIN: api/opsin.md
+      - ClassyFire: api/classyfire.md
+    - Taxonomy: api/taxonomy.md
+    - Infrastructure:
+      - HTTP transport: api/http.md
+      - Cache: api/cache.md
+      - Configuration: api/config.md
+      - Utilities: api/utilities.md
 
-exclude_docs: |
-  examples/*/README.md
-  examples/chembl/demo_implementation.py
-  plans/commit-sequence.md
+hooks:
+  - scripts/mkdocs_hooks.py
 
 markdown_extensions:
   - toc:
@@ -109,7 +124,23 @@ plugins:
       handlers:
         python:
           options:
-            docstring_style: google
+            # Most modules are Google-style; chembl, comptox, reach and zeropm
+            # are NumPy-style. "auto" detects the style of each docstring,
+            # which a per-page docstring_style cannot do for a class's members.
+            docstring_style: auto
+            docstring_options:
+              default: google
+              per_style_options:
+                google:
+                  # A Returns: section here is one value described in prose
+                  # and wrapped over several lines; parsed the default way,
+                  # every line became a separate returned value.
+                  returns_multiple_items: false
+                  # Many signatures carry no annotations and the docstrings
+                  # give types in prose; each would be a warning otherwise.
+                  warn_missing_types: false
+                numpy:
+                  warn_missing_types: false
             show_source: true
             show_root_heading: true
             show_root_toc_entry: true
@@ -126,3 +157,11 @@ extra:
 
 extra_css:
   - stylesheets/extra.css
+
+# Under --strict, a link to a missing page or a missing heading fails the
+# build rather than shipping a dead link.
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn

@@ -61,6 +61,18 @@ module whose database is not installed is skipped, never downloaded
 installed on the day they were written, so a later release can change a count
 or an ordering without anything being wrong.
 
+## Building the Documentation
+
+```bash
+mkdocs build --strict
+```
+
+The API reference is rendered from the same docstrings, so a malformed one
+fails the build, and so does a link to a page or heading that does not exist.
+The tutorials are read from `examples/` (`scripts/mkdocs_hooks.py`); there is
+no copy under `docs/`. `scripts/validate_docs_local.sh --execute` also runs
+the MyST tutorials, which needs the network.
+
 ## Test Categories
 
 ### Core API Tests

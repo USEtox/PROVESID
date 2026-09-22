@@ -17,7 +17,7 @@ db = PubChemID(source="zenodo")   # or downloads a prebuilt copy
 The default route, `provesid.pubchem_ftp.build_pubchem_id_db()`, builds it from
 a dated monthly snapshot of `Compound/Extras/` on PubChem's FTP site, and
 records the release and every source file's MD5 in the database itself
-(`db.provenance()`). `docs/api/pubchem.md` explains the build;
+(`db.provenance()`). `docs/guide/datasets.md` explains the build;
 `scripts/build_pubchem_id_db.py` runs it from a shell.
 
 The Zenodo copy (`PubChemID.DEFAULT_DB_URL`) is refreshed by hand from an FTP

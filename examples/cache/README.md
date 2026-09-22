@@ -18,4 +18,4 @@ python examples/cache/cache_layout_and_versioning_demo.py
 python examples/cache/cache_demo.py
 ```
 
-See `docs/advanced_caching.md` for the full reference.
+See `docs/guide/caching.md` for the full reference.

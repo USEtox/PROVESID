@@ -322,7 +322,7 @@ construction stays, commented, in case the service returns; the tests assert the
 raise. The one thing to add is that `docs/` and `README.md` must stop
 advertising it in the same breath as the working services.
 
-### 4.9 Documentation is a second, drifting copy of the code (M, step 14)
+### 4.9 Documentation is a second, drifting copy of the code (M, step 14) — **done, §29**
 
 - `docs/api/` is **3 570 hand-written lines**. Six of its eleven pages use
   mkdocstrings at all; the other five — `chebi.md` (360), `cascommonchem.md`
@@ -456,7 +456,7 @@ Steps are independently committable and leave the suite green.
 | 15 | ~~`Search.PRESETS`~~ **done, §24** | 4.6 | S |
 | 16 | ~~circuit breaker on the shared `RateLimiter`~~ **done, §27** | 4.12 | M |
 | 17 | ~~docstrings with examples, module by module~~ **done, §28** | 4.12 | L |
-| 18 | rebuild `docs/`; delete `docs/examples/`; drop `docs/plans/` from the nav | 4.9 | M |
+| 18 | ~~rebuild `docs/`; delete `docs/examples/`; drop `docs/plans/` from the nav~~ **done, §29** | 4.9 | M |
 | 19 | notebooks, `search/` first | 4.11 | L |
 | 20 | rewrite `README.md` around offline-first and `Search` | 4.10 | S |
 
@@ -3770,3 +3770,139 @@ asserted nothing and now checks the DTXSID it gets back. `sqlite_client`
 joins the dataset map in `src/conftest.py` for the same reason the others
 are in it: without the PubChem database its examples would ask for a
 download.
+
+---
+
+## 29. Landed on 2026-09-22 — step 18, the documentation rebuilt (§4.9)
+
+§4.9 asked for four things: stop hand-writing what the docstrings say, delete
+`docs/examples/`, take `docs/plans/` out of the nav, and give the offline half
+of the package pages. All four are done. Step 17 is what made the first
+possible: every public object now has a docstring with a checked example, so
+the API pages can be the docstrings.
+
+### 29.1 What landed
+
+- **API reference: 21 pages, each a lead and a `:::` directive.** `docs/api/`
+  goes from 4 045 hand-written lines to 207. New pages: `PubChemID` (with
+  `pubchem_ftp`), `CompToxID`, `ChebiSDF`, `ZeroPM`, `REACHDossierID`,
+  `datasets`, `taxonomy`, `cache`, `config`, and `tools` with `utils`;
+  `CheMBL` gains `mysqldump`, `PubChemView` keeps `pubchemview_parse`. The nav
+  groups them as Search, Datasets, Offline databases, Online services,
+  Taxonomy, Infrastructure.
+- **Eight guides in `docs/guide/`**, holding what the docstrings do not:
+  installing the offline databases (new — the registry, `status/plan/fetch/remove`,
+  where files go, `Search(datasets=...)`, PubChem's two routes and ChEMBL's
+  three); resolving identifiers with `Search` (from the old API page: sources,
+  presets, online fallback, the output columns, confidence); using the local
+  databases directly (closing, threads, PubChem properties and descriptors,
+  CompTox names and retired CAS numbers); experimental properties from PubChem
+  (`PropertyData`, `ParsedValue`, property tables); network behaviour (from the
+  old `http.md`); caching, API keys and Chebifier (moved and corrected). The
+  history in the old pages ("before this module…", "why it exists") was left
+  out: a user needs the behaviour, and the history is in this file and the
+  changelog.
+- **Home and quick start lead offline.** `index.md` opens with a `Search`
+  call and its real output and says nothing is downloaded until asked;
+  `quickstart.md` goes datasets → `Search` → a client directly → the online
+  services. `data_methods.md` is gone; its one idea is the home page's.
+- **`docs/examples/` is deleted.** It was nine symlinks into `examples/`, not
+  a copy (§4.9 said "byte-identical copy", which is what the symlinks looked
+  like to `diff`), so nothing had rotted yet, but it would have taken a tenth
+  folder to a symlink and back to add a tutorial. A MkDocs hook,
+  `scripts/mkdocs_hooks.py`, adds every `.md` and `.ipynb` under `examples/`
+  except `README.md` to the site at the same `examples/...` paths, ahead of
+  mkdocs-jupyter so it still renders them as notebooks. The `.py` demos,
+  which the symlinks had also published as notebook pages outside the nav, are
+  not pages any more.
+- **`docs/plans/` moved to `plans/`**, and the "Modernization" nav section is
+  gone. `exclude_docs` had nothing left to exclude and went too.
+- **Validation.** `mkdocs.yml` gains `validation:` at `warn` for omitted
+  files, absolute and unrecognised links and missing anchors, so `--strict`
+  fails on a dead link or a dead `#heading` (checked by breaking one).
+- Links to the moved pages updated in `README.md`, `scripts/README.md`,
+  `scripts/install_chebifier.sh`, `scripts/validate_docs_local.sh` (the
+  tutorial list now reads `examples/`), `src/provesid/taxonomy.py`,
+  `src/provesid/data/README_PUBCHEM.md`, `pyproject.toml`, two example READMEs
+  and a demo. `TESTING.md` says how to build the docs. The deploy workflow's
+  path filter gains `scripts/mkdocs_hooks.py`; no test job was touched.
+
+### 29.2 Rendering the whole package found two parser problems
+
+Only six modules had ever been rendered. Rendering all of them failed
+`--strict`, and the warnings were two real defects in how the docs had been
+parsed all along, not noise:
+
+- **Four modules are NumPy-style.** `chembl`, `comptox`, `reach` and `zeropm`
+  use `Parameters\n----------`; `mkdocs.yml` said `docstring_style: google`.
+  `CheMBL` had been rendered that way on its page all along: its sections
+  came out as Markdown setext headings, and ZeroPM's example outputs
+  (`['Alcohol', 'ETHANOL', ...]`) as reference links, which is what
+  `--strict` caught. A per-page `docstring_style: numpy` does not work:
+  mkdocstrings-python applies it to the directive's own object and not to a
+  class's members, because the package is loaded, and parsed, once. The fix
+  is `docstring_style: auto` with Google as the default, which detects the
+  style per docstring.
+- **Every wrapped `Returns:` rendered as several returned values.** griffe's
+  Google parser starts a new item at each line of the section's base
+  indentation, so a description wrapped over four lines was four rows in the
+  Returns table — `Search.search` had 17, `cas_to_detail` 17. About 200 docstrings,
+  private ones included, were affected. `returns_multiple_items: false` makes the section one value.
+  `returns_named_value` stays at its default: turned off, it splits the first
+  line on its first colon, which would cut 32 prose descriptions (`"Mapping
+  of canonical ``CHEBI:<id>`` string…"`) in half.
+
+`auto` with per-style options triggers a mkdocstrings-python 2.0 quirk: it
+fills in defaults for the Sphinx style and then warns, once per module, that
+griffe's Sphinx parser does not take one of them (`warn_missing_types`). The
+package has no Sphinx-style docstrings. The hook filters that one message and
+says why; remove the filter when mkdocstrings-python stops emitting it.
+`warn_missing_types: false` is set for Google and NumPy: most online clients'
+signatures carry no annotations, and the docstrings give the types in prose.
+
+### 29.3 What the old pages said that was wrong
+
+- `api-keys.md` said the config file's permissions "are set to be readable
+  only by your user account". `config.py` sets no permissions. The guide now
+  says so, and says the stored key outranks `CAS_API_KEY` (§28.4 is how that
+  bit this machine).
+- `chembl.md`'s manual download ran `cd src/provesid/data`; datasets have not
+  lived there since the per-user data directory. The section is gone;
+  `datasets.fetch` and `CheMBL(source=...)` are the documented routes.
+- `http.md` listed ClassyFire among the clients on the shared transport; it
+  is still on raw `requests` (step 7 is postponed).
+- `advanced_caching.md` implied every online client is cached. The online
+  `ChEBI` client is not, and `use_cache=False` is a constructor argument on
+  four clients and a per-call one on `ClassyFireAPI`.
+- `search.md`'s confidence table left out OPSIN's base (0.97) and its column
+  table `opsin_smiles`.
+- `api/index.md` still imported `PubChemPUGViewAPI`.
+
+### 29.4 Validation
+
+- `mkdocs build --strict`: clean, 0 warnings.
+- Every tutorial in `scripts/validate_docs_local.sh` round-trips through
+  jupytext at its new path.
+- The offline cells of the new quick start run against the installed
+  databases; the example outputs in `index.md`, `guide/search.md`,
+  `guide/datasets.md` (`plan()` on an empty `PROVESID_DATA_DIR`, and the
+  `MissingDatasetError` text) and `guide/local-databases.md` were produced on
+  this machine on 2026-09-22.
+- `pytest --doctest-modules src/provesid/taxonomy.py` (the one module whose
+  text changed): 10 passed, 5 skipped. No code changed.
+
+### 29.5 Still open
+
+- **Sphinx roles render literally.** Docstrings use `:class:`, `:func:`,
+  `:data:` and `:attr:`; mkdocstrings shows them as `:data: OUTPUT_COLUMNS`.
+  They should become Markdown cross-references (`` [`Search`][provesid.Search] ``)
+  module by module, which `--strict` would then check.
+- A typed Google return (`dict: Keyed by …`) renders the type in the *Name*
+  column, since `returns_named_value` stays on (§29.2).
+- Bulleted lists inside a `Returns:` description (`cas_to_detail`,
+  `get_molecular_data`) run together into one paragraph: they need a blank
+  line before the list.
+- The tutorials were moved, not reviewed. They are step 19's.
+- The quick start's online cells were not executed (the block from §28.6 does
+  not apply to MyST pages, but no live run was made); `--execute` in
+  `validate_docs_local.sh` does it.

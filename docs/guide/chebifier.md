@@ -324,6 +324,7 @@ nothing from it.
 
 ## See also
 
+- [`provesid.taxonomy`](../api/taxonomy.md) — the API reference.
 - `scripts/install_chebifier.sh` — the installer.
 - `scripts/README.md` — installer notes.
 - `plans/2026-07-02-chemical-taxonomy-classyfire-chebifier.md` — design plan

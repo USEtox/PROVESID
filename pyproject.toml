@@ -43,7 +43,7 @@ dependencies = [
 # The transformer + rule-based models work with just this extra; the graph (GNN)
 # models additionally need torch_scatter, which has no source install and must
 # come from the PyG wheel index — use `bash scripts/install_chebifier.sh`.
-# See docs/chebifier.md.
+# See docs/guide/chebifier.md.
 chebifier = [
     "chebifier[models]==1.2.2",
 ]

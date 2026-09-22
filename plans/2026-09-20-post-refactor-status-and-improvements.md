@@ -220,7 +220,7 @@ or a thread-local connection. Keep `__del__` as a backstop. `Search` closes the
 clients it constructed. Size S, and it removes a class of report that is annoying
 to diagnose from a bug report.
 
-### 4.4 Offline→online fallback exists in exactly one place (M)
+### 4.4 Offline→online fallback exists in exactly one place (M) — **done, §23**
 
 Dev-principle §9 asks for a two-stage lookup with an opt-out parameter,
 documented, logged at DEBUG. `PubChemID.properties()` does this properly
@@ -452,7 +452,7 @@ Steps are independently committable and leave the suite green.
 | 11 | ~~`CheMBL(source="mysql")` — the streaming route, verified against step 5~~ **done, §20** | 9.7 | M |
 | 12 | ~~split `pubchem.py` → `+ pubchem_id.py`; `chebi.py` → `+ chebi_sdf.py`~~ **done, §21** | 4.12 | M |
 | 13 | ~~`sources.py`; collapse the `Search` ladders~~ **done, §22** | 4.5 | M |
-| 14 | `Search(online_fallback=...)` as a row in the source table | 4.4 | M |
+| 14 | ~~`Search(online_fallback=...)` as a row in the source table~~ **done, §23** | 4.4 | M |
 | 15 | `Search.PRESETS` | 4.6 | S |
 | 16 | circuit breaker on the shared `RateLimiter` | 4.12 | M |
 | 17 | docstrings with examples, module by module | 4.12 | L |
@@ -3028,3 +3028,141 @@ here.
 - `comptox_skeleton_search` and `pubchem_skeleton_search` still reach into
   `_conn`. A public `search_by_inchikey_prefix` on each client would let the
   table call a method, as every other row does.
+
+---
+
+## 23. Landed on 2026-09-22 — step 14, `Search(online_fallback=...)` (§4.4)
+
+§4.4 as proposed, in the shape §22.3 predicted. The fallback is two new
+columns in the source table plus a flag. No resolver changed.
+
+### 23.1 What landed
+
+- `Search(..., online_fallback=False)`. It is off by default, so a run still
+  opens no socket. When it is on, a query whose resolver returned an empty
+  pool is asked again of PubChem PUG-REST and CACTUS. The check sits in
+  `_resolve_single`, after the resolver returns, so none of the seven
+  resolvers knows the fallback exists. An empty pool is the precise meaning
+  of "no candidate from any offline source". A Tanimoto hit, a skeleton
+  match or a fuzzy hit is a candidate, so it prevents the fallback.
+- `sources.py` gained `ONLINE_SOURCE_KEYS = ["pubchem_online", "cactus"]`,
+  their display names (`"PubChem (online)"`, `"CACTUS"`) and one cell per
+  kind they can answer. The online question is the query asked as its own
+  type, since the identifier types and the lookup kinds share their names.
+  Cells by kind:
+
+  | kind | PubChem (online) | CACTUS |
+  |---|---|---|
+  | `cas`, `name` | `get_cids_by_name(name_type="complete")` | yes |
+  | `smiles`, `inchikey` | `get_cids_by_<kind>` | yes |
+  | `inchi` | `get_cids_by_inchi` (new) | yes |
+  | `dtxsid` | name index, via PubChem's DSSTox synonyms | -- |
+  | `formula`, `fuzzy_name`, `inchikey_skeleton` | -- | -- |
+
+  A formula names thousands of PubChem compounds, and neither service has a
+  fuzzy or prefix search worth a round trip. So a formula query is never
+  sent online and is not counted as a fallback.
+- The online sources are asked only through `sources=`. `_collect`'s default
+  is still the offline `_SOURCE_KEYS`, so no cross-source route in a resolver
+  can reach the network by accident. `_pool`, `_build_source_details` and
+  the merge loop in `_build_result_for_cluster` iterate `_SOURCE_KEYS +
+  _ONLINE_KEYS`. `_ONLINE_KEYS` is empty when the flag is off, so an offline
+  run's `source_details` has exactly the keys it had before.
+- The provenance §4.4 asked for goes in `source` and `source_details`, per
+  row, and in two new `df.attrs` counters, `online_fallbacks` (queries sent
+  online) and `online_resolved` (those answered). Both are reset on each
+  `search()` call, and `enrich` carries them. §4.4 also said `foundby`
+  should record it. That was not done: `foundby` names the identifier type
+  queried, and every other column that describes a row's origin already
+  says "PubChem (online)".
+- Clients are built by `_ensure_online_clients` on the first query that
+  needs them, not in `_ensure_clients`. A run answered entirely offline
+  therefore never constructs them. The factories are looked up at call
+  time, as §22.5 found necessary, so the tests patch
+  `provesid.search.PubChemAPI` and `NCIChemicalIdentifierResolver`.
+- New helpers: `PubChemAPI.get_cids_by_inchi`, which POSTs because an InChI's
+  slashes cannot travel in a URL path, `tools.candidate_from_pubchem_online`
+  and `tools.candidate_from_cactus`. The PubChem candidate is built from one
+  property table for all CIDs plus each CID's synonyms, which is where
+  PubChem keeps CAS numbers. The CACTUS candidate is built from `smiles`
+  plus `names`, with the InChIKey derived by RDKit.
+
+### 23.2 Two votes, not one answer
+
+Each service is an independent vote in `n_source_support`, as a database
+is. Two services that agree therefore score like two databases that agree,
+and `min_source_support=2` requires both of them. The alternative was to
+treat the network as a single "online" source, or to discount it. That
+would have written a trust judgement into the scoring that nothing
+measured. CACTUS draws on NCI's own collection, not PubChem's, so the two
+really are separate witnesses. The per-row `source_details` shows the
+difference either way.
+
+### 23.3 "Not found" is a miss, and everything else is a failure
+
+`sources.py` says its lookups do not catch exceptions. The online lookups
+make one exception: `NotFoundError` from `http.py` becomes `[]`. Without
+it, every offline miss that is also unknown online would log
+"lookup failed" at WARNING, which describes a miss as a fault. Any other
+error, a 503 or a timeout, still reaches `_collect`, is logged at WARNING and
+costs that service's vote. PubChem also answers some unknown identifiers
+with CID 0 instead of a 404, and that is filtered out as a miss.
+
+### 23.4 Validation
+
+- The six `Search` test files before the change: 258 passed, and the same
+  after it, with `test_sources.py`'s two table-shape tests widened to the
+  online keys.
+- `tests/test_search_online_fallback.py`: 27 tests, and no socket is opened.
+  They cover off-by-default (no client built, `source_details` unchanged),
+  offline hits not retried, only the misses going online, all six identifier
+  types asked as themselves, name scoring and `top_k_per_source` CIDs,
+  formula never sent, the DEBUG lines, not-found versus failure, one failing
+  service leaving the other's vote, CID 0, CIDs with no properties, CACTUS
+  ambiguity and a missing name list, the POST body of `get_cids_by_inchi`,
+  and `enrich` carrying the counters.
+- `pytest tests/`: 1427 passed, 34 skipped, 11 failed (9 min 17 s). §20.6's
+  live PubChem failures did not recur this time. All 11 failures were
+  `test_search_enrichment.py`, which stubs `search()` with a frame that has
+  no `attrs`. The first draft of `enrich` copied the provenance from the
+  result's `attrs`. It now reads it from the instance, as before, and those
+  11 tests and the eight `Search` files give 326 passed. Suite total:
+  **1438 passed, 34 skipped, 0 failed**.
+- Doctests for `sources.py` and `tools.py`: 13 passed. `ruff check
+  --select F,E9`: clean. `mkdocs build --strict`: clean.
+- **Live, 2026-09-22.** PubChem answered every request from this machine
+  with `503 PUGREST.ServerBusy`, the condition behind §20.6's failures, so
+  its column could not be exercised against the real service. The 503 was
+  logged and cost PubChem's vote. CACTUS answered, so the fallback delivered
+  the answer PubChem could not. On the installed ChEBI, CompTox, PubChemID
+  and ChEMBL 36, 18 current CAS numbers chosen to be obscure all resolved
+  offline, so the fallback is rarely needed for current numbers. **All 8
+  retired CAS numbers tried missed offline** (for example `39400-72-1` and
+  `11121-31-6` for atrazine, `11126-35-5` for aspirin), and CACTUS resolved
+  all 8 to the correct InChIKey. Retired numbers are what old datasets carry, and they are the
+  realistic case for this feature. `examples/search/online_fallback_demo.py`
+  uses one.
+
+### 23.5 Found while validating: `CASRN` is the smallest CAS string, not the best one
+
+With no CAS in the query, the live runs reported atrazine as `11121-31-6`
+and aspirin as `11126-35-5`. Both are real but retired numbers. CACTUS
+lists the current number first. `extract_cas_values` sorts,
+`make_candidate` sorts again, and `first_cas` takes element 0, so the
+lexicographically smallest number wins. Nothing about that is
+online-specific. CompTox's own `CASRN` column and PubChem's synonym order
+are discarded the same way offline. Fixing it means keeping each source's
+order in `CAS_candidates`, which changes offline output. That is its own
+commit with its own equivalence check, so it was kept out of this one.
+
+### 23.6 Still open
+
+- §23.5, CAS order.
+- PubChem's column has not been run against the live service (§23.4).
+  DTXSID-by-synonym rests on PubChem's documented DSSTox deposit and has not
+  been observed from here.
+- A batch sent online while a service is down logs one WARNING per query.
+  Step 16's circuit breaker is the fix: once a host is known to be
+  throttled, `RateLimiter` should fail its requests at once, with one
+  message.
+- §4.13 and §22.6 are unchanged.

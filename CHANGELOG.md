@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Search(online_fallback=True)`: ask PubChem and CACTUS what no offline
+  database holds.** Off by default, so a run still opens no socket. When on,
+  a query that produced no candidate from any offline source, and only such
+  a query, is asked of PubChem's PUG-REST service and the NCI/CADD
+  resolver (CACTUS). Their answers are pooled, clustered and scored like
+  offline ones, and each service counts as one vote in `n_source_support`:
+
+  ```python
+  df = Search("cas", online_fallback=True).search(["50-78-2", "1912-24-9"])
+  df["source"]                  # "PubChemID", ..., "PubChem (online)" or "CACTUS"
+  df.attrs["online_fallbacks"]  # queries that went online
+  df.attrs["online_resolved"]   # ...and those the services answered
+  ```
+
+  The two services are two more columns in `provesid.sources.LOOKUPS`,
+  `pubchem_online` and `cactus` (`ONLINE_SOURCE_KEYS`), with rows for CAS,
+  name, SMILES, InChI, InChIKey and, on PubChem only, DTXSID. Formula queries are never
+  sent online. A service's "not found" is a miss. Any other failure is logged
+  at WARNING and costs only that service's vote. Each fallback is logged at
+  DEBUG. New helpers: `PubChemAPI.get_cids_by_inchi`, which POSTs because an
+  InChI cannot travel in a URL path, and `tools.candidate_from_pubchem_online`
+  and `tools.candidate_from_cactus`. See
+  `examples/search/online_fallback_demo.py`.
+
 - **ChEMBL from its MySQL dump: `CheMBL(source="mysql")`.** Builds the same
   2.4 GiB extract as the default route from ChEMBL's 2.1 GB MySQL dump, read
   as a stream, so the 27.7 GiB release never exists on disk:

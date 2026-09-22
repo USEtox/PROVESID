@@ -13,6 +13,13 @@ missing; :mod:`provesid.datasets` installs them by name.  Pass
 ``datasets="auto"`` to download what is missing, or ``datasets="required"`` to
 refuse to run on a partial set.
 
+No socket is opened unless ``online_fallback=True``.  With it, a query that no
+offline source answers is asked of PubChem's PUG-REST service and the NCI/CADD
+resolver (CACTUS), and only such a query: offline first is a performance and
+traffic decision, and it should not cost the answer.  Rows the network
+supplied say so in ``source`` and ``source_details``, and
+``df.attrs["online_fallbacks"]`` counts how many queries went online.
+
 ZeroPM is **not** among the databases the resolver targets by default.  Its records
 are harvested from regulatory inventories rather than curated compound-by-compound,
 so its name→structure mappings are noisier than the other four sources and, being
@@ -68,8 +75,10 @@ from .chembl import CheMBL
 from .comptox import CompToxID
 from .datasets import DATASETS, fetch_command, human_bytes, require
 from .opsin import PYOPSIN
+from .pubchem import PubChemAPI
 from .pubchem_id import PubChemID
-from .sources import LOOKUPS, SOURCE_DISPLAY, SOURCE_KEYS, Query
+from .resolver import NCIChemicalIdentifierResolver
+from .sources import LOOKUPS, ONLINE_SOURCE_KEYS, SOURCE_DISPLAY, SOURCE_KEYS, Query
 from .sqlite_client import DatabaseClosedError
 from .zeropm import ZeroPM
 from .tools import (
@@ -389,6 +398,8 @@ class Search:
       ~6.5 GiB installed, and none of them is fetched on your behalf.  ``Search`` uses what is installed and
       reports the rest (``datasets="present"``, the default); install them
       deliberately with :func:`provesid.datasets.fetch`.
+    - **Online fallback** (opt-in, ``online_fallback=True``): a query no
+      offline source answers is retried against PubChem PUG-REST and CACTUS.
 
     Attributes:
         identifier_type (str): Input identifier type used for all queries.
@@ -422,6 +433,9 @@ class Search:
             full-source run; check this (or ``df.attrs["sources_available"]``)
             before comparing results across runs.
         sources_unavailable (list[str]): Source keys that failed to initialise.
+        online_fallback (bool): Whether queries no offline source answers are
+            retried online.  :attr:`sources_available` lists offline sources
+            only; the online ones are reported per row and in ``df.attrs``.
 
     Example::
 
@@ -440,6 +454,10 @@ class Search:
 
         # Anchor IUPAC names to a real structure via OPSIN (needs Java)
         df = Search("name", use_opsin=True).search("2-(acetyloxy)benzoic acid")
+
+        # Ask PubChem and CACTUS about whatever the databases do not hold
+        df = Search("cas", online_fallback=True).search(["50-78-2", "1912-24-9"])
+        df.attrs["online_fallbacks"]     # queries that went online
 
         # Hand the four databases back when the run is over
         with Search("cas") as s:
@@ -495,6 +513,7 @@ class Search:
         consensus_compat_threshold: float = 0.35,
         query_weight: float = 0.5,
         return_alternatives: bool = False,
+        online_fallback: bool = False,
         datasets: str = "present",
         data_dir: Optional[Union[str, Path]] = None,
         redownload: bool = False,
@@ -571,6 +590,26 @@ class Search:
                 the method base in the confidence formula.  Defaults to ``0.5``.
             return_alternatives: When ``n_hits == 1``, attach compact runner-up
                 summaries in an ``alternatives`` column.  Defaults to ``False``.
+            online_fallback: When True, a query that produced no candidate
+                from any offline source --- and only such a query --- is asked
+                of PubChem's PUG-REST service and of CACTUS, the NCI/CADD
+                Chemical Identifier Resolver.  Their answers are pooled,
+                clustered and scored exactly like offline ones, and each
+                service is one more independent vote in ``n_source_support``.
+                A row they supplied names them in ``source`` and
+                ``source_details`` (``"PubChem (online)"``, ``"CACTUS"``), and
+                ``df.attrs["online_fallbacks"]`` / ``["online_resolved"]``
+                count the queries that went online and those it answered.
+
+                Defaults to ``False``, so that a run opens no socket and a
+                batch gives the same answer tomorrow as today.  Formula
+                queries are never retried: a formula names thousands of
+                PubChem compounds.  A query costs up to three PubChem
+                requests (up to ``top_k_per_source + 2`` for a name) and two
+                CACTUS requests, paced by the shared per-host limiter; results
+                are cached as those clients cache them.  Each fallback is
+                logged at DEBUG, and a service that fails is logged at WARNING
+                and left out, as a failing database is.
             datasets: What to do about the offline datasets the sources read,
                 when they are not on disk.  One of:
 
@@ -650,6 +689,7 @@ class Search:
         self.consensus_compat_threshold = float(consensus_compat_threshold)
         self.query_weight = float(query_weight)
         self.return_alternatives = bool(return_alternatives)
+        self.online_fallback = bool(online_fallback)
 
         if datasets not in self.DATASET_POLICIES:
             raise ValueError(
@@ -696,6 +736,8 @@ class Search:
             "pubchem": pubchem,
             "zeropm": zeropm,
             "chembl": chembl,
+            "pubchem_online": None,
+            "cactus": None,
         }
 
         # Source keys whose client this instance constructed, and may
@@ -709,6 +751,18 @@ class Search:
         self._clients_initialized: bool = any(
             c is not None for c in self._clients.values()
         )
+
+        # The web services asked when every offline source missed.  Pooled
+        # and reported after the offline sources, and not at all when the
+        # fallback is off, so an offline run's source_details is unchanged.
+        self._ONLINE_KEYS: List[str] = (
+            list(ONLINE_SOURCE_KEYS) if self.online_fallback else []
+        )
+        self._online_clients_built: bool = False
+
+        # Per search() call: queries retried online, and those it answered.
+        self._online_fallbacks: int = 0
+        self._online_resolved: int = 0
 
         # Sources that actually came up, filled in by _ensure_clients().
         self.sources_available: List[str] = []
@@ -825,6 +879,29 @@ class Search:
                 ", ".join(self._SOURCE_DISPLAY[k] for k in self.sources_unavailable),
             )
         self._availability_logged = True
+
+    def _ensure_online_clients(self) -> None:
+        """Build the web-service clients, on the first query that needs them.
+
+        Not in :meth:`_ensure_clients`, because a run whose every query is
+        answered offline should not construct them at all.  Nothing is
+        contacted here; the clients only open a connection when asked.
+        """
+        if self._online_clients_built:
+            return
+        # Looked up at call time, like the offline factories, so a test that
+        # patches ``provesid.search.PubChemAPI`` patches what is built.
+        factories: Dict[str, Any] = {
+            "pubchem_online": PubChemAPI,
+            "cactus": NCIChemicalIdentifierResolver,
+        }
+        for key in self._ONLINE_KEYS:
+            try:
+                self._clients[key] = factories[key]()
+                self._owned_clients.append(key)
+            except Exception as exc:  # pragma: no cover - constructors do no I/O
+                log.warning("Could not initialise online source %s: %s", key, exc)
+        self._online_clients_built = True
 
     def close(self) -> None:
         """Close the source clients this instance constructed.
@@ -1007,7 +1084,12 @@ class Search:
 
             ``df.attrs["sources_available"]`` and
             ``df.attrs["sources_unavailable"]`` record which offline sources
-            backed the run (see :attr:`sources_available`).
+            backed the run (see :attr:`sources_available`).  With
+            ``online_fallback=True``, ``df.attrs["online_fallbacks"]`` counts
+            the queries no offline source answered, which were therefore
+            asked online, and ``df.attrs["online_resolved"]`` those of them
+            the online services answered.  Both are 0 when the fallback is
+            off.
 
         Raises:
             ValueError: If a DataFrame/file input is given but ``column`` is
@@ -1025,6 +1107,8 @@ class Search:
             df = s_name.search("xylene", n_hits="all")
         """
         self._ensure_clients()
+        self._online_fallbacks = 0
+        self._online_resolved = 0
 
         effective_n_hits = (
             self.n_hits if n_hits is None else self._validate_n_hits(n_hits)
@@ -1082,6 +1166,8 @@ class Search:
         # should not look like a full run afterwards.
         result_df.attrs["sources_available"] = list(self.sources_available)
         result_df.attrs["sources_unavailable"] = list(self.sources_unavailable)
+        result_df.attrs["online_fallbacks"] = self._online_fallbacks
+        result_df.attrs["online_resolved"] = self._online_resolved
 
         return result_df
 
@@ -1122,8 +1208,9 @@ class Search:
             ``prefix``, in the original row order and with the original index.
             When ``n_hits`` yields more than one row per query the index is a
             fresh ``RangeIndex``, since rows no longer correspond one-to-one.
-            ``df.attrs["sources_available"]`` records which offline sources backed
-            the run (see :attr:`sources_available`).
+            ``df.attrs`` carries the same provenance :meth:`search` records:
+            which offline sources backed the run and, with
+            ``online_fallback=True``, how many queries went online.
 
         Raises:
             KeyError: If ``column`` is not in ``df``.
@@ -1187,6 +1274,8 @@ class Search:
         # Carry the source provenance of the underlying search (merge drops attrs).
         out.attrs["sources_available"] = list(self.sources_available)
         out.attrs["sources_unavailable"] = list(self.sources_unavailable)
+        out.attrs["online_fallbacks"] = self._online_fallbacks
+        out.attrs["online_resolved"] = self._online_resolved
         return out
 
     # ── Input normalisation ───────────────────────────────────────────────────
@@ -1252,7 +1341,8 @@ class Search:
 
         Each resolver returns ``(base_template, pool, opsin_anchor)``; this
         method clusters the pool, ranks the clusters, and truncates to
-        ``n_hits``.
+        ``n_hits``.  An empty pool is where the online fallback happens, so
+        that no resolver has to know about it (see :meth:`_online_pool`).
 
         Args:
             query: A single identifier string.
@@ -1275,6 +1365,8 @@ class Search:
             "formula": self._resolve_formula,
         }
         base_template, pool, opsin_anchor = dispatch[self.identifier_type](query)
+        if not pool and self._ONLINE_KEYS:
+            pool = self._online_pool(query, base_template["match_method"])
         return self._finalise_hits(
             base_template,
             pool,
@@ -1410,8 +1502,8 @@ class Search:
     ) -> List[Dict[str, Any]]:
         """Flatten per-source hits into a tagged candidate pool.
 
-        Candidates are pooled in :attr:`_SOURCE_KEYS` order and, within a
-        source, in the order the source ranked them.
+        Candidates are pooled in :attr:`_SOURCE_KEYS` order, then the online
+        services', and, within a source, in the order the source ranked them.
 
         Args:
             hits: Source key -> candidates, as :meth:`_collect` returns.
@@ -1424,7 +1516,7 @@ class Search:
             List of tagged candidate records.
         """
         pool: List[Dict[str, Any]] = []
-        for key in self._SOURCE_KEYS:
+        for key in self._SOURCE_KEYS + self._ONLINE_KEYS:
             for rank, cand in enumerate(hits.get(key) or []):
                 cand_score = score(cand) if callable(score) else score
                 pool.append(self._tag_candidate(cand, key, rank, match_method, cand_score))
@@ -1499,6 +1591,53 @@ class Search:
             List of tagged candidate records (one per source that matched).
         """
         return self._pool(self._collect("inchikey", inchikey), match_method, query_match_score)
+
+    def _online_pool(self, query: str, match_method: str) -> List[Dict[str, Any]]:
+        """Ask the online services a query no offline source answered.
+
+        The question is the query itself, asked as its own identifier type:
+        the identifier types and the lookup kinds share their names.  The
+        cross-source routes the offline resolvers take (ChEMBL by the SMILES a
+        CAS lookup found, and so on) have nothing to start from here, since
+        nothing was found.  A kind with no online row --- ``formula`` ---
+        asks nothing and is not counted as a fallback.
+
+        Args:
+            query: The query, as the user gave it.
+            match_method: The resolver's match method, which the online
+                candidates are tagged with: a CAS number PubChem knows is as
+                exact a CAS match as one a database knows.
+
+        Returns:
+            The tagged candidate pool, empty when neither service answered.
+        """
+        kind = self.identifier_type
+        if not any(key in LOOKUPS[kind] for key in self._ONLINE_KEYS):
+            return []
+
+        self._ensure_online_clients()
+        self._online_fallbacks += 1
+        log.debug(
+            "No offline source answered %s %r; asking %s.", kind, query,
+            ", ".join(self._SOURCE_DISPLAY[key] for key in self._ONLINE_KEYS),
+        )
+
+        k = self.top_k_per_source if kind == "name" else 1
+        hits = self._collect(kind, query, k=k, sources=self._ONLINE_KEYS)
+        score: Union[float, Callable[[Dict[str, Any]], float]] = (
+            (lambda cand: self._name_score(query, cand)) if kind == "name" else 1.0
+        )
+        pool = self._pool(hits, match_method, score)
+
+        if pool:
+            self._online_resolved += 1
+        log.debug(
+            "Online fallback for %r: %s.", query,
+            ", ".join(
+                f"{self._SOURCE_DISPLAY[key]} {len(hits[key])}" for key in hits
+            ) or "no service answered",
+        )
+        return pool
 
     # ── CAS resolver ─────────────────────────────────────────────────────────
 
@@ -1907,7 +2046,8 @@ class Search:
         """Build a per-source traceability record from the candidates dict.
 
         For each source, records whether it was found and which output fields
-        it has non-null values for.
+        it has non-null values for.  The online services are listed only when
+        ``online_fallback=True``.
 
         Args:
             candidates: Mapping of source key → candidate record.
@@ -1937,7 +2077,7 @@ class Search:
         }
 
         details: Dict[str, Dict[str, Any]] = {}
-        for key in self._SOURCE_KEYS:
+        for key in self._SOURCE_KEYS + self._ONLINE_KEYS:
             display = self._SOURCE_DISPLAY[key]
             cand = candidates.get(key)
             if cand is None:
@@ -2213,11 +2353,13 @@ class Search:
             ):
                 apply_candidate_to_result(result, candidate)
 
-        chembl_cand = per_source.get("chembl")
-        if candidate_compatible_with_consensus(
-            chembl_cand, consensus_candidate, self.consensus_compat_threshold
-        ):
-            apply_candidate_to_result(result, chembl_cand)
+        # ChEMBL, then the online services, fill only what the others left.
+        for source_key in ["chembl"] + self._ONLINE_KEYS:
+            candidate = per_source.get(source_key)
+            if candidate_compatible_with_consensus(
+                candidate, consensus_candidate, self.consensus_compat_threshold
+            ):
+                apply_candidate_to_result(result, candidate)
 
         # OPSIN supplies a structure even when no source row carried one.
         if opsin_match and is_missing(result.get("SMILES")) and not is_missing(opsin_smiles):

@@ -1309,6 +1309,48 @@ class PubChemAPI:
         return parsed_response
     
     @cached(service='pubchem')
+    def get_cids_by_inchi(self, inchi: str) -> List[int]:
+        """
+        Get CIDs by InChI, sending the InChI in a POST body.
+
+        An InChI is full of ``/`` characters, which a URL path cannot carry
+        even percent-encoded: PubChem's front end decodes them back into path
+        separators and answers ``PUGREST.BadRequest``. PUG-REST's documented
+        form for the ``inchi`` namespace is therefore a POST with the InChI as
+        a form field, which is all this wrapper adds over the other
+        ``get_cids_by_*`` methods.
+
+        Args:
+            inchi: A standard or non-standard InChI string, ``InChI=`` prefix
+                included.
+
+        Returns:
+            The CIDs PubChem holds for the structure, best first.
+
+        Raises:
+            PubChemNotFoundError: If PubChem has no compound with this InChI.
+            PubChemError: If the request could not be completed.
+
+        Example:
+            >>> api = PubChemAPI()                                   # doctest: +SKIP
+            >>> api.get_cids_by_inchi(
+            ...     "InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12"
+            ...     "/h2-5H,1H3,(H,11,12)")                          # doctest: +SKIP
+            [2244]
+        """
+        url = self._build_post_url(Domain.COMPOUND, CompoundDomainNamespace.INCHI,
+                                   Operation.CIDS, OutputFormat.JSON)
+        response = self._make_request(url, method='POST',
+                                      data={CompoundDomainNamespace.INCHI: inchi})
+        parsed_response = self._parse_response(response, OutputFormat.JSON)
+        if isinstance(parsed_response, dict):
+            if 'IdentifierList' in parsed_response:
+                return parsed_response['IdentifierList'].get('CID', [])
+            if 'Fault' in parsed_response:
+                raise PubChemNotFoundError(f"No CIDs found for InChI: {inchi}")
+        return []
+
+    @cached(service='pubchem')
     def get_cids_by_formula(self, formula: str, output_format: str = OutputFormat.JSON,
                            allow_other_elements: bool = False) -> Any:
         """

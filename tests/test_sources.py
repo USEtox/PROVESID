@@ -12,6 +12,7 @@ import pytest
 from provesid.search import Search
 from provesid.sources import (
     LOOKUPS,
+    ONLINE_SOURCE_KEYS,
     SOURCE_DISPLAY,
     SOURCE_KEYS,
     Query,
@@ -66,10 +67,13 @@ def _search(**clients):
 class TestTable:
     def test_every_source_named_is_a_known_source(self):
         for kind, row in LOOKUPS.items():
-            assert set(row) <= set(SOURCE_KEYS), kind
+            assert set(row) <= set(SOURCE_KEYS + ONLINE_SOURCE_KEYS), kind
 
     def test_every_source_has_a_display_name(self):
-        assert set(SOURCE_DISPLAY) == set(SOURCE_KEYS)
+        assert set(SOURCE_DISPLAY) == set(SOURCE_KEYS + ONLINE_SOURCE_KEYS)
+
+    def test_online_and_offline_keys_are_disjoint(self):
+        assert not set(SOURCE_KEYS) & set(ONLINE_SOURCE_KEYS)
 
     def test_every_resolver_kind_is_in_the_table(self):
         assert set(LOOKUPS) == {

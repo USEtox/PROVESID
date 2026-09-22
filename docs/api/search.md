@@ -38,6 +38,22 @@ A gap in it is a source with no index for that identifier, which `Search`
 reaches through one it does have, such as ChEMBL through the SMILES another
 source found for a CAS number.
 
+### Online fallback
+
+`Search` opens no socket by default. With `online_fallback=True`, a query that
+no offline source answered, and only such a query, is asked of PubChem
+PUG-REST and CACTUS. These are the table's last two columns.
+
+```python
+df = Search("cas", online_fallback=True).search(["50-78-2", "1912-24-9"])
+df["source"]                  # "PubChem (online)" / "CACTUS" on rows the network supplied
+df.attrs["online_fallbacks"]  # how many queries went online
+df.attrs["online_resolved"]   # how many of those came back with an answer
+```
+
+Each service counts as one vote in `n_source_support`, the same as a database.
+A service that fails is logged and left out, and formula queries are never sent.
+
 ::: provesid.search.Search
     options:
       show_source: false

@@ -782,6 +782,79 @@ def candidate_from_chembl_row(row: Dict[str, Any], chembl: Optional[CheMBL] = No
     )
 
 
+def candidate_from_pubchem_online(
+    row: Dict[str, Any], synonyms: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """Adapt one PUG-REST property row into a candidate record.
+
+    The online counterpart of :func:`candidate_from_pubchem_row`. It is kept
+    apart from it, under its own source name, so that a result the network
+    supplied can never be mistaken for one the local database did.
+
+    Args:
+        row: One row of :meth:`~provesid.PubChemAPI.get_properties_for_cids`,
+            asked for ``Title``, ``IUPACName``, ``MolecularFormula``,
+            ``SMILES``, ``InChI``, ``InChIKey`` and ``MolecularWeight``.
+        synonyms: The compound's synonyms from
+            :meth:`~provesid.PubChemAPI.get_compound_synonyms`, which is where
+            PubChem keeps its CAS numbers.
+
+    Returns:
+        The candidate record, with source ``"PubChem (online)"``.
+
+    Example:
+        >>> cand = candidate_from_pubchem_online(
+        ...     {"CID": 2244, "Title": "Aspirin", "SMILES": "CC(=O)OC1=CC=CC=C1C(=O)O",
+        ...      "MolecularWeight": "180.16"},
+        ...     ["aspirin", "50-78-2"])
+        >>> cand["source"], cand["CAS_candidates"], cand["molecular_mass"]
+        ('PubChem (online)', ['50-78-2'], 180.16)
+    """
+    return make_candidate(
+        "PubChem (online)",
+        name=row.get("Title"),
+        iupac_name=row.get("IUPACName"),
+        molecular_formula=row.get("MolecularFormula"),
+        smiles=row.get("SMILES"),
+        inchi=row.get("InChI"),
+        inchikey=row.get("InChIKey"),
+        molecular_mass=row.get("MolecularWeight"),
+        synonyms=normalize_synonyms(synonyms),
+        cas_candidates=extract_cas_values(synonyms),
+    )
+
+
+def candidate_from_cactus(smiles: str, names: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Adapt an NCI/CADD Chemical Identifier Resolver answer into a candidate.
+
+    CACTUS answers one representation per request, so the caller asks for the
+    two that matter --- the structure and the name list --- and everything
+    else is derived here: the InChIKey by RDKit, the CAS numbers from the
+    names, among which CACTUS lists them.
+
+    Args:
+        smiles: The SMILES CACTUS resolved the identifier to.
+        names: The ``names`` representation, one name per entry, most
+            preferred first.
+
+    Returns:
+        The candidate record, with source ``"CACTUS"``.
+
+    Example:
+        >>> cand = candidate_from_cactus("CC(=O)Oc1ccccc1C(O)=O", ["Aspirin", "50-78-2"])
+        >>> cand["source"], cand["name"], cand["CAS_candidates"]
+        ('CACTUS', 'Aspirin', ['50-78-2'])
+    """
+    names = [name for name in (names or []) if not is_missing(name)]
+    return make_candidate(
+        "CACTUS",
+        name=names[0] if names else None,
+        smiles=smiles,
+        inchikey=inchikey_from_smiles(smiles),
+        synonyms=normalize_synonyms(names),
+        cas_candidates=extract_cas_values(names),
+    )
+
 
 
 

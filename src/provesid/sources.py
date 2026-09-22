@@ -1,33 +1,42 @@
-"""The offline sources :class:`~provesid.search.Search` queries, as a table.
+"""The sources :class:`~provesid.search.Search` queries, as a table.
 
 Each lookup takes one source client and one :class:`Query` and returns that
 source's candidates for it, best first, already adapted by the ``tools``
 ``candidate_from_*`` helpers.  A lookup that finds nothing returns an empty
-list.  Lookups do not catch exceptions: the one driver that calls them,
-``Search._collect``, logs a failing source and carries on with the rest, so
-that policy is written once instead of once per rung.
+list.  Lookups do not catch exceptions, bar one: an online service's "not
+found" is a miss rather than a failure, so the online lookups turn
+:class:`~provesid.http.NotFoundError` into an empty list.  The one driver
+that calls them, ``Search._collect``, logs a failing source and carries on
+with the rest, so that policy is written once instead of once per rung.
 
-The table is keyed by *lookup kind* first and source second:
+The table is keyed by *lookup kind* first and source second.  The first five
+sources are offline databases; the last two are web services, asked only
+when ``Search(online_fallback=True)`` and no offline source answered:
 
-======================  ======  =======  =======  ======  ======
-kind                    chebi   comptox  pubchem  zeropm  chembl
-======================  ======  =======  =======  ======  ======
-``cas``                 yes     yes      yes      yes     --
-``inchikey``            yes     yes      yes      yes     yes
-``inchikey_skeleton``   yes     yes      yes      --      --
-``inchi``               yes     --       yes      yes     --
-``smiles``              --      yes      yes      yes     yes
-``dtxsid``              --      yes      --       --      --
-``name``                yes     yes      yes      yes     yes
-``fuzzy_name``          yes     yes      yes      yes     yes
-``formula``             yes     yes      yes      --      --
-======================  ======  =======  =======  ======  ======
+======================  ======  =======  =======  ======  ======  ==============  ======
+kind                    chebi   comptox  pubchem  zeropm  chembl  pubchem_online  cactus
+======================  ======  =======  =======  ======  ======  ==============  ======
+``cas``                 yes     yes      yes      yes     --      yes             yes
+``inchikey``            yes     yes      yes      yes     yes     yes             yes
+``inchikey_skeleton``   yes     yes      yes      --      --      --              --
+``inchi``               yes     --       yes      yes     --      yes             yes
+``smiles``              --      yes      yes      yes     yes     yes             yes
+``dtxsid``              --      yes      --       --      --      yes             --
+``name``                yes     yes      yes      yes     yes     yes             yes
+``fuzzy_name``          yes     yes      yes      yes     yes     --              --
+``formula``             yes     yes      yes      --      --      --              --
+======================  ======  =======  =======  ======  ======  ==============  ======
 
 A gap means the source has no index for that identifier.  ``Search`` reaches
 it through an identifier it does have instead: ChEMBL through the SMILES
 another source found for a CAS number, ChEBI through the InChIKey of a SMILES
 query, and so on.  Those routes are the resolver's business, since they
 depend on what the other sources answered, so they live in ``search.py``.
+
+The online gaps are deliberate.  Neither service has a fuzzy or prefix search
+worth a network round trip, and a formula names thousands of PubChem
+compounds.  PubChem reaches a DTXSID through its synonyms, where EPA's DSSTox
+deposit puts it; CACTUS does not know DTXSIDs at all.
 
 Before this module existed, ``search.py`` held each row of this table as a
 hand-written ``if client is not None: try: ... except: log`` block, 47 of
@@ -49,10 +58,13 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
+from .http import NotFoundError
 from .tools import (
+    candidate_from_cactus,
     candidate_from_chebi_row,
     candidate_from_chembl_row,
     candidate_from_comptox_row,
+    candidate_from_pubchem_online,
     candidate_from_pubchem_row,
     candidate_from_zeropm_name_table,
     candidate_from_zeropm_smiles,
@@ -63,8 +75,12 @@ log = logging.getLogger(__name__)
 
 Candidate = Dict[str, Any]
 
-#: Every source key, in the order results are pooled and reported.
+#: Every offline source key, in the order results are pooled and reported.
 SOURCE_KEYS: List[str] = ["chebi", "comptox", "pubchem", "zeropm", "chembl"]
+
+#: The web services ``Search(online_fallback=True)`` asks when every offline
+#: source missed, pooled and reported after the offline ones.
+ONLINE_SOURCE_KEYS: List[str] = ["pubchem_online", "cactus"]
 
 #: Display names, as they appear in ``source_details`` and in log lines.
 SOURCE_DISPLAY: Dict[str, str] = {
@@ -73,6 +89,8 @@ SOURCE_DISPLAY: Dict[str, str] = {
     "pubchem": "PubChemID",
     "zeropm": "ZeroPM",
     "chembl": "ChEMBL",
+    "pubchem_online": "PubChem (online)",
+    "cactus": "CACTUS",
 }
 
 
@@ -278,6 +296,78 @@ def _zeropm_fuzzy(client: Any, q: Query) -> List[Candidate]:
     return candidates
 
 
+# ── The online services ──────────────────────────────────────────────────────
+
+#: The PUG-REST properties an online PubChem candidate is built from.
+PUBCHEM_ONLINE_PROPERTIES: List[str] = [
+    "Title", "IUPACName", "MolecularFormula", "SMILES", "InChI", "InChIKey",
+    "MolecularWeight",
+]
+
+
+def _pubchem_online(cids_for: Callable[[Any, str], Any]) -> Lookup:
+    """A PUG-REST lookup: identifier -> CIDs -> one candidate per CID.
+
+    Costs two requests plus one per CID taken: the CID lookup, one property
+    table for every CID at once, and each CID's synonyms, which are where
+    PubChem keeps CAS numbers.  A CID PubChem answers with no properties is
+    dropped, as :meth:`~provesid.PubChemID.properties_for_cids` drops it.
+
+    Args:
+        cids_for: ``(api, value) -> CIDs``, the one call that differs between
+            identifier kinds.
+
+    Returns:
+        A lookup for the table.
+    """
+
+    def lookup(api: Any, q: Query) -> List[Candidate]:
+        try:
+            cids = cids_for(api, q.value)
+        except NotFoundError:
+            return []
+        # PubChem answers some unknown identifiers with CID 0 instead of a 404.
+        cids = [cid for cid in (cids if isinstance(cids, list) else []) if cid][: q.k]
+        if not cids:
+            return []
+        rows = api.get_properties_for_cids(cids, PUBCHEM_ONLINE_PROPERTIES)
+        return [
+            candidate_from_pubchem_online(row, api.get_compound_synonyms(row["CID"]))
+            for row in rows
+            if len(row) > 1
+        ]
+
+    return lookup
+
+
+def _cactus(resolver: Any, q: Query) -> List[Candidate]:
+    """Ask the NCI/CADD resolver for a structure and its names.
+
+    CACTUS takes any identifier it recognises as the same URL segment, so one
+    function serves every kind it has a row for.  Two requests: ``smiles``,
+    then ``names``.  When an identifier is ambiguous CACTUS lists one SMILES
+    per line; the first is taken, as the first CID is from PubChem.  A name
+    list that fails to come back costs the names, not the structure.
+    """
+    try:
+        answer = resolver.resolve(q.value, "smiles")
+    except NotFoundError:
+        return []
+    lines = [line.strip() for line in str(answer or "").splitlines() if line.strip()]
+    if not lines:
+        return []
+    try:
+        names = resolver.resolve(q.value, "names").splitlines()
+    except NotFoundError:
+        names = []
+    return [candidate_from_cactus(lines[0], names)]
+
+
+def _cas_or_name_cids(api: Any, value: str) -> Any:
+    """CIDs whose synonyms include ``value`` exactly: PubChem's name index."""
+    return api.get_cids_by_name(value, name_type="complete")
+
+
 # ── The table ────────────────────────────────────────────────────────────────
 
 #: ``LOOKUPS[kind][source](client, query)`` returns that source's candidates.
@@ -287,6 +377,8 @@ LOOKUPS: Dict[str, Dict[str, Lookup]] = {
         "comptox": lambda c, q: _one(candidate_from_comptox_row, c.get_by_casrn(q.value)),
         "pubchem": lambda c, q: _one(candidate_from_pubchem_row, c.get_by_cas(q.value)),
         "zeropm": lambda c, q: _zeropm_table(q.label, c.get_id_table_from_cas(q.value)),
+        "pubchem_online": _pubchem_online(_cas_or_name_cids),
+        "cactus": _cactus,
     },
     "inchikey": {
         "chebi": lambda c, q: _one(candidate_from_chebi_row, c.search_by_inchikey(q.value)),
@@ -294,6 +386,8 @@ LOOKUPS: Dict[str, Dict[str, Lookup]] = {
         "pubchem": lambda c, q: _one(candidate_from_pubchem_row, c.get_by_inchikey(q.value)),
         "zeropm": lambda c, q: _zeropm_table(q.label, c.get_id_table_from_inchikey(q.value)),
         "chembl": lambda c, q: _one(_chembl(c), c.search_by_inchikey(q.value)),
+        "pubchem_online": _pubchem_online(lambda api, v: api.get_cids_by_inchikey(v)),
+        "cactus": _cactus,
     },
     # ``value`` is the full InChIKey; the exact key is preferred where the
     # source can be asked for it, and the 14-character skeleton otherwise.
@@ -312,6 +406,8 @@ LOOKUPS: Dict[str, Dict[str, Lookup]] = {
         "chebi": lambda c, q: _one(candidate_from_chebi_row, c.search_by_inchi(q.value)),
         "pubchem": lambda c, q: _one(candidate_from_pubchem_row, c.get_by_inchi(q.value)),
         "zeropm": lambda c, q: _zeropm_table(q.label, c.get_id_table_from_inchi(q.value)),
+        "pubchem_online": _pubchem_online(lambda api, v: api.get_cids_by_inchi(v)),
+        "cactus": _cactus,
     },
     "smiles": {
         "comptox": lambda c, q: _one(candidate_from_comptox_row, c.get_by_smiles(q.value)),
@@ -320,9 +416,12 @@ LOOKUPS: Dict[str, Dict[str, Lookup]] = {
             cand for cand in [candidate_from_zeropm_smiles(q.value, c)] if cand is not None
         ],
         "chembl": lambda c, q: _one(_chembl(c), c.search_by_smiles(q.value)),
+        "pubchem_online": _pubchem_online(lambda api, v: api.get_cids_by_smiles(v)),
+        "cactus": _cactus,
     },
     "dtxsid": {
         "comptox": lambda c, q: _one(candidate_from_comptox_row, c.get_by_dtxsid(q.value)),
+        "pubchem_online": _pubchem_online(_cas_or_name_cids),
     },
     # Exact name, falling back to the source's synonym or preferred-name
     # index where it keeps them apart.
@@ -345,6 +444,8 @@ LOOKUPS: Dict[str, Dict[str, Lookup]] = {
         "chembl": lambda c, q: _top(
             _chembl(c), c.search_by_name(q.value, limit=q.k, exact=True), q.k
         ),
+        "pubchem_online": _pubchem_online(_cas_or_name_cids),
+        "cactus": _cactus,
     },
     # Substring matching everywhere but ZeroPM, which retrieves by similarity.
     "fuzzy_name": {

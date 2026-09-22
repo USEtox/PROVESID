@@ -43,13 +43,13 @@ hand-written ``if client is not None: try: ... except: log`` block, 47 of
 them in nine methods.  Adding a source meant editing every one.
 It now means adding a column here.
 
-Example::
-
-    from provesid.sources import LOOKUPS, Query
-
-    lookup = LOOKUPS["cas"]["pubchem"]
-    candidates = lookup(pubchem_id, Query("50-78-2"))
-    candidates[0]["InChIKey"]   # 'BSYNRYMUTXBXSQ-UHFFFAOYSA-N'
+Example:
+    >>> from provesid import PubChemID
+    >>> from provesid.sources import LOOKUPS, Query
+    >>> lookup = LOOKUPS["cas"]["pubchem"]
+    >>> candidates = lookup(PubChemID(), Query("50-78-2"))
+    >>> candidates[0]["InChIKey"]
+    'BSYNRYMUTXBXSQ-UHFFFAOYSA-N'
 """
 
 from __future__ import annotations
@@ -197,10 +197,16 @@ def comptox_skeleton_search(comptox: Any, skeleton: str) -> List[Dict[str, Any]]
         skeleton: The 14-character InChIKey connectivity block.
 
     Returns:
-        Up to 20 matching rows; empty on a miss or a failed query.
+        Up to 20 matching rows; empty on a miss or a failed query (logged).
+
+    Example:
+        >>> from provesid import CompToxID
+        >>> rows = comptox_skeleton_search(CompToxID(), "BSYNRYMUTXBXSQ")
+        >>> "BSYNRYMUTXBXSQ-UHFFFAOYSA-N" in [row["INCHIKEY"] for row in rows]
+        True
     """
     try:
-        cur = comptox._conn.execute(
+        cur = comptox.conn.execute(
             "SELECT * FROM chemicals WHERE INCHIKEY LIKE ? LIMIT 20",
             (f"{skeleton}%",),
         )
@@ -219,10 +225,16 @@ def pubchem_skeleton_search(pubchem: Any, skeleton: str) -> List[Dict[str, Any]]
         skeleton: The 14-character InChIKey connectivity block.
 
     Returns:
-        Up to 20 matching rows; empty on a miss or a failed query.
+        Up to 20 matching rows; empty on a miss or a failed query (logged).
+
+    Example:
+        >>> from provesid import PubChemID
+        >>> rows = pubchem_skeleton_search(PubChemID(), "BSYNRYMUTXBXSQ")
+        >>> 2244 in [row["cid"] for row in rows]
+        True
     """
     try:
-        cur = pubchem._conn.execute(
+        cur = pubchem.conn.execute(
             "SELECT * FROM compounds WHERE inchikey LIKE ? LIMIT 20",
             (f"{skeleton}%",),
         )
@@ -242,6 +254,15 @@ def chebi_skeleton_search(chebi: Any, skeleton: str) -> List[Dict[str, Any]]:
 
     Returns:
         Up to 20 matching compounds; empty on a miss or a failed scan.
+
+    Note:
+        A scan of the whole InChIKey index, since it is a dict; a few tenths
+        of a second.
+
+    Example:
+        >>> from provesid import ChebiSDF
+        >>> [c["ChEBI ID"] for c in chebi_skeleton_search(ChebiSDF(), "BSYNRYMUTXBXSQ")]
+        ['CHEBI:13719', 'CHEBI:15365']
     """
     try:
         results = []

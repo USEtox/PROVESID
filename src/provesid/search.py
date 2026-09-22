@@ -38,25 +38,30 @@ Supported identifier types:
 - ``"dtxsid"``  — CompTox DTXSID
 - ``"formula"`` — Molecular formula
 
-Example usage::
+Example:
+    >>> from provesid import Search
+    >>> df = Search("cas", show_progress=False).search(["50-00-0", "64-17-5"])
+    >>> df[["query", "name", "canonical_smiles", "confidence"]]
+         query          name canonical_smiles  confidence
+    0  50-00-0  formaldehyde              C=O      0.9000
+    1  64-17-5       ethanol              CCO      0.8906
 
-    from provesid import Search
+    Typos: fuzzy names are retrieved mainly through ZeroPM, so the
+    ``"recall"`` preset, which turns both on, is what rescues most of them.
 
-    # Resolve a list of CAS numbers
-    s = Search("cas")
-    df = s.search(["50-00-0", "64-17-5"])
+    >>> df = Search("name", preset="recall", n_hits=1,
+    ...             show_progress=False).search(["asprin", "caffiene"])
+    >>> df["name"].tolist()
+    ['Aspirin', 'caffeine']
 
-    # Fuzzy name search (handles typos)
-    s_name = Search("name", fuzzy=True)
-    df = s_name.search(["asprin", "caffiene"])
+    Salts, and InChIKeys that differ only in stereochemistry:
 
-    # SMILES with salt stripping and structure similarity
-    s_smiles = Search("smiles", strip_salts=True, similarity_threshold=0.8)
-    df = s_smiles.search("CC(=O)Oc1ccccc1C(=O)O")
-
-    # InChIKey skeleton matching (same connectivity, any stereochemistry)
-    s_ik = Search("inchikey", inchikey_skeleton=True)
-    df = s_ik.search("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")
+    >>> Search("smiles", strip_salts=True, show_progress=False).search(
+    ...     "CC(=O)[O-].[Na+]")[["parent_smiles", "name"]].values.tolist()
+    [['CC(=O)[O-]', 'sodium acetate']]
+    >>> Search("inchikey", inchikey_skeleton=True, show_progress=False).search(
+    ...     "BSYNRYMUTXBXSQ-UHFFFAOYSA-N")["CASRN"].tolist()
+    ['50-78-2']
 """
 
 from __future__ import annotations
@@ -238,11 +243,14 @@ def normalize_structure(smiles: Optional[str]) -> Dict[str, Any]:
         ``canonical_smiles``, ``kekulized_smiles``, ``inchi``, ``inchikey``,
         ``mol_weight``, and ``mol`` (the RDKit Mol object; not serialized).
 
-    Example::
-
-        rec = normalize_structure("c1ccccc1")
-        rec["canonical_smiles"]  # "c1ccccc1"
-        rec["kekulized_smiles"]  # "C1=CC=CC=C1"
+    Example:
+        >>> rec = normalize_structure("c1ccccc1")
+        >>> rec["canonical_smiles"], rec["kekulized_smiles"], rec["inchikey"]
+        ('c1ccccc1', 'C1=CC=CC=C1', 'UHOVQNZJYSORNB-UHFFFAOYSA-N')
+        >>> round(rec["mol_weight"], 3)
+        78.114
+        >>> normalize_structure("not a smiles")["inchikey"] is None
+        True
     """
     empty: Dict[str, Any] = {
         "canonical_smiles": None,
@@ -310,9 +318,11 @@ def strip_salts(
         unavailable or the input is invalid.  Returns the original SMILES
         unchanged when no fragments are removed.
 
-    Example::
-
-        strip_salts("[Na+].[Cl-].CC(=O)O")  # "CC(=O)O"
+    Example:
+        >>> strip_salts("[Na+].[Cl-].CC(=O)O")
+        'CC(=O)O'
+        >>> strip_salts("CC(=O)[O-].[Na+]")    # the anion keeps its charge
+        'CC(=O)[O-]'
     """
     if is_missing(smiles) or not RDKIT_AVAILABLE or Chem is None or _SaltRemover is None:
         return smiles  # type: ignore[return-value]
@@ -443,38 +453,48 @@ class Search:
             retried online.  :attr:`sources_available` lists offline sources
             only; the online ones are reported per row and in ``df.attrs``.
 
-    Example::
+    Example:
+        >>> from provesid import Search
+        >>> s = Search("cas", show_progress=False)
+        >>> df = s.search(["50-00-0", "64-17-5"])
+        >>> df[["CASRN", "name", "canonical_smiles", "confidence"]]
+             CASRN          name canonical_smiles  confidence
+        0  50-00-0  formaldehyde              C=O      0.9000
+        1  64-17-5       ethanol              CCO      0.8906
+        >>> df.attrs["sources_available"]
+        ['chebi', 'comptox', 'pubchem', 'chembl']
 
-        from provesid import Search
+        Named settings: ``"strict"`` returns only what two databases agree
+        on, ``"recall"`` widens every way it can. Explicit arguments still
+        win.
 
-        s = Search("cas")
-        df = s.search(["50-00-0", "64-17-5"])
-        print(df[["CASRN", "name", "canonical_smiles", "confidence"]])
+        >>> Search.PRESETS["strict"]["min_source_support"]
+        2
+        >>> Search("name", preset="strict", show_progress=False).search(
+        ...     "atrazine")[["name", "CASRN"]].values.tolist()
+        [['atrazine', '1912-24-9']]
 
-        # Named settings: "strict" returns only what two databases agree on,
-        # "recall" widens every way it can.  Explicit arguments still win.
-        Search.PRESETS["strict"]
-        df = Search("name", preset="strict").search("atrazine")
-        df = Search("name", preset="recall", n_hits=5).search("atrazin")
-        df.attrs["preset"], df.attrs["settings"]
+        Every plausible reading of an ambiguous name:
 
-        s_fuzzy = Search("name", fuzzy=True)
-        df = s_fuzzy.search(["asprin", "paracetamol"])
+        >>> df = Search("name", show_progress=False).search("xylene", n_hits="all")
+        >>> df[["hit_rank", "name", "InChIKey"]]
+           hit_rank      name                     InChIKey
+        0         0  o-Xylene  CTQNGGLPUBDAKN-UHFFFAOYSA-N
+        1         1  m-Xylene  IVSZLXZYQVIEFR-UHFFFAOYSA-N
+        2         2  p-Xylene  URLKBWYHVLBVBO-UHFFFAOYSA-N
 
-        # Inspect every plausible interpretation of an ambiguous name
-        df = Search("name").search("xylene", n_hits="all")
-        print(df[["hit_rank", "name", "InChIKey", "confidence"]])
+        Needing Java, or the network:
 
-        # Anchor IUPAC names to a real structure via OPSIN (needs Java)
-        df = Search("name", use_opsin=True).search("2-(acetyloxy)benzoic acid")
+        >>> df = Search("name", use_opsin=True).search("2-(acetyloxy)benzoic acid")  # doctest: +SKIP
+        >>> df = Search("cas", online_fallback=True).search(["50-78-2", "1912-24-9"])  # doctest: +SKIP
+        >>> df.attrs["online_fallbacks"]    # queries that went online     # doctest: +SKIP
+        0
 
-        # Ask PubChem and CACTUS about whatever the databases do not hold
-        df = Search("cas", online_fallback=True).search(["50-78-2", "1912-24-9"])
-        df.attrs["online_fallbacks"]     # queries that went online
+        Hand the databases back when the run is over:
 
-        # Hand the four databases back when the run is over
-        with Search("cas") as s:
-            df = s.search(["50-00-0", "64-17-5"])
+        >>> with Search("cas", show_progress=False) as s:
+        ...     s.search("50-78-2")["CASRN"].tolist()
+        ['50-78-2']
     """
 
     SUPPORTED_TYPES: frozenset = frozenset(
@@ -1068,11 +1088,15 @@ class Search:
         :class:`~provesid.sqlite_client.DatabaseClosedError` rather than
         quietly running against whatever is left.
 
-        Example::
-
-            with Search("cas") as s:
-                df = s.search(["50-00-0", "64-17-5"])
-            # the four databases are closed here
+        Example:
+            >>> s = Search("cas", show_progress=False)
+            >>> s.search("50-00-0")["name"].tolist()
+            ['formaldehyde']
+            >>> s.close()
+            >>> s.search("50-00-0")
+            Traceback (most recent call last):
+            ...
+            provesid.sqlite_client.DatabaseClosedError: ...
         """
         if self._closed:
             return
@@ -1249,15 +1273,14 @@ class Search:
                 not specified, or if ``n_hits`` is invalid.
             FileNotFoundError: If the given file path does not exist.
 
-        Example::
-
-            s = Search("cas")
-            df = s.search(["50-00-0", "64-17-5"])
-            df = s.search(Path("compounds.csv"), column="CAS")
-
-            # Return every plausible interpretation of an ambiguous name
-            s_name = Search("name")
-            df = s_name.search("xylene", n_hits="all")
+        Example:
+            >>> s = Search("cas", show_progress=False)
+            >>> s.search(["50-00-0", "64-17-5"])["name"].tolist()
+            ['formaldehyde', 'ethanol']
+            >>> table = pd.DataFrame({"CAS": ["50-78-2"], "batch": ["A7"]})
+            >>> s.search(table, column="CAS")[["CASRN", "batch"]].values.tolist()
+            [['50-78-2', 'A7']]
+            >>> df = s.search(Path("compounds.csv"), column="CAS")  # doctest: +SKIP
         """
         self._ensure_clients()
         self._online_fallbacks = 0
@@ -1371,18 +1394,19 @@ class Search:
             ValueError: If ``df`` already has columns starting with ``prefix``
                 that would collide with the added ones.
 
-        Example::
-
-            import pandas as pd
-            from provesid import Search
-
-            #    8 rows, 3 distinct CAS numbers -> only 3 searches
-            df = pd.DataFrame({
-                "CAS": ["64-17-5", "64-17-5", "50-00-0", "50-78-2"],
-                "boiling_point_C": [78.4, 78.2, -19.0, 140.0],
-            })
-            out = Search("cas").enrich(df, "CAS")
-            out[["CAS", "boiling_point_C", "provesid_name", "provesid_InChIKey"]]
+        Example:
+            >>> # 4 rows, 3 distinct CAS numbers -> only 3 searches
+            >>> df = pd.DataFrame({
+            ...     "CAS": ["64-17-5", "64-17-5", "50-00-0", "50-78-2"],
+            ...     "boiling_point_C": [78.4, 78.2, -19.0, 140.0],
+            ... })
+            >>> out = Search("cas", show_progress=False).enrich(df, "CAS")
+            >>> out[["CAS", "boiling_point_C", "provesid_name", "provesid_InChIKey"]]
+                   CAS  boiling_point_C         provesid_name            provesid_InChIKey
+            0  64-17-5             78.4               ethanol  LFQSCWFLJHTTHZ-UHFFFAOYSA-N
+            1  64-17-5             78.2               ethanol  LFQSCWFLJHTTHZ-UHFFFAOYSA-N
+            2  50-00-0            -19.0          formaldehyde  WSFSSNUMVMOOMR-UHFFFAOYSA-N
+            3  50-78-2            140.0  acetylsalicylic acid  BSYNRYMUTXBXSQ-UHFFFAOYSA-N
         """
         if column not in df.columns:
             raise KeyError(f"Column {column!r} is not in the DataFrame.")
@@ -2628,14 +2652,12 @@ def mw_within(
         :func:`resolve_cascade`'s ``accept`` argument: the names of the checks
         that passed, or an empty list to reject the hit.
 
-    Example::
-
-        accept = mw_within(0.5, reference_column="canonical_SMILES", name_column="name")
-        out = resolve_cascade(df, stages, accept=accept)
-        out["provesid_validated_by"].value_counts()
-        # mw+smiles+name    311
-        # mw+smiles          64
-        # mw                 12
+    Example:
+        >>> accept = mw_within(0.5, reference_column="SMILES", name_column="name")
+        >>> accept({"SMILES": "CCO", "name": "ethanol"}, {"SMILES": "OCC", "name": "Ethanol"})
+        ['mw', 'smiles', 'name']
+        >>> accept({"SMILES": "CCCO"}, {"SMILES": "CCO"})       # 60.1 vs 46.07 Da
+        []
     """
     def accept(hit: Dict[str, Any], row: Dict[str, Any]) -> List[str]:
         reference = normalize_structure(row.get(reference_column))
@@ -2718,26 +2740,26 @@ def resolve_cascade(
         KeyError: If a stage names a column that is not in ``df``.
         ValueError: If ``stages`` is empty.
 
-    Example::
+    Example:
+        >>> data = pd.DataFrame({
+        ...     "CASRN":  ["50-78-2", "", "0-00-0"],
+        ...     "name":   ["", "caffeine", ""],
+        ...     "SMILES": ["CC(=O)Oc1ccccc1C(=O)O", "Cn1c(=O)c2c(ncn2C)n(C)c1=O", "CC(C)O"],
+        ... })
+        >>> out = resolve_cascade(
+        ...     data,
+        ...     stages=[
+        ...         ("cas",  Search("cas", show_progress=False),  "CASRN"),
+        ...         ("name", Search("name", show_progress=False), "name"),
+        ...     ],
+        ...     accept=mw_within(0.5, reference_column="SMILES"),
+        ...     fallback_column="SMILES",
+        ... )
+        >>> out[["provesid_name", "provesid_resolved_by", "provesid_validated_by"]].values.tolist()
+        [['acetylsalicylic acid', 'cas', 'mw+smiles'], ['caffeine', 'name', 'mw+smiles'], [nan, 'rdkit', 'self (rdkit from the given structure)']]
 
-        from provesid import Search, resolve_cascade, mw_within
-
-        out = resolve_cascade(
-            df,
-            stages=[
-                ("cas",    Search("cas"),                  "CASRN"),
-                ("name",   Search("name", use_opsin=True), "name"),
-                ("smiles", Search("smiles"),               "SMILES"),
-            ],
-            accept=mw_within(0.5, reference_column="SMILES"),
-            fallback_column="SMILES",
-        )
-        out["provesid_resolved_by"].value_counts()
-        # cas       412
-        # name       98
-        # smiles     31
-        # rdkit      14
-        # none        2
+        The third row's CAS number is not real, so no stage resolved it and
+        its identifiers were derived from its own SMILES.
     """
     if not stages:
         raise ValueError("stages must contain at least one (label, search, column).")

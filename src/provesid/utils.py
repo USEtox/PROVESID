@@ -1,3 +1,12 @@
+"""
+Small helpers shared across PROVESID: CAS number checking and the
+directories where datasets and cached responses live.
+
+Example:
+    >>> from provesid.utils import check_CASRN
+    >>> check_CASRN("50-78-2"), check_CASRN("50-78-3")
+    (True, False)
+"""
 
 import os
 
@@ -9,7 +18,26 @@ def _has_casrn_format(s: str):
 
 def check_CASRN(cas_rn: str):
     """
-    Check if a string is in the CASRN format and then check if it is a valid CASRN
+    Check if a string is in the CASRN format and then check if it is a valid CASRN.
+
+    The format is three hyphen-separated runs of digits; the check digit is the
+    last, and must equal the sum of the other digits, each weighted by its
+    position from the right, modulo 10. The lengths of the runs are not
+    checked.
+
+    Args:
+        cas_rn: The candidate CAS number.
+
+    Returns:
+        bool: True when the format is right and the check digit agrees.
+
+    Example:
+        >>> check_CASRN("50-78-2")
+        True
+        >>> check_CASRN("001-16-2")     # a malformed number PubChem lists for aspirin
+        False
+        >>> check_CASRN("aspirin")
+        False
     """
     # Check if the CASRN has the correct format
     if not _has_casrn_format(cas_rn):
@@ -34,7 +62,18 @@ def check_CASRN(cas_rn: str):
 
 def data_path():
     """
-    Get the path to the data directory
+    Get the path to the data directory shipped inside the package.
+
+    This holds the small files that ship with PROVESID (the REACH workbook,
+    the CAS Common Chemistry Swagger file). The large offline databases live
+    under :func:`user_dataset_path` instead.
+
+    Returns:
+        str: Absolute path to ``provesid/data``.
+
+    Example:
+        >>> os.path.basename(data_path())
+        'data'
     """
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
@@ -55,6 +94,10 @@ def user_dataset_path(*parts: str, ensure_exists: bool = True) -> str:
 
     Returns:
         Absolute path to the requested dataset directory.
+
+    Example:
+        >>> user_dataset_path("chebifier", ensure_exists=False).endswith("chebifier")
+        True
     """
     override = os.environ.get("PROVESID_DATA_DIR")
     if override:

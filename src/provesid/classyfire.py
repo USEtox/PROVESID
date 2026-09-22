@@ -12,7 +12,7 @@ and no retry, and its methods return :class:`requests.Response` objects rather
 than parsed data. Plan step 7 replaces it; until then it is documented as it
 is.
 
-Example:
+Examples:
     >>> from provesid.classyfire import ClassyFireAPI
     >>> response = ClassyFireAPI.get_query(1)                  # doctest: +SKIP
     >>> response.json()["classification_status"]               # doctest: +SKIP
@@ -31,7 +31,7 @@ class ClassyFireAPI:
     :meth:`query_status`, then fetch the result with :meth:`get_query`. See
     the module warning: new submissions are no longer processed.
 
-    Example:
+    Examples:
         >>> response = ClassyFireAPI.submit_query(
         ...     "Example Query", "C1=CC(=CC=C1[N+](=O)[O-])Cl")    # doctest: +SKIP
         >>> query_id = response.json()["id"]                       # doctest: +SKIP
@@ -44,7 +44,7 @@ class ClassyFireAPI:
         """
         Delete every cached ClassyFire response, in memory and on disk.
 
-        Example:
+        Examples:
             >>> ClassyFireAPI.clear_cache()
             >>> ClassyFireAPI.get_cache_info()['file_count']
             0
@@ -57,10 +57,10 @@ class ClassyFireAPI:
         Size and location of the ClassyFire cache.
 
         Returns:
-            dict: As :func:`provesid.cache.get_cache_info` reports it for
-            ``service='classyfire'``.
+            The statistics :func:`provesid.cache.get_cache_info` reports for
+                ``service='classyfire'``.
 
-        Example:
+        Examples:
             >>> ClassyFireAPI.get_cache_info()['cache_directory'].endswith('classyfire')
             True
         """
@@ -86,7 +86,7 @@ class ClassyFireAPI:
         Note:
             New submissions have not been processed since February 2023.
 
-        Example:
+        Examples:
             >>> response = ClassyFireAPI.submit_query("test", "CCO")  # doctest: +SKIP
             >>> response.json()["id"]                                  # doctest: +SKIP
         """
@@ -122,7 +122,7 @@ class ClassyFireAPI:
             the cache on sees the first answer forever; poll with
             ``use_cache=False``.
 
-        Example:
+        Examples:
             >>> ClassyFireAPI.query_status(1, use_cache=False).status_code  # doctest: +SKIP
             200
         """
@@ -155,7 +155,7 @@ class ClassyFireAPI:
         Raises:
             ValueError: If ``format`` is not one of the three.
 
-        Example:
+        Examples:
             >>> result = ClassyFireAPI.get_query(1).json()          # doctest: +SKIP
             >>> result["classification_status"], result["number_of_elements"]  # doctest: +SKIP
             ('Done', 655)

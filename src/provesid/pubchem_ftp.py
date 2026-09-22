@@ -36,7 +36,7 @@ charge and the four counts) are not in any of these files and are not stored:
 they are properties of the structure rather than data about the substance, and
 belong to an on-demand calculation instead.
 
-Example:
+Examples:
     >>> from provesid.pubchem_ftp import build_pubchem_id_db, list_releases
     >>> list_releases()                                    # doctest: +SKIP
     ['2026-09-01', '2026-08-01', '2026-07-01', '2026-06-01', 'current']
@@ -209,7 +209,7 @@ def molecular_weight(formula: str) -> Optional[float]:
         The weight, or None when the formula is empty, malformed or names an
         element with no known weight.
 
-    Example:
+    Examples:
         >>> molecular_weight("C9H8O4")
         180.16
         >>> molecular_weight("C9H18NO4+")
@@ -291,7 +291,7 @@ def list_releases(*, base_url: Optional[str] = None,
     Raises:
         DownloadError: If the listing cannot be fetched.
 
-    Example:
+    Examples:
         >>> list_releases()                                  # doctest: +SKIP
         ['2026-09-01', '2026-08-01', '2026-07-01', '2026-06-01', 'current']
     """
@@ -328,7 +328,7 @@ def resolve_release(release: str = LATEST, *, base_url: Optional[str] = None,
         DownloadError: If ``"latest"`` was asked for and the listing cannot be
             fetched, or lists no snapshot.
 
-    Example:
+    Examples:
         >>> resolve_release("2026-09-01"), resolve_release("current")
         ('2026-09-01', 'current')
         >>> resolve_release()                                  # doctest: +SKIP
@@ -365,7 +365,7 @@ def release_url(release: str, *, base_url: Optional[str] = None) -> str:
     Returns:
         The directory URL, without a trailing slash.
 
-    Example:
+    Examples:
         >>> release_url("2026-09-01")
         'https://ftp.ncbi.nlm.nih.gov/pubchem/Compound/Monthly/2026-09-01'
         >>> release_url("current")
@@ -388,7 +388,7 @@ def extras_url(release: str, *, base_url: Optional[str] = None) -> str:
     Returns:
         The directory URL, without a trailing slash.
 
-    Example:
+    Examples:
         >>> extras_url("2026-09-01")
         'https://ftp.ncbi.nlm.nih.gov/pubchem/Compound/Monthly/2026-09-01/Extras'
         >>> extras_url("current")
@@ -419,7 +419,7 @@ class SourceFile:
             estimate a user sees before the build starts. Later snapshots are
             a little larger.
 
-    Example:
+    Examples:
         >>> [source.key for source in SOURCE_FILES]
         ['identifiers', 'date', 'mass', 'smiles', 'title', 'iupac', 'inchi', 'synonyms']
         >>> SOURCE_FILES[0].filename
@@ -463,7 +463,7 @@ def selected_files(*, include_inchi: bool = True,
     Returns:
         The :class:`SourceFile` entries, a subset of :data:`SOURCE_FILES`.
 
-    Example:
+    Examples:
         >>> " ".join(f.key for f in selected_files(include_inchi=False))
         'identifiers date mass smiles title iupac synonyms'
     """
@@ -623,7 +623,7 @@ def build_pubchem_id_db(
         ValueError: If ``release`` is not a release name.
         DownloadError: If a file cannot be downloaded or fails its checksum.
 
-    Example:
+    Examples:
         >>> from provesid.pubchem_ftp import build_pubchem_id_db
         >>> build_pubchem_id_db(release="2026-09-01")          # doctest: +SKIP
         '/home/me/.local/share/provesid/pubchem_id.db'

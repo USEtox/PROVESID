@@ -14,7 +14,7 @@ downloaded prebuilt from Zenodo. The online client lives in
 This module also holds :func:`rdkit_descriptors`, the RDKit computation
 behind :meth:`PubChemID.descriptors`, for structures that are not in PubChem.
 
-Example:
+Examples:
     >>> from provesid import PubChemID
     >>> with PubChemID() as db:                         # doctest: +SKIP
     ...     db.cas_to_cid("50-78-2")
@@ -136,7 +136,7 @@ def rdkit_descriptors(smiles: str,
             says where to get it instead, for PubChem's ``XLogP`` and
             ``Complexity``.
 
-    Example:
+    Examples:
         >>> rdkit_descriptors("CC(=O)OC1=CC=CC=C1C(=O)O", ["TPSA", "HBondDonorCount"])
         {'TPSA': 63.6, 'HBondDonorCount': 1}
         >>> rdkit_descriptors("not a molecule") is None
@@ -236,7 +236,7 @@ class PubChemID(SQLiteClient):
             open database has columns for --- what :meth:`properties` answers
             without the network, and retrieves when no properties are named.
 
-    Example:
+    Examples:
         >>> from provesid import PubChemID
         >>> with PubChemID() as db:
         ...     db.get_by_cas("50-78-2")["cmpdname"]
@@ -353,7 +353,7 @@ class PubChemID(SQLiteClient):
                 before anything is fetched.
             FileNotFoundError: If database file doesn't exist and auto_download is False
 
-        Example:
+        Examples:
             >>> db = PubChemID()                       # the default location
             >>> db.source
             'ftp'
@@ -482,7 +482,7 @@ class PubChemID(SQLiteClient):
             RuntimeError: If the file that arrived is not the PubChem ID
                 database.
 
-        Example:
+        Examples:
             >>> from provesid import PubChemID
             >>> PubChemID.download_database(force=True)                  # doctest: +SKIP
             '/home/me/.local/share/provesid/pubchem_id.db'
@@ -549,7 +549,7 @@ class PubChemID(SQLiteClient):
             distinct CAS numbers in database order, and ``synonyms``, at most
             100 of its names. None if the CID is not in the database.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> result = db.get_by_cid(2244)  # Aspirin
             >>> result['cmpdname'], result['mf'], result['cas_numbers']
@@ -598,7 +598,7 @@ class PubChemID(SQLiteClient):
             dict: The :meth:`get_by_cid` record, or None if not found. A CAS
             number PubChem gives to several compounds returns the first one.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> result = db.get_by_cas("50-78-2")  # Aspirin
             >>> print(result['inchi'])
@@ -627,7 +627,7 @@ class PubChemID(SQLiteClient):
         Returns:
             dict: The :meth:`get_by_cid` record, or None if not found.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> result = db.get_by_inchikey("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")
             >>> print(result['cmpdname'])
@@ -656,7 +656,7 @@ class PubChemID(SQLiteClient):
             dict: The :meth:`get_by_cid` record, or None if not found. The
             match is exact: a truncated or non-standard InChI finds nothing.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> inchi = "InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)"
             >>> print(db.get_by_inchi(inchi)['cmpdname'])
@@ -690,7 +690,7 @@ class PubChemID(SQLiteClient):
         Returns:
             dict: The :meth:`get_by_cid` record, or None if not found.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> result = db.get_by_smiles("CC(=O)OC1=CC=CC=C1C(=O)O")  # Aspirin
             >>> print(result['cmpdname'])
@@ -729,7 +729,7 @@ class PubChemID(SQLiteClient):
             list: :meth:`get_by_cid` records, each compound once. Empty when
             nothing matches.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> for r in db.search_by_name("aspirin", limit=3):
             ...     print(r['cid'], r['cmpdname'])
@@ -799,7 +799,7 @@ class PubChemID(SQLiteClient):
             exactly ``formula``, in database order. The formula must be
             written as PubChem writes it (Hill order).
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> results = db.search_by_formula("C9H8O4", limit=5)
             >>> len(results), all(r['mf'] == 'C9H8O4' for r in results)
@@ -832,7 +832,7 @@ class PubChemID(SQLiteClient):
         Returns:
             The CID, or None if the CAS number is not in the database.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.cas_to_cid("50-78-2")
             2244
@@ -850,7 +850,7 @@ class PubChemID(SQLiteClient):
         Returns:
             The standard InChI, or None if not found.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.cas_to_inchi("50-78-2")
             'InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)'
@@ -868,7 +868,7 @@ class PubChemID(SQLiteClient):
         Returns:
             The standard InChIKey, or None if not found.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.cas_to_inchikey("50-78-2")
             'BSYNRYMUTXBXSQ-UHFFFAOYSA-N'
@@ -886,7 +886,7 @@ class PubChemID(SQLiteClient):
         Returns:
             PubChem's isomeric SMILES, or None if not found.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.cas_to_smiles("50-78-2")
             'CC(=O)OC1=CC=CC=C1C(=O)O'
@@ -904,7 +904,7 @@ class PubChemID(SQLiteClient):
         Returns:
             The CID, or None if not found.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.inchikey_to_cid("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")
             2244
@@ -922,7 +922,7 @@ class PubChemID(SQLiteClient):
         Returns:
             The compound's CAS numbers (possibly empty), or None if the InChIKey is not found.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.inchikey_to_cas("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")
             ['50-78-2']
@@ -940,7 +940,7 @@ class PubChemID(SQLiteClient):
         Returns:
             The CID, or None if not found.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.inchi_to_cid("InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3")
             702
@@ -958,7 +958,7 @@ class PubChemID(SQLiteClient):
         Returns:
             The compound's CAS numbers, or None if the InChI is not found.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.inchi_to_cas("InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3")
             ['64-17-5']
@@ -976,7 +976,7 @@ class PubChemID(SQLiteClient):
         Returns:
             The compound's distinct CAS numbers, or None if the CID is not found. A compound can have several: retired numbers, and numbers for mixtures PubChem maps to it.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.cid_to_cas(712)
             ['50-00-0', '30525-89-4', '53026-80-5', '8013-13-6', '12795-06-1']
@@ -994,7 +994,7 @@ class PubChemID(SQLiteClient):
         Returns:
             The standard InChIKey, or None if not found.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.cid_to_inchikey(2244)
             'BSYNRYMUTXBXSQ-UHFFFAOYSA-N'
@@ -1012,7 +1012,7 @@ class PubChemID(SQLiteClient):
         Returns:
             The standard InChI, or None if not found.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.cid_to_inchi(702)
             'InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3'
@@ -1030,7 +1030,7 @@ class PubChemID(SQLiteClient):
         Returns:
             PubChem's isomeric SMILES, or None if not found.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.cid_to_smiles(2244)
             'CC(=O)OC1=CC=CC=C1C(=O)O'
@@ -1048,7 +1048,7 @@ class PubChemID(SQLiteClient):
         Returns:
             The CID, or None if not found.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.smiles_to_cid("CCO")
             702
@@ -1068,7 +1068,7 @@ class PubChemID(SQLiteClient):
         Returns:
             dict: Mapping of CAS -> CID (None if not found), in input order.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> results = db.batch_cas_to_cid(["50-78-2", "50-00-0"])
             >>> print(results)
@@ -1089,7 +1089,7 @@ class PubChemID(SQLiteClient):
         Returns:
             dict: Mapping of CAS -> InChIKey (None if not found)
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.batch_cas_to_inchikey(["50-78-2", "0-00-0"])
             {'50-78-2': 'BSYNRYMUTXBXSQ-UHFFFAOYSA-N', '0-00-0': None}
@@ -1109,7 +1109,7 @@ class PubChemID(SQLiteClient):
         Returns:
             dict: Mapping of CID -> list of CAS numbers (None if not found)
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.batch_cid_to_cas([2244, 702])
             {2244: ['50-78-2'], 702: ['64-17-5']}
@@ -1129,7 +1129,7 @@ class PubChemID(SQLiteClient):
         Returns:
             dict: Mapping of SMILES -> CID (None if not found)
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> results = db.batch_smiles_to_cid(["CC(=O)OC1=CC=CC=C1C(=O)O", "C"])
             >>> print(results)
@@ -1160,7 +1160,7 @@ class PubChemID(SQLiteClient):
             and whichever others the database has. Empty, with those columns,
             when nothing is found.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> cas_list = ["50-78-2", "50-00-0", "64-17-5"]
             >>> df = db.get_by_cas_batch(cas_list)
@@ -1196,7 +1196,7 @@ class PubChemID(SQLiteClient):
             pandas.DataFrame: Table with columns [cid, cas, inchi, inchikey, smiles,
                              cmpdname, mf, mw] or None if not found
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> df = db.get_id_table_from_cas("50-78-2")
             >>> df[['cid', 'cas', 'cmpdname', 'mf', 'mw']].to_dict('records')
@@ -1236,7 +1236,7 @@ class PubChemID(SQLiteClient):
             number found; CAS numbers not found are left out. Empty, with the
             same columns, when none is found.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> df = db.batch_get_id_table_from_cas(["50-78-2", "0-00-0", "64-17-5"])
             >>> print(df[['cid', 'cas', 'cmpdname', 'mf']])
@@ -1274,7 +1274,7 @@ class PubChemID(SQLiteClient):
             pandas.DataFrame: ``cid``, ``cas`` and then the ``compounds``
             columns. Empty, with those columns, when nothing is found.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> smiles_list = ["CC(=O)OC1=CC=CC=C1C(=O)O", "C", "CCO"]
             >>> df = db.get_by_smiles_batch(smiles_list)
@@ -1307,7 +1307,7 @@ class PubChemID(SQLiteClient):
             list: List of CAS numbers, or None if not found, if RDKit cannot
             parse the SMILES, or if RDKit is not installed.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.smiles_to_cas("CC(=O)OC1=CC=CC=C1C(=O)O")  # Aspirin
             ['50-78-2']
@@ -1339,7 +1339,7 @@ class PubChemID(SQLiteClient):
             list: The first matching compound's CAS numbers, or None if no
             compound matches. See :meth:`search_by_name` for how names match.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.name_to_cas("aspirin")
             ['50-78-2']
@@ -1370,7 +1370,7 @@ class PubChemID(SQLiteClient):
             list: The distinct CAS numbers of the first ``limit`` compounds
             with this formula, sorted as strings, or None if none is found
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> cas_list = db.formula_to_cas("C9H8O4")
             >>> "50-78-2" in cas_list, cas_list == sorted(cas_list)
@@ -1404,7 +1404,7 @@ class PubChemID(SQLiteClient):
         Returns:
             dict: Mapping of SMILES -> list of CAS numbers (None if not found)
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.batch_smiles_to_cas(["OCC", "not a smiles"])
             {'OCC': ['64-17-5'], 'not a smiles': None}
@@ -1422,7 +1422,7 @@ class PubChemID(SQLiteClient):
         Returns:
             dict: Mapping of name -> list of CAS numbers (None if not found)
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.batch_name_to_cas(["aspirin", "ethanol", "xyzzy"])
             {'aspirin': ['50-78-2'], 'ethanol': ['64-17-5'], 'xyzzy': None}
@@ -1440,7 +1440,7 @@ class PubChemID(SQLiteClient):
         Returns:
             dict: Mapping of formula -> list of CAS numbers (None if not found)
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> results = db.batch_formula_to_cas(["H2O", "CH4", "XeF9"])
             >>> "7732-18-5" in results["H2O"], "74-82-8" in results["CH4"], results["XeF9"]
@@ -1460,7 +1460,7 @@ class PubChemID(SQLiteClient):
             The :class:`PubChemAPI` instance passed to ``__init__``, or one
             created with default settings.
 
-        Example:
+        Examples:
             >>> from provesid import PubChemAPI
             >>> api = PubChemAPI()
             >>> PubChemID(api=api).api is api
@@ -1509,7 +1509,7 @@ class PubChemID(SQLiteClient):
                 could not be completed. An incomplete answer is never passed off
                 as a complete one.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.properties(2244, ['MolecularFormula', 'MolecularWeight'])
             {'CID': 2244, 'Source': 'offline', 'MolecularFormula': 'C9H8O4', 'MolecularWeight': 180.16}
@@ -1564,7 +1564,7 @@ class PubChemID(SQLiteClient):
             same traffic and return rows assembled from two different PubChem
             snapshots.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> rows = db.properties_for_cids([2244, 702], ['MolecularFormula'])
             >>> for row in rows:
@@ -1633,7 +1633,7 @@ class PubChemID(SQLiteClient):
                 list, or ``chunk_size`` is not positive.
             PubChemError: If an online request could not be completed.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> table = db.properties_table([2244, 702], ['MolecularWeight'])
             >>> table[['CID', 'MolecularWeight', 'Source']].to_dict('records')
@@ -1694,7 +1694,7 @@ class PubChemID(SQLiteClient):
                 is combined with ``use_online_fallback=False``.
             PubChemError: If an online request could not be completed.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.descriptors(2244, ['MolLogP', 'TPSA'])
             {'CID': 2244, 'Source': 'rdkit', 'MolLogP': 1.3101, 'TPSA': 63.6}
@@ -1739,7 +1739,7 @@ class PubChemID(SQLiteClient):
                 positive.
             PubChemError: If an online request could not be completed.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> for row in db.descriptors_for_cids([2244, 702], ['HeavyAtomCount']):
             ...     print(row)
@@ -1800,7 +1800,7 @@ class PubChemID(SQLiteClient):
             ValueError: As for :meth:`descriptors_for_cids`.
             PubChemError: If an online request could not be completed.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> db.descriptors_table([2244, 702], ['TPSA'])
                 CID Source   TPSA
@@ -1976,7 +1976,7 @@ class PubChemID(SQLiteClient):
             ``lines_read`` and ``rows_kept``. Empty for a database made before
             provenance was recorded --- every Zenodo copy so far.
 
-        Example:
+        Examples:
             >>> db = PubChemID()                                  # doctest: +SKIP
             >>> db.provenance()["release"]                        # doctest: +SKIP
             '2026-09-01'
@@ -2014,7 +2014,7 @@ class PubChemID(SQLiteClient):
             RuntimeError: If the database has no ``xrefs`` table --- a Zenodo
                 copy. The message says how to build one that does.
 
-        Example:
+        Examples:
             >>> db = PubChemID()                                  # doctest: +SKIP
             >>> db.xrefs(2244)                                    # doctest: +SKIP
             {'chebi': ['CHEBI:15365'], 'chembl': ['CHEMBL25'],
@@ -2047,7 +2047,7 @@ class PubChemID(SQLiteClient):
             ``compounds_with_inchikey``, ``database_path`` and
             ``database_size_mb``. The counts depend on the release.
 
-        Example:
+        Examples:
             >>> db = PubChemID()
             >>> stats = db.get_stats()
             >>> print(f"Total compounds: {stats['total_compounds']:,}")  # doctest: +SKIP

@@ -12,7 +12,7 @@ PubChem's prose (see :mod:`provesid.pubchemview_parse`).
 Every call needs the network and is cached. There is no offline copy of this
 data.
 
-Example:
+Examples:
     >>> from provesid import PubChemView
     >>> view = PubChemView()
     >>> [d.value for d in view.get_logp(2244)][:2]          # doctest: +SKIP
@@ -57,7 +57,7 @@ class PropertyData:
             comparison operator or qualitative term. None only when the value
             string was empty.
 
-    Example:
+    Examples:
         >>> view = PubChemView()
         >>> first = view.get_melting_point(2244)[0]           # doctest: +SKIP
         >>> first.value, first.unit, first.reference_number   # doctest: +SKIP
@@ -85,7 +85,7 @@ class PubChemViewError(ServiceError):
     ``extract_*`` and ``get_property_table`` methods let it through rather
     than report "no data", so a failure is never cached as absence.
 
-    Example:
+    Examples:
         >>> issubclass(PubChemViewNotFoundError, PubChemViewError)
         True
     """
@@ -102,7 +102,7 @@ class PubChemViewNotFoundError(PubChemViewError, NotFoundError):
     :meth:`PubChemView.get_experimental_properties` raise it; the parsing
     methods turn it into an empty result.
 
-    Example:
+    Examples:
         >>> view = PubChemView()
         >>> view.get_property(2244, "No Such Heading")        # doctest: +SKIP
         Traceback (most recent call last):
@@ -130,7 +130,7 @@ class PubChemView:
     Requests share PubChem's per-address pacing with every
     :class:`~provesid.pubchem.PubChemAPI` in the process.
 
-    Example:
+    Examples:
         >>> view = PubChemView()
         >>> summary = view.get_property_summary(2244, "Melting Point")  # doctest: +SKIP
         >>> summary["count"], summary["values"][:2]                    # doctest: +SKIP
@@ -150,7 +150,7 @@ class PubChemView:
             use_cache: Whether to use cache for lookups (default: True).
                       When False, skips cache lookup but still stores results.
 
-        Example:
+        Examples:
             >>> view = PubChemView(timeout=60, use_cache=False)
             >>> view.base_url, view.timeout
             ('https://pubchem.ncbi.nlm.nih.gov/rest/pug_view', 60)
@@ -258,7 +258,7 @@ class PubChemView:
 
         The same as ``provesid.clear_cache(service='pubchemview')``.
 
-        Example:
+        Examples:
             >>> view = PubChemView()
             >>> view.clear_cache()
             >>> view.get_cache_info()['file_count']
@@ -267,15 +267,15 @@ class PubChemView:
         from .cache import clear_cache
         clear_cache(service='pubchemview')
 
-    def get_cache_info(self):
+    def get_cache_info(self) -> Dict[str, Any]:
         """
         Size and location of the PUG-View cache.
 
         Returns:
-            dict: As :func:`provesid.cache.get_cache_info` reports it for
-            ``service='pubchemview'``.
+            The statistics :func:`provesid.cache.get_cache_info` reports for
+                ``service='pubchemview'``.
 
-        Example:
+        Examples:
             >>> PubChemView().get_cache_info()['cache_directory'].endswith('pubchemview')
             True
         """
@@ -291,7 +291,7 @@ class PubChemView:
         down, and the new value takes effect on the next request, retries
         included.
 
-        Example:
+        Examples:
             >>> view = PubChemView()
             >>> view.min_request_interval
             0.2
@@ -311,7 +311,7 @@ class PubChemView:
         Delegates to the shared transport, which paces every request it makes
         including retries.
 
-        Example:
+        Examples:
             >>> PubChemView()._rate_limit()   # doctest: +SKIP
         """
         self._http.rate_limit()
@@ -327,7 +327,7 @@ class PubChemView:
         Returns:
             Seconds since the epoch, or 0.0 before the first request.
 
-        Example:
+        Examples:
             >>> PubChemView().last_request_time
             0.0
         """
@@ -377,7 +377,7 @@ class PubChemView:
                 experimental properties.
             PubChemViewError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> view = PubChemView()
             >>> record = view.get_experimental_properties(2244)["Record"]  # doctest: +SKIP
             >>> record["RecordNumber"], record["RecordTitle"]               # doctest: +SKIP
@@ -405,7 +405,7 @@ class PubChemView:
                 not have this heading.
             PubChemViewError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> view = PubChemView()
             >>> record = view.get_property(2244, "Melting Point")["Record"]  # doctest: +SKIP
             >>> record["Section"][0]["TOCHeading"]                           # doctest: +SKIP
@@ -552,7 +552,7 @@ class PubChemView:
                 transient failure must stay distinguishable from real absence,
                 or it gets cached as "no data" and never retried.
 
-        Example:
+        Examples:
             >>> view = PubChemView()
             >>> data = view.extract_property_data(2244, "Dissociation Constants")  # doctest: +SKIP
             >>> data[0].value, data[0].parsed.value                                # doctest: +SKIP
@@ -601,7 +601,7 @@ class PubChemView:
         Raises:
             PubChemViewError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> view = PubChemView()
             >>> props = view.extract_all_experimental_properties(2244)  # doctest: +SKIP
             >>> list(props)[:4]                                        # doctest: +SKIP
@@ -653,7 +653,7 @@ class PubChemView:
         Raises:
             PubChemViewError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> PubChemView().get_available_properties(2244)[:3]  # doctest: +SKIP
             ['Physical Description', 'Color/Form', 'Odor']
         """
@@ -684,7 +684,7 @@ class PubChemView:
         Raises:
             PubChemViewError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> summary = PubChemView().get_property_summary(2244, "Melting Point")  # doctest: +SKIP
             >>> summary["values"][:2], summary["numeric_values"][:2]                 # doctest: +SKIP
             (['275 °F (NTP, 1992)', '138-140'], [275.0, 135.0])
@@ -735,7 +735,7 @@ class PubChemView:
         Raises:
             PubChemViewError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> [d.value for d in PubChemView().get_melting_point(2244)][:2]  # doctest: +SKIP
             ['275 °F (NTP, 1992)', '138-140']
         """
@@ -757,7 +757,7 @@ class PubChemView:
         Raises:
             PubChemViewError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> [d.value for d in PubChemView().get_boiling_point(2244)][:2]  # doctest: +SKIP
             ['284 °F at 760 mmHg (decomposes) (NTP, 1992)', '140 °C']
         """
@@ -779,7 +779,7 @@ class PubChemView:
         Raises:
             PubChemViewError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> [d.value for d in PubChemView().get_density(2244)][:2]  # doctest: +SKIP
             ['1.4 (NTP, 1992) - Denser than water; will sink', '1.40']
         """
@@ -801,7 +801,7 @@ class PubChemView:
         Raises:
             PubChemViewError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> [d.value for d in PubChemView().get_solubility(2244)][:2]  # doctest: +SKIP
             ['less than 1 mg/mL at 73 °F (NTP, 1992)', '10 mg/mL']
         """
@@ -823,7 +823,7 @@ class PubChemView:
         Raises:
             PubChemViewError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> [d.value for d in PubChemView().get_flash_point(2244)][:2]  # doctest: +SKIP
             ['482 °F (NTP, 1992)']
         """
@@ -845,7 +845,7 @@ class PubChemView:
         Raises:
             PubChemViewError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> [d.value for d in PubChemView().get_vapor_pressure(2244)][:2]  # doctest: +SKIP
             ['0 mmHg (approx) (NIOSH, 2024)', '2.52X10-5 mm Hg at 25 °C (calc)']
         """
@@ -867,7 +867,7 @@ class PubChemView:
         Raises:
             PubChemViewError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> [d.value for d in PubChemView().get_viscosity(702)][:2]  # doctest: +SKIP
             ['1.074 mPa.s at 25 °C', '1.074 mPa*s at 20 °C']
         """
@@ -889,7 +889,7 @@ class PubChemView:
         Raises:
             PubChemViewError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> [d.value for d in PubChemView().get_logp(2244)][:2]  # doctest: +SKIP
             ['1.18', 'log Kow = 1.19']
         """
@@ -911,7 +911,7 @@ class PubChemView:
         Raises:
             PubChemViewError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> [d.value for d in PubChemView().get_refractive_index(702)][:2]  # doctest: +SKIP
             ['Index of refraction: 1.3611 at 20 °C/D', '1.364']
         """
@@ -936,7 +936,7 @@ class PubChemView:
             property is absent. Call ``extract_property_data`` directly when the
             difference matters.
 
-        Example:
+        Examples:
             >>> found = PubChemView().batch_extract_properties(
             ...     2244, ["Melting Point", "Boiling Point"])         # doctest: +SKIP
             >>> {name: len(values) for name, values in found.items()}  # doctest: +SKIP
@@ -967,7 +967,7 @@ class PubChemView:
             ``operator``, ``qualitative``, ``temperature_c``) so the result can
             go straight into ``json.dumps`` or ``pd.DataFrame``.
 
-        Example:
+        Examples:
             >>> from provesid.pubchemview_parse import parse_value
             >>> data = PropertyData(value="135 °C", heading="Melting Point",
             ...                     parsed=parse_value("135 °C", "Melting Point"))
@@ -1049,7 +1049,7 @@ class PubChemView:
             PubChemViewError: If the request could not be completed. An empty
                 frame always means "no such data", never "the fetch failed".
 
-        Example:
+        Examples:
             >>> view = PubChemView()
             >>> table = view.get_property_table(2244, "Melting Point")  # doctest: +SKIP
             >>> table[["StringWithMarkup", "ValueMin", "ValueMax", "Unit", "ValueSI"]].head(2)  # doctest: +SKIP
@@ -1168,7 +1168,7 @@ def get_experimental_property(cid: Union[int, str], property_name: str) -> List[
     Returns:
         List of PropertyData objects
 
-    Example:
+    Examples:
         >>> [d.value for d in get_experimental_property(2244, "LogP")][:2]  # doctest: +SKIP
         ['1.18', 'log Kow = 1.19']
     """
@@ -1186,7 +1186,7 @@ def get_all_experimental_properties(cid: Union[int, str]) -> Dict[str, List[Prop
     Returns:
         Dictionary mapping property names to PropertyData lists
 
-    Example:
+    Examples:
         >>> len(get_all_experimental_properties(2244))           # doctest: +SKIP
         16
     """
@@ -1205,7 +1205,7 @@ def get_property_values_only(cid: Union[int, str], property_name: str) -> List[s
     Returns:
         List of property value strings
 
-    Example:
+    Examples:
         >>> get_property_values_only(2244, "LogP")               # doctest: +SKIP
         ['1.18', 'log Kow = 1.19', '1.19', '1.19', '1.28']
     """
@@ -1226,7 +1226,7 @@ def get_property_table(cid: Union[int, str], property_name: str) -> pd.DataFrame
         pandas DataFrame with the columns listed in
         :attr:`PubChemView.PROPERTY_TABLE_COLUMNS`.
 
-    Example:
+    Examples:
         >>> table = get_property_table(2244, "LogP")             # doctest: +SKIP
         >>> table["ExperimentalValue"].tolist()[:3]              # doctest: +SKIP
         [1.18, 1.19, 1.19]

@@ -20,7 +20,7 @@ shared :class:`RateLimiter`: the pacing clock, and the circuit breaker. The
 breaker is the time a ``Retry-After`` named, and no client sharing the host
 asks before it.
 
-Example:
+Examples:
     >>> client = HTTPClient(min_interval=0.2, timeout=30)
     >>> client.get_text("https://example.org/thing")   # doctest: +SKIP
     'an answer'
@@ -75,7 +75,7 @@ class ServiceError(Exception):
             report a held host once rather than once per query --- the
             transport has already warned when the hold was recorded.
 
-    Example:
+    Examples:
         >>> issubclass(NotFoundError, ServiceError)
         True
         >>> exc = ServiceError("nope", status_code=404)
@@ -102,7 +102,7 @@ class NotFoundError(ServiceError):
     This is a statement about the data, not about the request. It is never
     retried, because asking again cannot change it.
 
-    Example:
+    Examples:
         >>> issubclass(NotFoundError, ServiceError)
         True
     """
@@ -116,7 +116,7 @@ class RateLimitError(ServiceError):
     Raised only when every attempt was refused with a rate-limit response; a
     429 that clears on a later attempt is invisible to the caller.
 
-    Example:
+    Examples:
         >>> issubclass(RateLimitError, ServiceError)
         True
     """
@@ -127,7 +127,7 @@ class ServiceTimeoutError(ServiceError):
     """
     Every attempt timed out or the connection could not be made.
 
-    Example:
+    Examples:
         >>> issubclass(ServiceTimeoutError, ServiceError)
         True
     """
@@ -146,7 +146,7 @@ class Outcome(Enum):
         FATAL: A permanent error that is not absence --- a malformed request,
             a rejected key. Retrying cannot help.
 
-    Example:
+    Examples:
         >>> Outcome.RETRY.name
         'RETRY'
     """
@@ -178,7 +178,7 @@ def default_classify(response: requests.Response) -> Outcome:
     Returns:
         The :class:`Outcome` for this response.
 
-    Example:
+    Examples:
         >>> class R: status_code = 404
         >>> default_classify(R()).name
         'ABSENT'
@@ -213,7 +213,7 @@ def retry_after_seconds(response: requests.Response) -> Optional[float]:
         The wait in seconds, or None when the header is absent, unparseable
         or in the past.
 
-    Example:
+    Examples:
         >>> class R: headers = {"Retry-After": "12"}
         >>> retry_after_seconds(R())
         12.0
@@ -284,7 +284,7 @@ class RateLimiter:
             asked; 0.0 when it has asked for nothing. Only ever moves later,
             until :meth:`release` clears it.
 
-    Example:
+    Examples:
         >>> limiter = RateLimiter()
         >>> limiter.last_request_time
         0.0
@@ -324,7 +324,7 @@ class RateLimiter:
         Returns:
             The time at which the caller may proceed, as a Unix timestamp.
 
-        Example:
+        Examples:
             >>> limiter = RateLimiter()
             >>> first = limiter.wait(0.05)
             >>> limiter.wait(0.05) - first >= 0.045
@@ -351,7 +351,7 @@ class RateLimiter:
         Args:
             seconds: How long, from now. 0 or less records nothing.
 
-        Example:
+        Examples:
             >>> limiter = RateLimiter()
             >>> limiter.hold(60); limiter.hold(5)
             >>> limiter.held_for() > 50
@@ -370,7 +370,7 @@ class RateLimiter:
             Seconds until :attr:`not_before`; 0.0 when there is no hold or it
             has passed.
 
-        Example:
+        Examples:
             >>> RateLimiter().held_for()
             0.0
         """
@@ -384,7 +384,7 @@ class RateLimiter:
         new API key --- and for tests, which must not leave a hold on a shared
         host behind them.
 
-        Example:
+        Examples:
             >>> limiter = RateLimiter()
             >>> limiter.hold(600); limiter.release()
             >>> limiter.held_for()
@@ -415,7 +415,7 @@ def host_limiter(url_or_host: str) -> RateLimiter:
         The limiter for that host. Two calls naming the same host return the
         same object.
 
-    Example:
+    Examples:
         >>> a = host_limiter("https://pubchem.ncbi.nlm.nih.gov/rest/pug")
         >>> b = host_limiter("https://pubchem.ncbi.nlm.nih.gov/rest/pug_view")
         >>> a is b
@@ -439,7 +439,7 @@ def release_holds() -> None:
     The process-wide form of :meth:`RateLimiter.release`: after it, every
     client asks its host again on its next call. Pacing clocks are untouched.
 
-    Example:
+    Examples:
         >>> host_limiter("https://held.example.test").hold(600)
         >>> release_holds()
         >>> host_limiter("https://held.example.test").held_for()
@@ -514,7 +514,7 @@ class HTTPClient:
         logger: Logger for the DEBUG line per request and the WARNING per
             retry. Defaults to this module's logger.
 
-    Example:
+    Examples:
         >>> client = HTTPClient(min_interval=0.2, timeout=10, max_retries=2)
         >>> client.get_json("https://example.org/data.json")   # doctest: +SKIP
         {'ok': True}
@@ -567,7 +567,7 @@ class HTTPClient:
         ``min_interval`` since *anybody* last asked that service, not since
         this object did.
 
-        Example:
+        Examples:
             >>> client = HTTPClient(min_interval=0.0)
             >>> client.rate_limit()     # returns at once when pacing is off
         """
@@ -748,7 +748,7 @@ class HTTPClient:
         a client can tell a rejected key from an unknown record without
         re-reading the wire.
 
-        Example:
+        Examples:
             >>> client = HTTPClient()
             >>> client.request("GET", "https://example.org/x").text   # doctest: +SKIP
             'ok'
@@ -889,7 +889,7 @@ class HTTPClient:
         Returns:
             The exception, not yet raised.
 
-        Example:
+        Examples:
             >>> HTTPClient._fail(ServiceError, "busy", status_code=503).status_code
             503
             >>> isinstance(HTTPClient._fail(ValueError, "busy", status_code=503), ValueError)
@@ -929,7 +929,7 @@ class HTTPClient:
         Returns:
             The response.
 
-        Example:
+        Examples:
             >>> HTTPClient().get("https://example.org/img.png").content   # doctest: +SKIP
             b'\\x89PNG...'
         """
@@ -946,7 +946,7 @@ class HTTPClient:
         Returns:
             The response.
 
-        Example:
+        Examples:
             >>> HTTPClient().post("https://example.org/q", data={"cid": 2244})   # doctest: +SKIP
             <Response [200]>
         """
@@ -963,7 +963,7 @@ class HTTPClient:
         Returns:
             The response body, with surrounding whitespace removed.
 
-        Example:
+        Examples:
             >>> HTTPClient().get_text("https://example.org/smiles")   # doctest: +SKIP
             'CCO'
         """
@@ -986,7 +986,7 @@ class HTTPClient:
                 answers 500, and the caller should hear about it in the same
                 way.
 
-        Example:
+        Examples:
             >>> HTTPClient().get_json("https://example.org/data.json")   # doctest: +SKIP
             {'ok': True}
         """
@@ -1006,7 +1006,7 @@ class HTTPClient:
         Raises:
             error_cls: The body is not valid JSON.
 
-        Example:
+        Examples:
             >>> HTTPClient().post_json("https://example.org/q", json={"n": 1})   # doctest: +SKIP
             {'ok': True}
         """
@@ -1033,7 +1033,7 @@ class HTTPClient:
         Raises:
             error_cls: The body is not valid JSON.
 
-        Example:
+        Examples:
             >>> class R:
             ...     text = 'not json'
             ...     def json(self): raise ValueError("nope")

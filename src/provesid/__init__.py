@@ -15,7 +15,7 @@ The online clients --- :class:`PubChemAPI`, :class:`PubChemView`,
 paces, retries and caches. :class:`Search` asks two of them only when
 ``online_fallback=True`` and no offline source answered.
 
-Example:
+Examples:
     >>> import provesid
     >>> provesid.datasets.missing()                 # what Search would lack  # doctest: +SKIP
     []

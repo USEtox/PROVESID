@@ -35,7 +35,7 @@ this one refuses instead.  Tables that are not wanted are skipped by looking at
 the first few bytes of each line, which is what makes a 2.1 GB dump cheap to
 read when most of it is bioactivity data.
 
-Example:
+Examples:
     >>> dump = [
     ...     "CREATE TABLE `compound` (",
     ...     "  `molregno` bigint NOT NULL,",
@@ -74,7 +74,7 @@ class DumpFormatError(ValueError):
     then used as a reference.  The message names the table and the character
     offset within the line.
 
-    Example:
+    Examples:
         >>> list(read_statements(["INSERT INTO `compound` VALUES (1);"], tables={"compound"}))
         Traceback (most recent call last):
         ...
@@ -86,7 +86,7 @@ class Column(NamedTuple):
     """
     One column of a ``CREATE TABLE``: its name, and its MySQL type as written.
 
-    Example:
+    Examples:
         >>> column = Column("molregno", "bigint")
         >>> column.name, sqlite_affinity(column.type)
         ('molregno', 'INT')
@@ -100,7 +100,7 @@ class CreateTable(NamedTuple):
     """
     A ``CREATE TABLE`` statement: the table name and its columns, in order.
 
-    Example:
+    Examples:
         >>> table = CreateTable("compound", (Column("molregno", "bigint"),))
         >>> [column.name for column in table.columns]
         ['molregno']
@@ -118,7 +118,7 @@ class Insert(NamedTuple):
     (``mysqldump --complete-insert``), and None when the rows follow the
     ``CREATE TABLE`` column order, which is ``mysqldump``'s default.
 
-    Example:
+    Examples:
         >>> insert = Insert("compound", None, parse_values("(1,'aspirin'),(2,NULL);"))
         >>> insert.rows
         [(1, 'aspirin'), (2, None)]
@@ -170,7 +170,7 @@ def unescape(text: str) -> str:
     Returns:
         The string the dump encodes.
 
-    Example:
+    Examples:
         >>> unescape(r"it\\'s a\\ttab and a \\\\ backslash")
         "it's a\\ttab and a \\\\ backslash"
         >>> unescape("nothing to do")
@@ -208,7 +208,7 @@ def parse_values(text: str, pos: int = 0, *, table: str = "?") -> List[tuple]:
         DumpFormatError: If anything other than rows of those three kinds of
             value, separated by commas and ended by ``;``, is found.
 
-    Example:
+    Examples:
         >>> parse_values("(1,'a',NULL),(2,'b\\\\nc',4.50);")
         [(1, 'a', None), (2, 'b\\nc', 4.5)]
     """
@@ -283,7 +283,7 @@ def sqlite_affinity(mysql_type: str) -> str:
     Returns:
         One of ``INT``, ``TEXT``, ``REAL``, ``NUM``, or ``""`` for a blob.
 
-    Example:
+    Examples:
         >>> [sqlite_affinity(t) for t in
         ...  ("bigint", "varchar(20)", "longtext", "decimal(9,2)", "double", "blob")]
         ['INT', 'TEXT', 'TEXT', 'NUM', 'REAL', '']
@@ -325,7 +325,7 @@ def read_statements(
             ``CREATE TABLE``, if its column definitions never close, or if an
             ``INSERT`` cannot be parsed (:func:`parse_values`).
 
-    Example:
+    Examples:
         >>> dump = [
         ...     "CREATE TABLE `other` (", "  `x` int,", ") ENGINE=InnoDB;",
         ...     "INSERT INTO `other` VALUES (1);",

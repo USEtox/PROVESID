@@ -30,7 +30,7 @@ is why :class:`~provesid.search.Search` leaves ZeroPM out of its default vote.
 
 SMILES are not stored. They are written from the InChI with RDKit on demand.
 
-Example:
+Examples:
     >>> from provesid import ZeroPM
     >>> with ZeroPM() as zpm:
     ...     zpm.get_smiles_from_cas("64-17-5")

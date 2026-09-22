@@ -66,7 +66,7 @@ class Domain:
     A PUG-REST URL reads ``<prolog>/<domain>/<namespace>/<identifiers>/
     <operation>/<output>``. :class:`PubChemAPI` mostly asks about compounds.
 
-    Example:
+    Examples:
         >>> Domain.COMPOUND
         'compound'
     """
@@ -87,7 +87,7 @@ class CompoundDomainNamespace:
     further level of the URL; see :class:`StructureSearch` and
     :class:`FastSearch` for two of them.
 
-    Example:
+    Examples:
         >>> f"compound/{CompoundDomainNamespace.INCHIKEY}/BSYNRYMUTXBXSQ-UHFFFAOYSA-N"
         'compound/inchikey/BSYNRYMUTXBXSQ-UHFFFAOYSA-N'
     """
@@ -108,7 +108,7 @@ class SubstanceDomainNamespace:
     """
     The ``<namespace>`` values of the substance domain (SIDs, depositor IDs, names).
 
-    Example:
+    Examples:
         >>> f"substance/{SubstanceDomainNamespace.NAME}/aspirin/sids"
         'substance/name/aspirin/sids'
     """
@@ -123,7 +123,7 @@ class AssayDomainNamespace:
     """
     The ``<namespace>`` values of the assay domain (AIDs, types, targets, activities).
 
-    Example:
+    Examples:
         >>> f"assay/{AssayDomainNamespace.AID}/1000/{Operation.SUMMARY}"
         'assay/aid/1000/summary'
     """
@@ -140,7 +140,7 @@ class StructureSearch:
 
     The query is given as one of :class:`StructureSearchQueryType`.
 
-    Example:
+    Examples:
         >>> f"compound/{StructureSearch.SUBSTRUCTURE}/{StructureSearchQueryType.SMILES}"
         'compound/substructure/smiles'
     """
@@ -153,7 +153,7 @@ class StructureSearchQueryType:
     """
     How the query of a :class:`StructureSearch` is written: SMILES, InChI, SDF or a CID.
 
-    Example:
+    Examples:
         >>> f"{FastSearch.FASTSUBSTRUCTURE}/{StructureSearchQueryType.CID}"
         'fastsubstructure/cid'
     """
@@ -170,7 +170,7 @@ class FastSearch:
     poll instead; these do not. :meth:`PubChemAPI.substructure_search` and its
     siblings use them.
 
-    Example:
+    Examples:
         >>> f"compound/{FastSearch.FASTFORMULA}/C9H8O4/cids/JSON"
         'compound/fastformula/C9H8O4/cids/JSON'
     """
@@ -188,7 +188,7 @@ class Operation:
     The first group applies to compounds (and mostly to substances); the last
     four to assays.
 
-    Example:
+    Examples:
         >>> f"compound/cid/2244/{Operation.SYNONYMS}"
         'compound/cid/2244/synonyms'
     """
@@ -218,7 +218,7 @@ class OutputFormat:
     :class:`PubChemAPI` asks for ``JSON`` by default and parses it; ``PNG``
     comes back as bytes, and the other text formats as a string.
 
-    Example:
+    Examples:
         >>> api = PubChemAPI()
         >>> api.get_cids_by_smiles("CCO", output_format=OutputFormat.TXT)  # doctest: +SKIP
         '702\\n'
@@ -242,7 +242,7 @@ class CompoundProperties:
     Python spellings of PubChem's names; the values are PubChem's own.
     :meth:`PubChemAPI.get_all_compound_info` asks for all of them.
 
-    Example:
+    Examples:
         >>> CompoundProperties.MOLECULAR_WEIGHT
         'MolecularWeight'
         >>> api = PubChemAPI()
@@ -306,7 +306,7 @@ class PubChemError(ServiceError):
     property name PubChem does not know. Catch this to catch any PubChem
     failure; the subclasses separate absence from trouble.
 
-    Example:
+    Examples:
         >>> api = PubChemAPI()
         >>> try:                                              # doctest: +SKIP
         ...     api.get_properties_for_cids([2244], ["NoSuchProperty"])
@@ -323,7 +323,7 @@ class PubChemTimeoutError(PubChemError, ServiceTimeoutError):
     Also a :class:`~provesid.http.ServiceTimeoutError`, so code that handles
     timeouts for every service catches it.
 
-    Example:
+    Examples:
         >>> issubclass(PubChemTimeoutError, ServiceTimeoutError)
         True
     """
@@ -336,7 +336,7 @@ class PubChemNotFoundError(PubChemError, NotFoundError):
     A permanent answer, never retried. Also a
     :class:`~provesid.http.NotFoundError`.
 
-    Example:
+    Examples:
         >>> api = PubChemAPI()
         >>> api.get_cids_by_name("xyzzy-no-such")             # doctest: +SKIP
         Traceback (most recent call last):
@@ -354,7 +354,7 @@ class PubChemServerError(PubChemError):
     wait; see :class:`provesid.http.RateLimiter`. ``held_until`` is set in
     that case.
 
-    Example:
+    Examples:
         >>> err = PubChemServerError("PubChem is throttling this address")
         >>> isinstance(err, PubChemError), err.held_until
         (True, None)
@@ -402,7 +402,7 @@ def fault_code(response: requests.Response) -> Optional[str]:
     Returns:
         The fault code, or None when the body is not a PubChem fault.
 
-    Example:
+    Examples:
         >>> import requests
         >>> response = requests.Response()
         >>> response._content = b'{"Fault": {"Code": "PUGREST.NotFound"}}'
@@ -478,7 +478,7 @@ def pugrest_classify(response: requests.Response) -> Outcome:
         code and for a bare 404, ``FATAL`` for a 400 and any other client
         error.
 
-    Example:
+    Examples:
         >>> class R:
         ...     status_code = 404
         ...     def json(self): return {"Fault": {"Code": "PUGREST.ServerBusy"}}
@@ -509,7 +509,7 @@ def pugview_classify(response: requests.Response) -> Outcome:
     Returns:
         As :func:`pugrest_classify`, except that a bare 400 is ``ABSENT``.
 
-    Example:
+    Examples:
         >>> class R:
         ...     status_code = 400
         ...     def json(self): return None
@@ -559,7 +559,7 @@ class PubChemAPI:
     :meth:`get_basic_compound_info`, :meth:`get_compound_identifiers`,
     :meth:`find_cids_comprehensive`).
 
-    Example:
+    Examples:
         >>> api = PubChemAPI()
         >>> api.get_cids_by_smiles("CCO")                                   # doctest: +SKIP
         [702]
@@ -584,7 +584,7 @@ class PubChemAPI:
             Caching is now unlimited by default with persistent storage.
             Use provesid.cache functions for cache management.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI(pause_time=0.5, use_cache=False)
             >>> api.base_url, api.pause_time
             ('https://pubchem.ncbi.nlm.nih.gov/rest/pug', 0.5)
@@ -621,7 +621,7 @@ class PubChemAPI:
         down, and the new value takes effect on the next request, retries
         included.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> api.pause_time
             0.2
@@ -646,7 +646,7 @@ class PubChemAPI:
         Returns:
             Seconds since the epoch, or 0.0 before the first request.
 
-        Example:
+        Examples:
             >>> PubChemAPI().last_request_time
             0.0
         """
@@ -673,7 +673,7 @@ class PubChemAPI:
         The same as ``provesid.clear_cache(service='pubchem')``. Other services'
         entries are kept.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> api.clear_cache()
             >>> api.get_cache_info()['file_count']
@@ -682,18 +682,18 @@ class PubChemAPI:
         from .cache import clear_cache
         clear_cache(service='pubchem')
 
-    def get_cache_info(self):
+    def get_cache_info(self) -> Dict[str, Any]:
         """
         Size and location of the PubChem PUG-REST cache.
 
         Returns:
-            dict: As :func:`provesid.cache.get_cache_info` reports it for
-            ``service='pubchem'``: ``cache_directory``, ``memory_entries``,
-            ``disk_entries``, ``file_count``, ``total_size_bytes``,
-            ``total_size_mb``, ``total_size_gb``, ``warning_threshold_gb`` and
-            ``warnings_enabled``.
+            The statistics :func:`provesid.cache.get_cache_info` reports for
+                ``service='pubchem'``: ``cache_directory``, ``memory_entries``,
+                ``disk_entries``, ``file_count``, ``total_size_bytes``,
+                ``total_size_mb``, ``total_size_gb``, ``warning_threshold_gb``
+                and ``warnings_enabled``.
 
-        Example:
+        Examples:
             >>> info = PubChemAPI().get_cache_info()
             >>> info['cache_directory'].endswith('pubchem')
             True
@@ -708,7 +708,7 @@ class PubChemAPI:
         Delegates to the shared transport, which paces every request it makes
         including retries.
 
-        Example:
+        Examples:
             >>> PubChemAPI(pause_time=0)._rate_limit()
         """
         self._http.rate_limit()
@@ -853,7 +853,7 @@ class PubChemAPI:
             PubChemNotFoundError: If PubChem has no compound with this CID.
             PubChemError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> record = api.get_compound_by_cid(2244)            # doctest: +SKIP
             >>> sorted(record)                                    # doctest: +SKIP
@@ -915,7 +915,7 @@ class PubChemAPI:
             PubChemNotFoundError: If no compound has this name.
             PubChemError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> len(api.get_compounds_by_name("aspirin"))                 # doctest: +SKIP
             142
@@ -977,7 +977,7 @@ class PubChemAPI:
             PubChemError: If the request could not be completed, or PubChem
                 could not standardise the SMILES (HTTP 400).
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> api.get_compounds_by_smiles("OCC")["id"]          # doctest: +SKIP
             {'id': {'cid': 702}}
@@ -1032,7 +1032,7 @@ class PubChemAPI:
             PubChemNotFoundError: If no compound has this InChIKey.
             PubChemError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> api.get_compounds_by_inchikey("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")["id"]  # doctest: +SKIP
             {'id': {'cid': 2244}}
@@ -1141,7 +1141,7 @@ class PubChemAPI:
             lookup that failed while the properties succeeded is recorded in
             ``synonyms_error``, and such a result is not cached.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> api.get_compound_properties(2244, ["MolecularFormula", "MolecularWeight"],
             ...                             include_synonyms=False)  # doctest: +SKIP
@@ -1174,7 +1174,7 @@ class PubChemAPI:
             URL string with no identifier segment, for use with
             ``self._make_request(url, method='POST', data={namespace: ...})``.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> api._build_post_url('compound', 'cid', 'property/MolecularWeight')
             'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/property/MolecularWeight/JSON'
@@ -1270,7 +1270,7 @@ class PubChemAPI:
                 are not returned: either every chunk succeeded or the failure
                 surfaces, so a short table never has to be second-guessed.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> rows = api.get_properties_for_cids([2244, 702],
             ...                                    ['MolecularFormula', 'MolecularWeight'])
@@ -1328,7 +1328,7 @@ class PubChemAPI:
             they need one request per compound, which defeats the point of
             batching. Use :meth:`get_compound_synonyms` where they are needed.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> rows = api.get_compound_properties_batch([2244, 702], ['MolecularFormula'])
             >>> for row in rows:
@@ -1390,7 +1390,7 @@ class PubChemAPI:
                 is never reported as an empty list, so that a transient error
                 does not get cached as "this compound has no synonyms".
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> api.get_compound_synonyms(2244)[:4]               # doctest: +SKIP
             ['aspirin', 'ACETYLSALICYLIC ACID', '50-78-2', '2-Acetoxybenzoic acid']
@@ -1439,7 +1439,7 @@ class PubChemAPI:
             When searching in the substance domain, this can find CIDs for substances
             that may not be directly searchable in the compound domain.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> api.get_cids_by_name("aspirin")[:3]               # doctest: +SKIP
             [2244, 1983, 9871508]
@@ -1495,7 +1495,7 @@ class PubChemAPI:
             PubChemError: If the request could not be completed, or PubChem
                 could not standardise the SMILES (HTTP 400).
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> api.get_cids_by_smiles("CCO")                     # doctest: +SKIP
             [702]
@@ -1532,7 +1532,7 @@ class PubChemAPI:
             PubChemNotFoundError: If no compound has this InChIKey.
             PubChemError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> api.get_cids_by_inchikey("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")  # doctest: +SKIP
             [2244]
@@ -1576,7 +1576,7 @@ class PubChemAPI:
             PubChemNotFoundError: If PubChem has no compound with this InChI.
             PubChemError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()                                   # doctest: +SKIP
             >>> api.get_cids_by_inchi(
             ...     "InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12"
@@ -1613,7 +1613,7 @@ class PubChemAPI:
         Raises:
             PubChemError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> api.get_cids_by_formula("C9H8O4")["IdentifierList"]["CID"][:3]  # doctest: +SKIP
             [2244, 689043, 979]
@@ -1661,7 +1661,7 @@ class PubChemAPI:
         Raises:
             PubChemError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> api.substructure_search("C1=CC=CC=C1C(=O)O", MaxRecords=5)  # doctest: +SKIP
             {'IdentifierList': {'CID': [135, 243, 2345, 7456, 338]}}
@@ -1699,7 +1699,7 @@ class PubChemAPI:
         Raises:
             PubChemError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> api.superstructure_search("CC(=O)OC1=CC=CC=C1C(=O)O",
             ...                           MaxRecords=5)            # doctest: +SKIP
@@ -1741,7 +1741,7 @@ class PubChemAPI:
         Raises:
             PubChemError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> api.similarity_search("CC(=O)OC1=CC=CC=C1C(=O)O", threshold=95,
             ...                       MaxRecords=3)                # doctest: +SKIP
@@ -1784,7 +1784,7 @@ class PubChemAPI:
         Raises:
             PubChemError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> api.identity_search("CC(=O)OC1=CC=CC=C1C(=O)O")  # doctest: +SKIP
             {'IdentifierList': {'CID': [2244]}}
@@ -1812,7 +1812,7 @@ class PubChemAPI:
             PubChemNotFoundError: If there is no substance with this SID.
             PubChemError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> substance = api.get_substance_by_sid(12345)       # doctest: +SKIP
             >>> substance['source']                               # doctest: +SKIP
@@ -1847,7 +1847,7 @@ class PubChemAPI:
             PubChemNotFoundError: If no substance has this name.
             PubChemError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> len(api.get_substances_by_name("aspirin"))        # doctest: +SKIP
             184
@@ -1886,7 +1886,7 @@ class PubChemAPI:
             PubChemNotFoundError: If no substance has this name.
             PubChemError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> api.get_sids_by_name("aspirin")[:5]               # doctest: +SKIP
             [4594, 87798, 476106, 602429, 840714]
@@ -1930,7 +1930,7 @@ class PubChemAPI:
             PubChemNotFoundError: If there is no assay with this AID.
             PubChemError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> assay = api.get_assay_by_aid(1000)                # doctest: +SKIP
             >>> assay['PC_AssaySubmit']['assay']['descr']['name']  # doctest: +SKIP
@@ -1959,7 +1959,7 @@ class PubChemAPI:
             PubChemNotFoundError: If PubChem holds no assay results for them.
             PubChemError: If the request could not be completed.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> summary = api.get_assay_summary(2244)             # doctest: +SKIP
             >>> summary['Table']['Columns']['Column'][:5]         # doctest: +SKIP
@@ -1991,7 +1991,7 @@ class PubChemAPI:
             records when several match) and ``error``. Pass it to
             :meth:`format_search_compound_result` for flat properties.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> result = api.search_compound("50-00-0")           # doctest: +SKIP
             >>> result['success'], result['data']['id']           # doctest: +SKIP
@@ -2215,7 +2215,7 @@ class PubChemAPI:
             ``SMILES``, ``InChI``, ``InChIKey`` and ``IUPACName``; see
             :meth:`get_compound_properties` for how a failure is reported.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> info = api.get_basic_compound_info(2244)          # doctest: +SKIP
             >>> info['IUPACName'], info['InChIKey']               # doctest: +SKIP
@@ -2247,7 +2247,7 @@ class PubChemAPI:
             plus 'success', 'cid', and 'error' metadata keys. A property
             PubChem has no value for is absent.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> info = api.get_all_compound_info(2244)            # doctest: +SKIP
             >>> info['XLogP'], info['TPSA'], info['success']      # doctest: +SKIP
@@ -2274,18 +2274,19 @@ class PubChemAPI:
         Returns:
             Dictionary with lists of unique identifiers for each type, in
             order of first appearance:
-            - casrn: CAS Registry Numbers (2-7 digits-2 digits-1 digit). The
-              check digit is not verified, so malformed numbers PubChem lists
-              as synonyms (aspirin's ``001-16-2``) come through.
+            - casrn: CAS Registry Numbers (2-7 digits-2 digits-1 digit)
             - nsc: NSC numbers (begins with NSC)
             - dtxsid: DTXSID identifiers (begins with DTXSID)
             - dtxcid: DTXCID identifiers (begins with DTXCID)
-            - ec_number: Enzyme Commission numbers (``N.N.N.N``). EC
-              inventory numbers such as ``200-064-1`` are not extracted.
+            - ec_number: Enzyme Commission numbers (``N.N.N.N``)
             - chebi_id: ChEBI IDs (begins with CHEBI)
             - chembl: ChEMBL numbers (begins with CHEMBL)
 
-        Example:
+            The CAS check digit is not verified, so malformed numbers PubChem
+            lists as synonyms (aspirin's ``001-16-2``) come through. EC
+            inventory numbers such as ``200-064-1`` are not extracted.
+
+        Examples:
             >>> api = PubChemAPI()
             >>> ids = api.extract_identifiers_from_synonyms(
             ...     ["aspirin", "50-78-2", "CAS-50-78-2", "NSC 27223", "DTXSID5020108",
@@ -2383,7 +2384,7 @@ class PubChemAPI:
             ``total_synonyms``. A failed request gives ``success=False``
             and empty lists rather than raising.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> ids = api.get_compound_identifiers(2244)          # doctest: +SKIP
             >>> ids['dtxsid'], ids['chembl'][:1]                  # doctest: +SKIP
@@ -2443,7 +2444,7 @@ class PubChemAPI:
             when both failed. More is not better here: the compound domain's
             one CID is usually the right answer.
 
-        Example:
+        Examples:
             >>> api = PubChemAPI()
             >>> found = api.find_cids_comprehensive("50-78-2")    # doctest: +SKIP
             >>> found['compound_domain']['cids']                  # doctest: +SKIP

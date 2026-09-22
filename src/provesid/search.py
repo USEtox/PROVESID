@@ -38,7 +38,7 @@ Supported identifier types:
 - ``"dtxsid"``  — CompTox DTXSID
 - ``"formula"`` — Molecular formula
 
-Example:
+Examples:
     >>> from provesid import Search
     >>> df = Search("cas", show_progress=False).search(["50-00-0", "64-17-5"])
     >>> df[["query", "name", "canonical_smiles", "confidence"]]
@@ -243,7 +243,7 @@ def normalize_structure(smiles: Optional[str]) -> Dict[str, Any]:
         ``canonical_smiles``, ``kekulized_smiles``, ``inchi``, ``inchikey``,
         ``mol_weight``, and ``mol`` (the RDKit Mol object; not serialized).
 
-    Example:
+    Examples:
         >>> rec = normalize_structure("c1ccccc1")
         >>> rec["canonical_smiles"], rec["kekulized_smiles"], rec["inchikey"]
         ('c1ccccc1', 'C1=CC=CC=C1', 'UHOVQNZJYSORNB-UHFFFAOYSA-N')
@@ -318,7 +318,7 @@ def strip_salts(
         unavailable or the input is invalid.  Returns the original SMILES
         unchanged when no fragments are removed.
 
-    Example:
+    Examples:
         >>> strip_salts("[Na+].[Cl-].CC(=O)O")
         'CC(=O)O'
         >>> strip_salts("CC(=O)[O-].[Na+]")    # the anion keeps its charge
@@ -453,7 +453,7 @@ class Search:
             retried online.  :attr:`sources_available` lists offline sources
             only; the online ones are reported per row and in ``df.attrs``.
 
-    Example:
+    Examples:
         >>> from provesid import Search
         >>> s = Search("cas", show_progress=False)
         >>> df = s.search(["50-00-0", "64-17-5"])
@@ -1088,7 +1088,7 @@ class Search:
         :class:`~provesid.sqlite_client.DatabaseClosedError` rather than
         quietly running against whatever is left.
 
-        Example:
+        Examples:
             >>> s = Search("cas", show_progress=False)
             >>> s.search("50-00-0")["name"].tolist()
             ['formaldehyde']
@@ -1273,7 +1273,7 @@ class Search:
                 not specified, or if ``n_hits`` is invalid.
             FileNotFoundError: If the given file path does not exist.
 
-        Example:
+        Examples:
             >>> s = Search("cas", show_progress=False)
             >>> s.search(["50-00-0", "64-17-5"])["name"].tolist()
             ['formaldehyde', 'ethanol']
@@ -1394,7 +1394,7 @@ class Search:
             ValueError: If ``df`` already has columns starting with ``prefix``
                 that would collide with the added ones.
 
-        Example:
+        Examples:
             >>> # 4 rows, 3 distinct CAS numbers -> only 3 searches
             >>> df = pd.DataFrame({
             ...     "CAS": ["64-17-5", "64-17-5", "50-00-0", "50-78-2"],
@@ -2652,7 +2652,7 @@ def mw_within(
         :func:`resolve_cascade`'s ``accept`` argument: the names of the checks
         that passed, or an empty list to reject the hit.
 
-    Example:
+    Examples:
         >>> accept = mw_within(0.5, reference_column="SMILES", name_column="name")
         >>> accept({"SMILES": "CCO", "name": "ethanol"}, {"SMILES": "OCC", "name": "Ethanol"})
         ['mw', 'smiles', 'name']
@@ -2740,7 +2740,7 @@ def resolve_cascade(
         KeyError: If a stage names a column that is not in ``df``.
         ValueError: If ``stages`` is empty.
 
-    Example:
+    Examples:
         >>> data = pd.DataFrame({
         ...     "CASRN":  ["50-78-2", "", "0-00-0"],
         ...     "name":   ["", "caffeine", ""],

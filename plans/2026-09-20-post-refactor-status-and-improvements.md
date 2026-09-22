@@ -383,7 +383,7 @@ replace it.
   so it belongs on the host's clock as a "not before T" that every client
   respects, making a known-throttled host fail at once. The shared `RateLimiter`
   is already the right place.
-- **34 public objects still have no docstring**, concentrated in `pubchem.py`
+- ~~**34 public objects still have no docstring**~~ **Done, §28.** Concentrated in `pubchem.py`
   (10), `opsin.py` (7), `search.py` (6) and `cache.py` (2).
 - **Stray files in `src/provesid/data/`**: `build_pubchem_id_db.py` (a duplicate
   of `scripts/build_pubchem_id_db.py`), `examining_pubchem.py`,
@@ -455,7 +455,7 @@ Steps are independently committable and leave the suite green.
 | 14 | ~~`Search(online_fallback=...)` as a row in the source table~~ **done, §23** | 4.4 | M |
 | 15 | ~~`Search.PRESETS`~~ **done, §24** | 4.6 | S |
 | 16 | ~~circuit breaker on the shared `RateLimiter`~~ **done, §27** | 4.12 | M |
-| 17 | docstrings with examples, module by module | 4.12 | L |
+| 17 | ~~docstrings with examples, module by module~~ **done, §28** | 4.12 | L |
 | 18 | rebuild `docs/`; delete `docs/examples/`; drop `docs/plans/` from the nav | 4.9 | M |
 | 19 | notebooks, `search/` first | 4.11 | L |
 | 20 | rewrite `README.md` around offline-first and `Search` | 4.10 | S |
@@ -3638,3 +3638,96 @@ PubChem.
   decide when a host is healthy again, which `Retry-After` decides for us.
   Nothing here needs it yet.
 - §26.5, §24.5's other items, §23.5, §4.13 and §22.6 are unchanged.
+
+## 28. Landed on 2026-09-22 — step 17, docstrings with examples (§4.12)
+
+August's workstream C asked for every public object to carry a Google-style
+docstring with a runnable example, checked as a doctest, with offline
+examples using real values and network examples showing real but skipped
+output. That is done for all of `src/provesid/`.
+
+### 28.1 What landed
+
+- **Coverage.** All 521 public objects have a docstring with an example. The
+  same AST pass at the start of the step found 13 with no docstring and 305
+  with no example (it then counted property setters too). Every module has a
+  module docstring;
+  `__init__`, `opsin`, `cascommonchem`, `classyfire`, `pubchemview`,
+  `resolver`, `utils` and `zeropm` had none.
+- **A way to run them.** `pytest --doctest-modules src/provesid`, set up by
+  `src/conftest.py`, which is not installed. It skips a module's examples
+  when the database they read is absent, so a doctest run never downloads,
+  and it sandboxes the cache and the config directory. `doctest_optionflags`
+  gains `NORMALIZE_WHITESPACE` and `ELLIPSIS`. `TESTING.md` says how to run
+  it.
+- **Result.** 476 passed, 88 skipped, 0 failed, where the baseline was 133
+  passed, 59 failed, 35 skipped. With `PROVESID_DATA_DIR` pointing at an
+  empty directory: 290 passed, 274 skipped, nothing downloaded.
+- **Outputs are real.** Offline outputs come from the installed databases.
+  Online ones were recorded against the live services on 2026-09-22 and
+  marked `+SKIP`. CAS Common Chemistry is the exception, see §28.4.
+- **`Examples:`, not `Example:`.** griffe renders a Google `Examples:`
+  section as a code block but an `Example:` section as a Markdown
+  admonition, where `rows[0]["cas"]` is read as a reference link. August's
+  house style said `Example:`; every header is now `Examples:`, and
+  `mkdocs build --strict` is clean. Trailing whitespace was stripped from
+  every module touched, in the same commits (`git diff -w` shows the rest).
+- **Validation.** `pytest tests/`: 1511 passed, 33 skipped, 0 failed (9 min).
+  `pytest --doctest-modules src/provesid`: 476 passed, 88 skipped.
+  `mkdocs build --strict`: clean.
+
+### 28.2 Defects found by writing the examples
+
+Each is fixed with a test that fails on the old code.
+
+| Module | Defect |
+|---|---|
+| `pubchem_id` | The Zenodo copy repeats (cid, cas) pairs: `cid_to_cas(2244)` was `['50-78-2', '50-78-2']`. `search_by_name` could return a compound twice. |
+| `zeropm` | `query_name_regex(case_sensitive=True)` used `LIKE`, which ignores case; now `GLOB`. `get_id_table_from_zeropm_id` repeated rows (no `DISTINCT`). |
+| `cache` | `metadata.json` is flushed every 100 writes and never at exit, so `export_cache` returned `True` having exported nothing from a short-lived process, and `disk_entries` read 0 beside 37 files. Both now read the files. |
+| `chebi` | All seven text-body calls (`calculate_*`, `depict_structure`) got HTTP 406 because the session sends `Accept: application/json`; they returned None. The mocks never checked headers. They also take a molfile, not SMILES. |
+| `resolver` | `quote(safe='')` sent `/` as `%2F`, which CACTUS's front end answers with 404: every InChI and every stereo SMILES was "not found", including through `Search`'s online fallback. The live test skipped that failure as "not supported for this format". |
+| `tools` | `candidate_from_zeropm_smiles("CCO")` reported 13C-labelled ethanol's InChIKey: it took the first row of whichever CAS sorted first. |
+| `opsin` | `PYOPSIN.get_id_from_list` gave the statuses `'S'`, `'U'`, `'C'`: it indexed one status string per name. |
+| `cascommonchem` | CAS answers a bad key with 403; only 401 mapped to "Unauthorized - Check API Key". |
+| `sources` | `comptox_skeleton_search` and `pubchem_skeleton_search` read `client._conn`, gone since `SQLiteClient`; the AttributeError was logged, so `inchikey_skeleton=True` drew on ChEBI alone. |
+
+### 28.3 Docstrings that were wrong
+
+Among others: `PubChemID.properties(use_online_fallback=False)` returns None,
+not a partial record, when the request needs the network; nine ChEMBL
+examples used molregno 15 for aspirin (it is 1280; 15 is CHEMBL6214);
+`extract_identifiers_from_synonyms`' `ec_number` holds Enzyme Commission
+numbers, not EC inventory numbers; `get_compound_properties` reports a bad
+property in its dict rather than raising; `get_cas_by_substructure` searches
+only the first 10 000 ZeroPM structures; `Search`'s module example claimed
+`fuzzy=True` rescues "caffiene", which it does only with ZeroPM in the pool
+(`preset="recall"`); `mw_within` and `resolve_cascade` printed counts from
+no dataset. ClassyFire's docstring now says it has classified nothing new
+since February 2023 (step 7 is still postponed).
+
+### 28.4 Side effects of this step on the working machine
+
+- **The CAS key.** The baseline doctest run executed the old
+  `set_cas_api_key("your-cas-api-key-here")` example against the real
+  `~/.config/provesid/config.json` and replaced the stored key. The earlier
+  key cannot be recovered from the file. `src/conftest.py` now sandboxes the
+  config directory. The stored placeholder outranks `CAS_API_KEY` in the
+  environment, so it has to be replaced or removed before CAS works again.
+  For the same reason no live CAS output was recorded.
+- **The CompTox name index** was built in the installed database (~290 MiB)
+  by an exact name lookup made while collecting outputs, as the library does
+  on first use.
+
+### 28.5 Still open
+
+- §23.5 shows in the examples: `first_cas` picks the retired `11126-35-5`
+  for aspirin from CompTox, and a fuzzy "asprin" returns it as `CASRN`.
+- `ChEBI.get_complete_entity` and `batch_get_entities` are compatibility
+  aliases, which dev-principle 1 says not to keep.
+- `NCIChemicalIdentifierResolver.get_molecular_data`, `resolve_multiple` and
+  `batch_resolve` are cached even when some representations failed.
+- `ClassyFireAPI.query_status` is cached, so polling with the cache on sees
+  the first answer forever (documented, not changed).
+- The online examples are skipped by design, so they will drift as the
+  services change; re-record them before a release.

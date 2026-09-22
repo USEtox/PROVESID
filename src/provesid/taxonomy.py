@@ -101,7 +101,7 @@ class ChebifierError(Exception):
     Raised on its own for a bad ensemble configuration, such as an
     ``exclude_models`` name the ensemble does not have.
 
-    Example:
+    Examples:
         >>> ChebifierClassifier(exclude_models=["no_such_model"]).ensemble  # doctest: +SKIP
         Traceback (most recent call last):
         ...
@@ -116,7 +116,7 @@ class ChebifierMissingError(ChebifierError):
     Raised when the ensemble is first built, not on import or construction;
     check :func:`chebifier_available` first to avoid it.
 
-    Example:
+    Examples:
         >>> issubclass(ChebifierMissingError, ChebifierError)
         True
     """
@@ -131,7 +131,7 @@ def chebifier_available() -> bool:
     Returns:
         ``True`` if ``chebifier`` can be imported, ``False`` otherwise.
 
-    Example:
+    Examples:
         >>> from provesid.taxonomy import chebifier_available
         >>> isinstance(chebifier_available(), bool)
         True
@@ -168,7 +168,7 @@ def missing_ensemble_modules() -> List[str]:
         The missing module names, in the order they appear in the ensemble.
         Empty when the full default ensemble can be constructed.
 
-    Example:
+    Examples:
         >>> from provesid.taxonomy import missing_ensemble_modules
         >>> missing_ensemble_modules()  # doctest: +SKIP
         ['c3p']
@@ -186,7 +186,7 @@ def default_ensemble_available() -> bool:
     Returns:
         ``True`` when :func:`missing_ensemble_modules` is empty.
 
-    Example:
+    Examples:
         >>> from provesid.taxonomy import default_ensemble_available
         >>> default_ensemble_available() == (missing_ensemble_modules() == [])
         True
@@ -242,7 +242,7 @@ def ensure_v244_indices() -> Dict[str, str]:
         ``"patched"`` means a file inside the installed ``chebai_graph``
         package was rewritten.
 
-    Example:
+    Examples:
         >>> ensure_v244_indices()                                  # doctest: +SKIP
         {'BondType': 'ok', 'AtomNumHs': 'ok', 'NumAtomBonds': 'ok'}
     """
@@ -310,7 +310,7 @@ def ensure_element_class_mappings(
         (already present), or ``"unavailable"`` (chebifier not installed, so the
         ChEBI graph could not be loaded).
 
-    Example:
+    Examples:
         >>> from provesid.taxonomy import ensure_element_class_mappings
         >>> ensure_element_class_mappings()  # doctest: +SKIP
         {'XMolecularEntityClassifier': 'ok', 'OrganoXCompoundClassifier': 'ok'}
@@ -431,7 +431,7 @@ def chebi_class_names(data_dir: Optional[str] = None) -> Dict[str, str]:
     Raises:
         ChebifierMissingError: If ``chebifier`` is not installed.
 
-    Example:
+    Examples:
         >>> from provesid.taxonomy import chebi_class_names
         >>> chebi_class_names()["33659"]  # doctest: +SKIP
         'organic aromatic compound'
@@ -506,7 +506,7 @@ class ChebifierClassifier:
         ChebifierMissingError: If ``chebifier`` is not installed (raised when the
             ensemble is first constructed).
 
-    Example:
+    Examples:
         >>> from provesid.taxonomy import ChebifierClassifier
         >>> clf = ChebifierClassifier()
         >>> df = clf.classify(["c1ccccc1", "CCO"])                 # doctest: +SKIP
@@ -551,7 +551,7 @@ class ChebifierClassifier:
 
         Part of every cache key, so upgrading chebifier re-classifies.
 
-        Example:
+        Examples:
             >>> ChebifierClassifier().chebifier_version            # doctest: +SKIP
             '1.2.2'
         """
@@ -574,7 +574,7 @@ class ChebifierClassifier:
         Raises:
             ChebifierMissingError: If ``chebifier`` is not installed.
 
-        Example:
+        Examples:
             >>> type(ChebifierClassifier().ensemble).__name__      # doctest: +SKIP
             'BaseEnsemble'
         """
@@ -696,7 +696,7 @@ class ChebifierClassifier:
             every returned label. Not cached; :meth:`classify` with
             ``with_scores=True`` is.
 
-        Example:
+        Examples:
             >>> scores = ChebifierClassifier().predict_with_scores(["CCO"])[0]  # doctest: +SKIP
             >>> scores["30879"], round(scores["2571"], 3)                        # doctest: +SKIP
             (1.0, 0.866)
@@ -756,7 +756,7 @@ class ChebifierClassifier:
             ChebifierMissingError: If ``chebifier`` is not installed.
             ValueError: If ``inchikeys`` is not the length of ``smiles``.
 
-        Example:
+        Examples:
             >>> clf = ChebifierClassifier(with_scores=True)
             >>> row = clf.classify("CCO").iloc[0]                  # doctest: +SKIP
             >>> row["source"], row["chebi_ids"].split("|")[:3]     # doctest: +SKIP
@@ -889,7 +889,7 @@ class ChebifierClassifier:
         Raises:
             KeyError: If ``level`` is not a column of ``df``.
 
-        Example:
+        Examples:
             >>> table = pd.DataFrame({"inchikey": ["LFQSCWFLJHTTHZ-UHFFFAOYSA-N"],
             ...                       "chebi_ids": ["30879|33822"]})
             >>> ChebifierClassifier.to_labels(table)
@@ -927,7 +927,7 @@ def classify_chebifier(
     Raises:
         ChebifierMissingError: If ``chebifier`` is not installed.
 
-    Example:
+    Examples:
         >>> from provesid.taxonomy import classify_chebifier
         >>> table = classify_chebifier("CCO")                     # doctest: +SKIP
         >>> table.loc[0, "inchikey"]                              # doctest: +SKIP

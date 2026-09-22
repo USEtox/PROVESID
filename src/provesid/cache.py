@@ -91,7 +91,7 @@ def stable_key_part(obj: Any) -> Any:
         must therefore declare ``__cache_key__``. No current caller passes one;
         cached functions take identifiers, strings and sequences.
 
-    Example:
+    Examples:
         >>> stable_key_part({'cid': 2244, 'props': ('MolecularWeight',)})
         {'cid': 2244, 'props': ['MolecularWeight']}
     """
@@ -129,7 +129,7 @@ def is_failure_result(result: Any) -> bool:
     Returns:
         True when ``result`` is a dict whose ``success`` key is ``False``.
 
-    Example:
+    Examples:
         >>> is_failure_result({'success': False, 'error': 'Server busy'})
         True
         >>> is_failure_result({'success': True, 'CID': 2244})
@@ -156,7 +156,7 @@ def is_empty_result(result: Any) -> bool:
         True when ``result`` is None or carries no items. A value with no
         length --- an int, a dataclass --- is a real result.
 
-    Example:
+    Examples:
         >>> is_empty_result([])
         True
         >>> is_empty_result(None)
@@ -185,7 +185,7 @@ class CacheManager:
     - Import/export functionality
     - Cache statistics and management
 
-    Example:
+    Examples:
         >>> import tempfile
         >>> with tempfile.TemporaryDirectory() as tmp:
         ...     manager = CacheManager(cache_dir=tmp)
@@ -351,7 +351,7 @@ class CacheManager:
             (found: bool, value: Any) - Tuple indicating if value was found and the value.
             ``found`` is what tells a stored ``None`` from a miss.
 
-        Example:
+        Examples:
             >>> import tempfile
             >>> manager = CacheManager(cache_dir=tempfile.mkdtemp())
             >>> manager.get('demo', (2244,), {})
@@ -393,7 +393,7 @@ class CacheManager:
             A value that cannot be written to disk stays in memory for this
             process, with a warning.
 
-        Example:
+        Examples:
             >>> import tempfile
             >>> manager = CacheManager(cache_dir=tempfile.mkdtemp())
             >>> manager.set('demo', ('aspirin',), {'exact': True}, [2244])
@@ -417,7 +417,7 @@ class CacheManager:
         Only this manager's directory is touched; other services' caches are
         kept.
 
-        Example:
+        Examples:
             >>> import tempfile
             >>> manager = CacheManager(cache_dir=tempfile.mkdtemp())
             >>> manager.set('demo', (1,), {}, 'one')
@@ -447,7 +447,7 @@ class CacheManager:
             Dictionary with size information in bytes, MB, and GB: ``bytes``,
             ``mb``, ``gb`` and ``files``, counted from the entry files on disk.
 
-        Example:
+        Examples:
             >>> import tempfile
             >>> manager = CacheManager(cache_dir=tempfile.mkdtemp())
             >>> manager.set('demo', (1,), {}, 'one')
@@ -497,7 +497,7 @@ class CacheManager:
             ``total_size_mb`` and ``total_size_gb``; ``warning_threshold_gb``
             and ``warnings_enabled``.
 
-        Example:
+        Examples:
             >>> import tempfile
             >>> manager = CacheManager(cache_dir=tempfile.mkdtemp())
             >>> manager.set('demo', (1,), {}, 'one')
@@ -536,7 +536,7 @@ class CacheManager:
         Returns:
             True if export successful, False otherwise (with a warning)
 
-        Example:
+        Examples:
             >>> import os, tempfile
             >>> manager = CacheManager(cache_dir=tempfile.mkdtemp())
             >>> manager.set('demo', (1,), {}, 'one')
@@ -597,7 +597,7 @@ class CacheManager:
         Returns:
             True if import successful, False otherwise (with a warning)
 
-        Example:
+        Examples:
             >>> import os, tempfile
             >>> source = CacheManager(cache_dir=tempfile.mkdtemp())
             >>> source.set('demo', (1,), {}, 'one')
@@ -678,7 +678,7 @@ def get_service_cache(service: Optional[str] = None) -> CacheManager:
             ``_service_caches`` --- which is how tests inject a throwaway cache
             --- counts as known.
 
-    Example:
+    Examples:
         >>> get_service_cache('pubchem') is get_service_cache('pubchem')
         True
     """
@@ -750,7 +750,7 @@ def cached(func: Callable = None, *, service: Optional[str] = None,
         a keyword on the call --- means "do not *read* the cache"; a successful
         result is still written so later calls benefit.
 
-    Example:
+    Examples:
         >>> calls = []
         >>> @cached(service='pubchem', version=2)
         ... def fetch(cid):
@@ -830,7 +830,7 @@ def clear_cache(service: Optional[str] = None, all_services: bool = False):
     Raises:
         ValueError: If ``service`` names no known service.
 
-    Example:
+    Examples:
         >>> clear_cache(service='pubchem')
     """
     if all_services:
@@ -856,7 +856,7 @@ def get_cache_info(service: Optional[str] = None) -> Dict[str, Any]:
     Raises:
         ValueError: If ``service`` names no known service.
 
-    Example:
+    Examples:
         >>> sorted(get_cache_info(service='opsin'))[:2]
         ['cache_directory', 'disk_entries']
     """
@@ -870,7 +870,7 @@ def get_all_cache_info() -> Dict[str, Dict[str, Any]]:
     Returns:
         Dict keyed by ``'global'`` and by each name in :data:`CACHE_SERVICES`.
 
-    Example:
+    Examples:
         >>> 'pubchem' in get_all_cache_info()
         True
     """
@@ -896,7 +896,7 @@ def export_cache(export_path: str, format: str = 'pickle',
     Raises:
         ValueError: If ``service`` names no known service.
 
-    Example:
+    Examples:
         >>> export_cache('cache.pkl', service='pubchem')    # doctest: +SKIP
         True
     """
@@ -924,7 +924,7 @@ def import_cache(import_path: str, merge: bool = True,
         Entries carry the key they were written under, so an export made before
         a version bump imports cleanly and is simply never read.
 
-    Example:
+    Examples:
         >>> import_cache('cache.pkl', service='pubchem')    # doctest: +SKIP
         True
     """
@@ -944,7 +944,7 @@ def get_cache_size(service: Optional[str] = None) -> Dict[str, Union[int, float]
     Raises:
         ValueError: If ``service`` names no known service.
 
-    Example:
+    Examples:
         >>> sorted(get_cache_size())
         ['bytes', 'files', 'gb', 'mb']
     """
@@ -963,7 +963,7 @@ def set_cache_warning_threshold(size_gb: float, service: Optional[str] = None):
     Raises:
         ValueError: If ``service`` names no known service.
 
-    Example:
+    Examples:
         >>> set_cache_warning_threshold(10.0, service='pubchem')  # doctest: +SKIP
     """
     get_service_cache(service).max_size_gb = size_gb
@@ -980,7 +980,7 @@ def enable_cache_warnings(enabled: bool = True, service: Optional[str] = None):
     Raises:
         ValueError: If ``service`` names no known service.
 
-    Example:
+    Examples:
         >>> enable_cache_warnings(False, service='pubchem')  # doctest: +SKIP
     """
     get_service_cache(service).enable_warnings = enabled

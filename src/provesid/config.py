@@ -9,7 +9,7 @@ plain text. Only CAS Common Chemistry needs one today:
 file is passed, and before the ``CCC_API_KEY`` and ``CAS_API_KEY``
 environment variables --- so a stored key wins over the environment.
 
-Example:
+Examples:
     >>> from provesid.config import get_config_manager
     >>> get_config_manager().config_file.name
     'config.json'
@@ -29,7 +29,7 @@ class ConfigManager:
     Every read goes to the file, so a key set in another process is seen at
     once. Use :func:`get_config_manager` for the shared instance.
 
-    Example:
+    Examples:
         >>> manager = ConfigManager()
         >>> manager.set_api_key("example", "not-a-real-key")
         >>> manager.get_api_key("example")
@@ -45,7 +45,7 @@ class ConfigManager:
         Creates the configuration directory if it is missing; a failure to
         create it is logged, not raised.
 
-        Example:
+        Examples:
             >>> ConfigManager().config_dir.name in ("provesid", "PROVESID")
             True
         """
@@ -77,7 +77,7 @@ class ConfigManager:
             dict: The file's contents; empty when there is no file or it cannot
             be read (the latter logged).
 
-        Example:
+        Examples:
             >>> isinstance(ConfigManager().load_config(), dict)
             True
         """
@@ -102,7 +102,7 @@ class ConfigManager:
         Note:
             A failure to write is logged at ERROR, not raised.
 
-        Example:
+        Examples:
             >>> manager = ConfigManager()
             >>> config = manager.load_config()
             >>> manager.save_config(config)
@@ -123,7 +123,7 @@ class ConfigManager:
         Returns:
             The stored key, or None when there is none.
 
-        Example:
+        Examples:
             >>> ConfigManager().get_api_key("no-such-service") is None
             True
         """
@@ -139,7 +139,7 @@ class ConfigManager:
             service: Service name, e.g. ``"cas"``.
             api_key: The key; surrounding whitespace is stripped.
 
-        Example:
+        Examples:
             >>> manager = ConfigManager()
             >>> manager.set_api_key("example", "  not-a-real-key  ")
             >>> manager.get_api_key("example")
@@ -165,7 +165,7 @@ class ConfigManager:
         Returns:
             True if a key was removed, False if none was stored.
 
-        Example:
+        Examples:
             >>> ConfigManager().remove_api_key("no-such-service")
             False
         """
@@ -187,7 +187,7 @@ class ConfigManager:
         Returns:
             list: Service names, in the order they were first stored.
 
-        Example:
+        Examples:
             >>> manager = ConfigManager()
             >>> manager.set_api_key("example", "not-a-real-key")
             >>> "example" in manager.list_configured_services()
@@ -207,7 +207,7 @@ class ConfigManager:
             dict: ``config_directory``, ``config_file``, ``config_exists`` and
             ``configured_services``. The keys themselves are not included.
 
-        Example:
+        Examples:
             >>> sorted(ConfigManager().get_config_info())
             ['config_directory', 'config_exists', 'config_file', 'configured_services']
         """
@@ -231,7 +231,7 @@ def get_config_manager() -> ConfigManager:
     Returns:
         ConfigManager: The shared instance.
 
-    Example:
+    Examples:
         >>> get_config_manager() is get_config_manager()
         True
     """
@@ -251,7 +251,7 @@ def set_cas_api_key(api_key: str):
     Note:
         This replaces any key already stored, without asking.
 
-    Example:
+    Examples:
         >>> from provesid.config import set_cas_api_key
         >>> set_cas_api_key("your-cas-api-key-here")    # doctest: +SKIP
         ✅ CAS API key saved to: /home/me/.config/provesid/config.json
@@ -274,7 +274,7 @@ def get_cas_api_key() -> Optional[str]:
     Returns:
         The key, or None when none is stored.
 
-    Example:
+    Examples:
         >>> key = get_cas_api_key()
         >>> key is None or isinstance(key, str)
         True
@@ -286,7 +286,7 @@ def remove_cas_api_key():
     """
     Remove the stored CAS API key, and say whether there was one.
 
-    Example:
+    Examples:
         >>> remove_cas_api_key()                          # doctest: +SKIP
         ✅ CAS API key removed
     """
@@ -301,7 +301,7 @@ def show_config():
     """
     Print the configuration's location and which services have keys.
 
-    Example:
+    Examples:
         >>> show_config()                                 # doctest: +SKIP
         PROVESID Configuration:
           Config directory: /home/me/.config/provesid

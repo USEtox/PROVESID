@@ -50,7 +50,7 @@ def is_missing(value: Any) -> bool:
     Returns:
         True when the value is None, NaN, blank, or the string ``"nan"``.
 
-    Example:
+    Examples:
         >>> is_missing(None), is_missing("nan"), is_missing("  ")
         (True, True, True)
         >>> is_missing(0)
@@ -79,7 +79,7 @@ def pick_first(*values: Any) -> Any:
         The first value for which :func:`is_missing` is False, or None when
         every argument is missing.
 
-    Example:
+    Examples:
         >>> pick_first(None, float("nan"), "aspirin", "ASA")
         'aspirin'
     """
@@ -102,7 +102,7 @@ def normalize_synonyms(value: Any) -> Optional[str]:
     Returns:
         The synonyms joined by ``"; "``, or None when there are none.
 
-    Example:
+    Examples:
         >>> normalize_synonyms(["aspirin", "ASA", None])
         'aspirin; ASA'
     """
@@ -132,7 +132,7 @@ def to_float(value: Any) -> Optional[float]:
     Returns:
         The value as a float, or None when it is missing or unparseable.
 
-    Example:
+    Examples:
         >>> to_float("180.16"), to_float("n/a")
         (180.16, None)
     """
@@ -160,7 +160,7 @@ def text_similarity(a: Optional[str], b: Optional[str]) -> float:
         1.0 for an exact match after normalisation, 0.0 when either side is
         missing, otherwise the ``SequenceMatcher`` ratio in [0, 1].
 
-    Example:
+    Examples:
         >>> text_similarity("Aspirin", "aspirin ")
         1.0
         >>> round(text_similarity("aspirin", "asprin"), 2)
@@ -192,7 +192,7 @@ def extract_cas_values(value: Any) -> List[str]:
     Returns:
         The distinct CAS-shaped strings found, sorted, or an empty list.
 
-    Example:
+    Examples:
         >>> extract_cas_values({"CASRN": "50-78-2", "syn": ["ASA", "50-78-2"]})
         ['50-78-2']
     """
@@ -225,7 +225,7 @@ def inchi_to_smiles(inchi: Optional[str]) -> Optional[str]:
         The SMILES string, or None when the input is missing, RDKit is not
         installed, or RDKit cannot parse the InChI.
 
-    Example:
+    Examples:
         >>> inchi_to_smiles("InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3")
         'CCO'
         >>> inchi_to_smiles(None) is None
@@ -256,7 +256,7 @@ def inchikey_from_smiles(smiles: Optional[str]) -> Optional[str]:
         The InChIKey, or None when the input is missing, RDKit is not
         installed, or RDKit cannot parse the SMILES.
 
-    Example:
+    Examples:
         >>> inchikey_from_smiles("OCC")
         'LFQSCWFLJHTTHZ-UHFFFAOYSA-N'
     """
@@ -290,7 +290,7 @@ def first_cas(cas_values: List[str]) -> Optional[str]:
         "First" is first as a string, which is not the best number: aspirin's
         CompTox row sorts the retired ``11126-35-5`` ahead of ``50-78-2``.
 
-    Example:
+    Examples:
         >>> first_cas(extract_cas_values("50-78-2 | 11126-35-5"))
         '11126-35-5'
         >>> first_cas([]) is None
@@ -343,7 +343,7 @@ def make_candidate(
         ``canonical_smiles``, ``InChI``, ``InChIKey``, ``DTXSID``,
         ``molecular_mass``, ``Synonyms`` and ``CAS_candidates``.
 
-    Example:
+    Examples:
         >>> cand = make_candidate("ChEBI", name="aspirin", smiles="CC(=O)Oc1ccccc1C(=O)O")
         >>> cand["canonical_smiles"]
         'CC(=O)Oc1ccccc1C(=O)O'
@@ -390,7 +390,7 @@ def candidate_similarity(left: Dict[str, Any], right: Dict[str, Any]) -> float:
         when the two share no comparable field at all — note that "no shared
         evidence" and "shared evidence that disagrees" both come back as 0.0.
 
-    Example:
+    Examples:
         >>> a = make_candidate("ChEBI", smiles="CC(=O)Oc1ccccc1C(=O)O")
         >>> b = make_candidate("CompTox", smiles="CC(=O)Oc1ccccc1C(=O)O")
         >>> candidate_similarity(a, b)
@@ -487,7 +487,7 @@ def candidate_compatible_with_consensus(
         it *is* the consensus source, or when there is no consensus to
         contradict. False when the candidate is None.
 
-    Example:
+    Examples:
         >>> aspirin = make_candidate("ChEBI", smiles="CC(=O)Oc1ccccc1C(=O)O")
         >>> also_aspirin = make_candidate("CompTox", smiles="CC(=O)OC1=C(C=CC=C1)C(O)=O")
         >>> ethanol = make_candidate("ZeroPM", smiles="CCO")
@@ -520,7 +520,7 @@ def apply_candidate_to_result(result: Dict[str, Any], candidate: Optional[Dict[s
     Returns:
         None. The mutation is the point.
 
-    Example:
+    Examples:
         >>> result = {"CASRN": "50-78-2", "name": None}
         >>> apply_candidate_to_result(result, make_candidate(
         ...     "CompTox", name="Aspirin", smiles="CC(=O)OC1=C(C=CC=C1)C(O)=O",
@@ -571,7 +571,7 @@ def compute_consensus(candidates: Dict[str, Optional[Dict[str, Any]]]) -> Tuple[
         - per-source agreement with the winner, the winner itself scoring 1.0;
         - the mean of those scores, which is what becomes ``confidence``.
 
-    Example:
+    Examples:
         >>> a = make_candidate("ChEBI", smiles="CC(=O)Oc1ccccc1C(=O)O")
         >>> b = make_candidate("CompTox", smiles="CC(=O)Oc1ccccc1C(=O)O")
         >>> source, scores, overall = compute_consensus({"chebi": a, "comptox": b})
@@ -626,7 +626,7 @@ def candidate_from_chebi_row(row: Dict[str, Any]) -> Dict[str, Any]:
         The candidate record. ChEBI states no mass, so the mass comes from
         RDKit via :func:`make_candidate`.
 
-    Example:
+    Examples:
         >>> from provesid import ChebiSDF
         >>> row = ChebiSDF().get_compound_by_id("CHEBI:15365")   # doctest: +SKIP
         >>> cand = candidate_from_chebi_row(row)                 # doctest: +SKIP
@@ -656,7 +656,7 @@ def candidate_from_comptox_row(row: Dict[str, Any]) -> Dict[str, Any]:
         The candidate record, carrying the DTXSID and preferring the average
         mass over the monoisotopic one.
 
-    Example:
+    Examples:
         >>> from provesid import CompToxID
         >>> cand = candidate_from_comptox_row(CompToxID().get_by_casrn("50-78-2"))  # doctest: +SKIP
         >>> cand["DTXSID"], cand["molecular_mass"]               # doctest: +SKIP
@@ -686,7 +686,7 @@ def candidate_from_pubchem_row(row: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         The candidate record.
 
-    Example:
+    Examples:
         >>> from provesid import PubChemID
         >>> cand = candidate_from_pubchem_row(PubChemID().get_by_cid(2244))  # doctest: +SKIP
         >>> cand["name"], cand["molecular_mass"], cand["CAS_candidates"]     # doctest: +SKIP
@@ -722,7 +722,7 @@ def candidate_from_zeropm_name_table(name: str, table: pd.DataFrame) -> Optional
     Returns:
         The candidate record, or None when the table is empty or None.
 
-    Example:
+    Examples:
         >>> table = pd.DataFrame({"rank": [2, 1],
         ...                       "inchi": ["InChI=1S/CH4/h1H4", "InChI=1S/CH2O/c1-2/h1H2"],
         ...                       "inchikey": ["VNWKTOKETHGBQD-UHFFFAOYSA-N", "WSFSSNUMVMOOMR-UHFFFAOYSA-N"],
@@ -784,7 +784,7 @@ def candidate_from_zeropm_smiles(smiles_query: str, zeropm: ZeroPM) -> Optional[
         there is one: the pooled CAS numbers include relatives, and for
         ``"CCO"`` the first is 13C-labelled ethanol.
 
-    Example:
+    Examples:
         >>> from provesid import ZeroPM
         >>> cand = candidate_from_zeropm_smiles("CCO", ZeroPM())  # doctest: +SKIP
         >>> cand["InChIKey"], "64-17-5" in cand["CAS_candidates"]  # doctest: +SKIP
@@ -841,7 +841,7 @@ def candidate_from_chembl_row(row: Dict[str, Any], chembl: Optional[CheMBL] = No
     Returns:
         The candidate record. ChEMBL states no formula.
 
-    Example:
+    Examples:
         >>> row = {"pref_name": "ASPIRIN", "canonical_smiles": "CC(=O)Oc1ccccc1C(=O)O",
         ...        "standard_inchi_key": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
         ...        "synonyms": ["Aspirin", "50-78-2"]}
@@ -890,7 +890,7 @@ def candidate_from_pubchem_online(
     Returns:
         The candidate record, with source ``"PubChem (online)"``.
 
-    Example:
+    Examples:
         >>> cand = candidate_from_pubchem_online(
         ...     {"CID": 2244, "Title": "Aspirin", "SMILES": "CC(=O)OC1=CC=CC=C1C(=O)O",
         ...      "MolecularWeight": "180.16"},
@@ -928,7 +928,7 @@ def candidate_from_cactus(smiles: str, names: Optional[List[str]] = None) -> Dic
     Returns:
         The candidate record, with source ``"CACTUS"``.
 
-    Example:
+    Examples:
         >>> cand = candidate_from_cactus("CC(=O)Oc1ccccc1C(O)=O", ["Aspirin", "50-78-2"])
         >>> cand["source"], cand["name"], cand["CAS_candidates"]
         ('CACTUS', 'Aspirin', ['50-78-2'])
@@ -963,7 +963,7 @@ def smiles_to_canonical_and_mass(smiles: Optional[str]) -> Tuple[Optional[str], 
         uncanonicalised structure still matches an identical string from
         another source.
 
-    Example:
+    Examples:
         >>> smiles, mass = smiles_to_canonical_and_mass("OCC")
         >>> smiles, round(mass, 3)
         ('CCO', 46.069)

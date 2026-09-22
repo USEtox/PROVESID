@@ -60,7 +60,7 @@ class ChEMBLError(Exception):
     Raised for a database that is missing and may not be fetched, or that
     cannot be built or verified.
 
-    Example:
+    Examples:
         >>> CheMBL.compact(CheMBL().db_path)     # the installed file is an extract
         Traceback (most recent call last):
         ...

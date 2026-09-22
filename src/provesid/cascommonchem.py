@@ -10,7 +10,7 @@ free API key, sent in the ``X-API-KEY`` header; see
 The lookups report failure in the dict they return (``found`` False and a
 ``status``) rather than raising, and are cached only when they succeed.
 
-Example:
+Examples:
     >>> from provesid.cascommonchem import CASCommonChem
     >>> cas = CASCommonChem(api_key="your-cas-api-key")          # doctest: +SKIP
     >>> result = cas.cas_to_detail("7732-18-5")                  # doctest: +SKIP
@@ -43,7 +43,7 @@ class CASCommonChemError(ServiceError):
     and report the failure in the ``status`` key of the dict they return ---
     the contract those methods have always had.
 
-    Example:
+    Examples:
         >>> issubclass(CASCommonChemNotFoundError, CASCommonChemError)
         True
     """
@@ -54,7 +54,7 @@ class CASCommonChemNotFoundError(CASCommonChemError, NotFoundError):
     """
     CAS answered, and its answer was that there is no such substance.
 
-    Example:
+    Examples:
         >>> issubclass(CASCommonChemNotFoundError, NotFoundError)
         True
     """
@@ -65,7 +65,7 @@ class CASCommonChemTimeoutError(CASCommonChemError, ServiceTimeoutError):
     """
     Every attempt timed out or the connection could not be made.
 
-    Example:
+    Examples:
         >>> issubclass(CASCommonChemTimeoutError, ServiceTimeoutError)
         True
     """
@@ -90,7 +90,7 @@ def _lookup_failed(result: Any) -> bool:
     Returns:
         True unless the result is a dict that reports ``found`` as True.
 
-    Example:
+    Examples:
         >>> _lookup_failed({"found": False, "status": "Timeout"})
         True
         >>> _lookup_failed({"found": True, "rn": "7732-18-5"})
@@ -110,7 +110,7 @@ class CASCommonChem:
     Raises:
         ValueError: At construction, when no API key can be found.
 
-    Example:
+    Examples:
         >>> cas = CASCommonChem(api_key="your-cas-api-key")
         >>> cas.base_url
         'https://commonchemistry.cas.org/api'
@@ -188,7 +188,7 @@ class CASCommonChem:
         Returns:
             The string to put in the ``status`` key of the returned dict.
 
-        Example:
+        Examples:
             >>> cas = CASCommonChem.__new__(CASCommonChem)
             >>> cas.responses = {200: "Success", 404: "Invalid Request"}
             >>> cas._failure_status(CASCommonChemError("x", status_code=401))
@@ -231,7 +231,7 @@ class CASCommonChem:
             Tuple of the class path, the configured base URL and
             :attr:`CACHE_SCHEMA_VERSION`.
 
-        Example:
+        Examples:
             >>> cas = CASCommonChem.__new__(CASCommonChem)
             >>> cas.base_url = "https://commonchemistry.cas.org/api"
             >>> cas.__cache_key__()
@@ -318,7 +318,7 @@ class CASCommonChem:
             is raised: every failure is reported in ``found`` and ``status``,
             and is not cached.
 
-        Example:
+        Examples:
             >>> cas = CASCommonChem(api_key="your-cas-api-key")
             >>> result = cas.cas_to_detail("7732-18-5")          # doctest: +SKIP
             >>> result["found"], result["rn"]                    # doctest: +SKIP
@@ -366,7 +366,7 @@ class CASCommonChem:
             ``"Not found"`` when the search finds nothing. Two requests: a
             search, then a detail lookup.
 
-        Example:
+        Examples:
             >>> cas = CASCommonChem(api_key="your-cas-api-key")
             >>> cas.name_to_detail("aspirin")["rn"]              # doctest: +SKIP
             '50-78-2'
@@ -416,7 +416,7 @@ class CASCommonChem:
         Returns:
             Dictionary with compound details, as :meth:`name_to_detail`.
 
-        Example:
+        Examples:
             >>> cas = CASCommonChem(api_key="your-cas-api-key")
             >>> cas.smiles_to_detail("CCO")["rn"]                # doctest: +SKIP
             '64-17-5'
@@ -429,7 +429,7 @@ class CASCommonChem:
 
         The same as ``provesid.clear_cache(service='cas')``.
 
-        Example:
+        Examples:
             >>> cas = CASCommonChem(api_key="your-cas-api-key")
             >>> cas.clear_cache()
             >>> cas.get_cache_info()['file_count']
@@ -443,10 +443,10 @@ class CASCommonChem:
         Size and location of the CAS Common Chemistry cache.
 
         Returns:
-            dict: As :func:`provesid.cache.get_cache_info` reports it for
-            ``service='cas'``.
+            The statistics :func:`provesid.cache.get_cache_info` reports for
+                ``service='cas'``.
 
-        Example:
+        Examples:
             >>> CASCommonChem(api_key="your-cas-api-key").get_cache_info()['cache_directory'].endswith('cas')
             True
         """

@@ -2,7 +2,7 @@
 Small helpers shared across PROVESID: CAS number checking and the
 directories where datasets and cached responses live.
 
-Example:
+Examples:
     >>> from provesid.utils import check_CASRN
     >>> check_CASRN("50-78-2"), check_CASRN("50-78-3")
     (True, False)
@@ -31,7 +31,7 @@ def check_CASRN(cas_rn: str):
     Returns:
         bool: True when the format is right and the check digit agrees.
 
-    Example:
+    Examples:
         >>> check_CASRN("50-78-2")
         True
         >>> check_CASRN("001-16-2")     # a malformed number PubChem lists for aspirin
@@ -71,7 +71,7 @@ def data_path():
     Returns:
         str: Absolute path to ``provesid/data``.
 
-    Example:
+    Examples:
         >>> os.path.basename(data_path())
         'data'
     """
@@ -95,7 +95,7 @@ def user_dataset_path(*parts: str, ensure_exists: bool = True) -> str:
     Returns:
         Absolute path to the requested dataset directory.
 
-    Example:
+    Examples:
         >>> user_dataset_path("chebifier", ensure_exists=False).endswith("chebifier")
         True
     """
@@ -136,7 +136,7 @@ def user_cache_path(*parts: str, ensure_exists: bool = True) -> str:
     Returns:
         Absolute path to the requested cache directory.
 
-    Example:
+    Examples:
         >>> user_cache_path("pubchem", ensure_exists=False).endswith("pubchem")
         True
     """

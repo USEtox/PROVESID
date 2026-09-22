@@ -50,7 +50,7 @@ measures the same.  A pool pays when each item also does something slower ---
 a request, a file read, an RDKit call: 400 lookups each followed by 20 ms of
 waiting took 8.52 s serially and 1.17 s on eight threads.
 
-Example:
+Examples:
     >>> from provesid import PubChemID
     >>> with PubChemID() as db:                      # doctest: +SKIP
     ...     row = db.get_by_cas("50-00-0")
@@ -86,7 +86,7 @@ class DatabaseClosedError(RuntimeError):
     the database path so the message says which client was closed and which
     file it was reading.
 
-    Example:
+    Examples:
         >>> client = SQLiteClient()
         >>> _ = client._open_database(":memory:")
         >>> client.close()
@@ -114,7 +114,7 @@ class SQLiteClient:
             ``execute`` and then ``fetchone`` as two statements.
         closed (bool): True once :meth:`close` has run.
 
-    Example:
+    Examples:
         >>> class Tiny(SQLiteClient):
         ...     def __init__(self, path):
         ...         self._open_database(path)
@@ -210,7 +210,7 @@ class SQLiteClient:
             db_path: What to report as :attr:`db_file`, and what any other
                 thread would open.
 
-        Example:
+        Examples:
             >>> import sqlite3
             >>> client = object.__new__(SQLiteClient)    # skips any __init__
             >>> client._adopt_connection(sqlite3.connect(":memory:"))
@@ -295,7 +295,7 @@ class SQLiteClient:
         Raises:
             DatabaseClosedError: If the client has been closed.
 
-        Example:
+        Examples:
             >>> import os, sqlite3, tempfile
             >>> path = os.path.join(tempfile.mkdtemp(), "demo.db")
             >>> sqlite3.connect(path).executescript("CREATE TABLE t (x); INSERT INTO t VALUES (1), (2);")  # doctest: +ELLIPSIS
@@ -325,7 +325,7 @@ class SQLiteClient:
         Raises:
             DatabaseClosedError: If the client has been closed.
 
-        Example:
+        Examples:
             >>> import os, sqlite3, tempfile
             >>> path = os.path.join(tempfile.mkdtemp(), "demo.db")
             >>> sqlite3.connect(path).executescript("CREATE TABLE t (x); INSERT INTO t VALUES (1), (2);")  # doctest: +ELLIPSIS
@@ -357,7 +357,7 @@ class SQLiteClient:
             True as well for a client whose constructor failed before it
             reached :meth:`_open_database`, since such an object owns nothing.
 
-        Example:
+        Examples:
             >>> client = SQLiteClient()
             >>> client.closed                  # never opened anything
             True
@@ -374,7 +374,7 @@ class SQLiteClient:
         Returns:
             str | None: The path passed to :meth:`_open_database`.
 
-        Example:
+        Examples:
             >>> client = SQLiteClient()
             >>> client.db_file is None
             True
@@ -402,7 +402,7 @@ class SQLiteClient:
         alternative --- refusing to close, or blocking until the workers
         finish --- makes ``with`` unable to guarantee anything.
 
-        Example:
+        Examples:
             >>> client = SQLiteClient()
             >>> _ = client._open_database(":memory:")
             >>> client.close()

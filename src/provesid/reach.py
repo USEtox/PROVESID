@@ -39,7 +39,7 @@ class REACHDossierID:
     Records are dicts keyed by the sheet's own column names, available as the
     ``COL_*`` attributes.
 
-    Example:
+    Examples:
         >>> reach = REACHDossierID()
         >>> reach.cas_to_inventory_number("50-00-0")
         ['200-001-8']
@@ -81,7 +81,7 @@ class REACHDossierID:
             FileNotFoundError: If the Excel file does not exist.
             RuntimeError: If the workbook cannot be parsed or required columns are missing.
 
-        Example:
+        Examples:
             >>> reach = REACHDossierID()
             >>> os.path.basename(reach.excel_path), len(reach.df)
             ('reach_study_results-dossier_info_23-05-2023.xlsx', 26862)
@@ -312,7 +312,7 @@ class REACHDossierID:
             ``cas``, ``inventory_number``, ``substance_name`` and
             ``iupac_name``.
 
-        Example:
+        Examples:
             >>> stats = REACHDossierID().get_stats()
             >>> stats["total_rows"], stats["rows_with_cas"]
             (26862, 21211)
@@ -336,7 +336,7 @@ class REACHDossierID:
         Returns:
             dict | None: Matching record or None if not found.
 
-        Example:
+        Examples:
             >>> REACHDossierID().get_by_dossier_uuid("6504c871-0c9e-49f0-9e3b-62bdf078283a")
             {'DOSSIER UUID': '6504c871-0c9e-49f0-9e3b-62bdf078283a', 'NAME_SUBSTANCE': 'Formaldehyde', 'CAS_NUMBER_ref_sub': '50-00-0', 'NUMBER_IN_INVENTORY_ref_sub': '200-001-8', 'IUPAC_NAME_ref_sub': 'formaldehyde'}
         """
@@ -357,7 +357,7 @@ class REACHDossierID:
         Returns:
             list[dict]: Matching records, one per dossier.
 
-        Example:
+        Examples:
             >>> rows = REACHDossierID().get_by_cas("50-00-0")
             >>> len(rows), rows[0]["NAME_SUBSTANCE"]
             (2, 'Formaldehyde')
@@ -378,7 +378,7 @@ class REACHDossierID:
         Returns:
             list[dict]: Matching records, one per dossier.
 
-        Example:
+        Examples:
             >>> [row["CAS_NUMBER_ref_sub"] for row in REACHDossierID().get_by_inventory_number("200-001-8")]
             ['50-00-0', '50-00-0']
         """
@@ -407,7 +407,7 @@ class REACHDossierID:
             list[dict]: Matching records, in sheet order. Whitespace runs are
             collapsed before matching.
 
-        Example:
+        Examples:
             >>> reach = REACHDossierID()
             >>> [row["NAME_SUBSTANCE"] for row in reach.get_by_name("FORMALDEHYDE", exact=True)]
             ['Formaldehyde', 'Formaldehyde']
@@ -446,7 +446,7 @@ class REACHDossierID:
         Returns:
             list[dict]: Matching records, in sheet order.
 
-        Example:
+        Examples:
             >>> rows = REACHDossierID().get_by_iupac_name("formaldehyde", exact=True)
             >>> [row["CAS_NUMBER_ref_sub"] for row in rows]
             ['50-00-0', '50-00-0']
@@ -475,7 +475,7 @@ class REACHDossierID:
         Returns:
             str | None: CAS number if found and non-empty.
 
-        Example:
+        Examples:
             >>> REACHDossierID().dossier_uuid_to_cas("6504c871-0c9e-49f0-9e3b-62bdf078283a")
             '50-00-0'
         """
@@ -495,7 +495,7 @@ class REACHDossierID:
         Returns:
             str | None: Inventory number if found and non-empty.
 
-        Example:
+        Examples:
             >>> REACHDossierID().dossier_uuid_to_inventory_number("6504c871-0c9e-49f0-9e3b-62bdf078283a")
             '200-001-8'
         """
@@ -515,7 +515,7 @@ class REACHDossierID:
         Returns:
             str | None: Substance name if found and non-empty.
 
-        Example:
+        Examples:
             >>> REACHDossierID().dossier_uuid_to_name("6504c871-0c9e-49f0-9e3b-62bdf078283a")
             'Formaldehyde'
         """
@@ -536,7 +536,7 @@ class REACHDossierID:
             list[str]: Dossier UUID values. Distinct and non-empty, in sheet order; empty
             when nothing matches.
 
-        Example:
+        Examples:
             >>> REACHDossierID().cas_to_dossier_uuid("50-00-0")
             ['6504c871-0c9e-49f0-9e3b-62bdf078283a', '7d2fc287-88f7-49b3-87a2-258c60a3d6ca']
         """
@@ -554,7 +554,7 @@ class REACHDossierID:
             list[str]: Inventory number values. Distinct and non-empty, in sheet order; empty
             when nothing matches.
 
-        Example:
+        Examples:
             >>> REACHDossierID().cas_to_inventory_number("50-00-0")
             ['200-001-8']
         """
@@ -572,7 +572,7 @@ class REACHDossierID:
             list[str]: Substance names. Distinct and non-empty, in sheet order; empty
             when nothing matches.
 
-        Example:
+        Examples:
             >>> REACHDossierID().cas_to_name("50-00-0")
             ['Formaldehyde']
         """
@@ -590,7 +590,7 @@ class REACHDossierID:
             list[str]: CAS values. Distinct and non-empty, in sheet order; empty
             when nothing matches.
 
-        Example:
+        Examples:
             >>> REACHDossierID().inventory_number_to_cas("200-001-8")
             ['50-00-0']
         """
@@ -608,7 +608,7 @@ class REACHDossierID:
             list[str]: Dossier UUID values. Distinct and non-empty, in sheet order; empty
             when nothing matches.
 
-        Example:
+        Examples:
             >>> REACHDossierID().inventory_number_to_dossier_uuid("200-001-8")
             ['6504c871-0c9e-49f0-9e3b-62bdf078283a', '7d2fc287-88f7-49b3-87a2-258c60a3d6ca']
         """
@@ -628,7 +628,7 @@ class REACHDossierID:
             list[str]: CAS values, distinct, from the first ``limit`` matching
             records.
 
-        Example:
+        Examples:
             >>> REACHDossierID().name_to_cas("formaldehyde", exact=True)
             ['50-00-0']
         """
@@ -653,7 +653,7 @@ class REACHDossierID:
             list[str]: Dossier UUID values, distinct, from the first ``limit``
             matching records.
 
-        Example:
+        Examples:
             >>> REACHDossierID().name_to_dossier_uuid("formaldehyde", exact=True)
             ['6504c871-0c9e-49f0-9e3b-62bdf078283a', '7d2fc287-88f7-49b3-87a2-258c60a3d6ca']
         """

@@ -43,7 +43,7 @@ hand-written ``if client is not None: try: ... except: log`` block, 47 of
 them in nine methods.  Adding a source meant editing every one.
 It now means adding a column here.
 
-Example:
+Examples:
     >>> from provesid import PubChemID
     >>> from provesid.sources import LOOKUPS, Query
     >>> lookup = LOOKUPS["cas"]["pubchem"]
@@ -110,7 +110,7 @@ class Query:
         fuzzy_cutoff: Score cut-off in [0, 100] that ZeroPM's fuzzy name
             retrieval applies; only ``fuzzy_name`` reads it.
 
-    Example:
+    Examples:
         >>> Query("50-78-2").label
         '50-78-2'
         >>> Query("BSYNRYMUTXBXSQ-UHFFFAOYSA-N", label="DTXSID5020108").label
@@ -172,7 +172,7 @@ def rank_rows_by_completeness(rows: Optional[List[Dict[str, Any]]]) -> List[Dict
     Returns:
         A new list ordered by descending completeness; stable for ties.
 
-    Example:
+    Examples:
         >>> rank_rows_by_completeness([{"a": 1, "b": None}, {"a": 1, "b": 2}])
         [{'a': 1, 'b': 2}, {'a': 1, 'b': None}]
     """
@@ -199,7 +199,7 @@ def comptox_skeleton_search(comptox: Any, skeleton: str) -> List[Dict[str, Any]]
     Returns:
         Up to 20 matching rows; empty on a miss or a failed query (logged).
 
-    Example:
+    Examples:
         >>> from provesid import CompToxID
         >>> rows = comptox_skeleton_search(CompToxID(), "BSYNRYMUTXBXSQ")
         >>> "BSYNRYMUTXBXSQ-UHFFFAOYSA-N" in [row["INCHIKEY"] for row in rows]
@@ -227,7 +227,7 @@ def pubchem_skeleton_search(pubchem: Any, skeleton: str) -> List[Dict[str, Any]]
     Returns:
         Up to 20 matching rows; empty on a miss or a failed query (logged).
 
-    Example:
+    Examples:
         >>> from provesid import PubChemID
         >>> rows = pubchem_skeleton_search(PubChemID(), "BSYNRYMUTXBXSQ")
         >>> 2244 in [row["cid"] for row in rows]
@@ -259,7 +259,7 @@ def chebi_skeleton_search(chebi: Any, skeleton: str) -> List[Dict[str, Any]]:
         A scan of the whole InChIKey index, since it is a dict; a few tenths
         of a second.
 
-    Example:
+    Examples:
         >>> from provesid import ChebiSDF
         >>> [c["ChEBI ID"] for c in chebi_skeleton_search(ChebiSDF(), "BSYNRYMUTXBXSQ")]
         ['CHEBI:13719', 'CHEBI:15365']

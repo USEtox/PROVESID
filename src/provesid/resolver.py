@@ -12,7 +12,7 @@ instead of raising.
 Every call needs the network. :class:`~provesid.search.Search` asks CACTUS
 only when its offline sources cannot answer and ``online_fallback`` allows.
 
-Example:
+Examples:
     >>> from provesid.resolver import NCIChemicalIdentifierResolver, nci_get_formula
     >>> resolver = NCIChemicalIdentifierResolver()
     >>> resolver.resolve("CCO", "stdinchikey")                 # doctest: +SKIP
@@ -45,7 +45,7 @@ class NCIResolverError(ServiceError):
     The base of the two below, and raised on its own for an empty identifier
     or a failure that outlived the retries.
 
-    Example:
+    Examples:
         >>> NCIChemicalIdentifierResolver().resolve("  ", "smiles")
         Traceback (most recent call last):
         ...
@@ -61,7 +61,7 @@ class NCIResolverNotFoundError(NCIResolverError, NotFoundError):
     :func:`nci_classify` reads the body so that it is not retried as a
     server fault.
 
-    Example:
+    Examples:
         >>> NCIChemicalIdentifierResolver().resolve(
         ...     "this_is_definitely_not_a_chemical_12345", "smiles")  # doctest: +SKIP
         Traceback (most recent call last):
@@ -77,7 +77,7 @@ class NCIResolverTimeoutError(NCIResolverError, ServiceTimeoutError):
     Raised after every attempt timed out or failed to connect. Also a
     :class:`~provesid.http.ServiceTimeoutError`.
 
-    Example:
+    Examples:
         >>> issubclass(NCIResolverTimeoutError, ServiceTimeoutError)
         True
     """
@@ -109,7 +109,7 @@ def nci_classify(response: requests.Response) -> Outcome:
         body is CACTUS's not-found page; otherwise whatever
         :func:`~provesid.http.default_classify` says.
 
-    Example:
+    Examples:
         >>> class R:
         ...     status_code = 500
         ...     text = '<h1>Page not found (404)</h1>'
@@ -141,7 +141,7 @@ class NCIChemicalIdentifierResolver:
     Answers come back as CACTUS writes them: text, several values one per
     line (``names``, ``cas``), InChIKeys with their ``InChIKey=`` prefix.
 
-    Example:
+    Examples:
         >>> resolver = NCIChemicalIdentifierResolver()
         >>> resolver.resolve('CCO', 'stdinchi')                  # doctest: +SKIP
         'InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3'
@@ -163,7 +163,7 @@ class NCIChemicalIdentifierResolver:
             use_cache: Whether to use cache for lookups (default: True).
                       When False, skips cache lookup but still stores results.
 
-        Example:
+        Examples:
             >>> resolver = NCIChemicalIdentifierResolver(timeout=60, pause_time=0.5)
             >>> resolver.timeout, resolver.pause_time
             (60, 0.5)
@@ -238,7 +238,7 @@ class NCIChemicalIdentifierResolver:
 
         The same as ``provesid.clear_cache(service='nci')``.
 
-        Example:
+        Examples:
             >>> resolver = NCIChemicalIdentifierResolver()
             >>> resolver.clear_cache()
             >>> resolver.get_cache_info()['file_count']
@@ -247,15 +247,15 @@ class NCIChemicalIdentifierResolver:
         from .cache import clear_cache
         clear_cache(service='nci')
 
-    def get_cache_info(self):
+    def get_cache_info(self) -> Dict[str, Any]:
         """
         Size and location of the CACTUS cache.
 
         Returns:
-            dict: As :func:`provesid.cache.get_cache_info` reports it for
-            ``service='nci'``.
+            The statistics :func:`provesid.cache.get_cache_info` reports for
+                ``service='nci'``.
 
-        Example:
+        Examples:
             >>> NCIChemicalIdentifierResolver().get_cache_info()['cache_directory'].endswith('nci')
             True
         """
@@ -269,7 +269,7 @@ class NCIChemicalIdentifierResolver:
         Delegates to the shared transport, which paces every request it makes
         including retries.
 
-        Example:
+        Examples:
             >>> NCIChemicalIdentifierResolver(pause_time=0)._rate_limit()
         """
         self._http.rate_limit()
@@ -283,7 +283,7 @@ class NCIChemicalIdentifierResolver:
         down, and the new value takes effect on the next request, retries
         included.
 
-        Example:
+        Examples:
             >>> r = NCIChemicalIdentifierResolver()
             >>> r.pause_time
             0.1
@@ -306,7 +306,7 @@ class NCIChemicalIdentifierResolver:
         Returns:
             Seconds since the epoch, or 0.0 before the first request.
 
-        Example:
+        Examples:
             >>> NCIChemicalIdentifierResolver().last_request_time
             0.0
         """
@@ -348,7 +348,7 @@ class NCIChemicalIdentifierResolver:
         Returns:
             Complete URL string
 
-        Example:
+        Examples:
             >>> NCIChemicalIdentifierResolver()._build_url("C/C=C/C", "stdinchikey")
             'https://cactus.nci.nih.gov/chemical/structure/C/C%3DC/C/stdinchikey'
         """
@@ -386,7 +386,7 @@ class NCIChemicalIdentifierResolver:
             NCIResolverError: For other resolver errors, and for an empty
                 identifier
 
-        Example:
+        Examples:
             >>> resolver = NCIChemicalIdentifierResolver()
             >>> resolver.resolve("50-00-0", "smiles")              # doctest: +SKIP
             'C=O'
@@ -415,7 +415,7 @@ class NCIChemicalIdentifierResolver:
         Returns:
             List of available representation keys
 
-        Example:
+        Examples:
             >>> NCIChemicalIdentifierResolver().get_available_representations()[:4]
             ['stdinchi', 'stdinchikey', 'smiles', 'ficts']
         """
@@ -434,7 +434,7 @@ class NCIChemicalIdentifierResolver:
             Dictionary mapping representation to resolved value; None for a
             representation that failed, with a warning
 
-        Example:
+        Examples:
             >>> NCIChemicalIdentifierResolver().resolve_multiple(
             ...     "ethanol", ["formula", "mw"])                     # doctest: +SKIP
             {'formula': 'C2H6O', 'mw': '46.0688'}
@@ -469,7 +469,7 @@ class NCIChemicalIdentifierResolver:
             ``formula``, ``ficts``, ``ficus``, ``uuuuu``, ``hashisy``), None
             where it failed. Twelve requests.
 
-        Example:
+        Examples:
             >>> data = NCIChemicalIdentifierResolver().get_molecular_data("50-00-0")  # doctest: +SKIP
             >>> data["success"], data["formula"], data["mw"], data["smiles"]          # doctest: +SKIP
             (True, 'CH2O', 30.0262, 'C=O')
@@ -553,7 +553,7 @@ class NCIChemicalIdentifierResolver:
             URL for the structure image. Builds the URL only; nothing is
             requested.
 
-        Example:
+        Examples:
             >>> NCIChemicalIdentifierResolver().get_image_url("aspirin", "png", 300, 300)
             'https://cactus.nci.nih.gov/chemical/structure/aspirin/image?format=png&width=300&height=300'
         """
@@ -587,7 +587,7 @@ class NCIChemicalIdentifierResolver:
         Returns:
             True if download successful, False otherwise
 
-        Example:
+        Examples:
             >>> r = NCIChemicalIdentifierResolver()
             >>> r.download_image('aspirin', 'aspirin.png', 'png')   # doctest: +SKIP
             True
@@ -617,7 +617,7 @@ class NCIChemicalIdentifierResolver:
         Returns:
             Dictionary mapping identifier to resolved value (None if failed)
 
-        Example:
+        Examples:
             >>> NCIChemicalIdentifierResolver().batch_resolve(
             ...     ["ethanol", "methanol"], "formula")              # doctest: +SKIP
             {'ethanol': 'C2H6O', 'methanol': 'CH4O'}
@@ -645,7 +645,7 @@ class NCIChemicalIdentifierResolver:
             True if identifier can be resolved, False otherwise. A failed
             request also reads as False.
 
-        Example:
+        Examples:
             >>> resolver = NCIChemicalIdentifierResolver()
             >>> resolver.is_valid_identifier("aspirin")                 # doctest: +SKIP
             True
@@ -673,7 +673,7 @@ class NCIChemicalIdentifierResolver:
             List of matching names (may be empty): the ``names`` of the
             compound the text resolves to as a whole
 
-        Example:
+        Examples:
             >>> NCIChemicalIdentifierResolver().search_by_partial_name("aspirin")[:2]  # doctest: +SKIP
             ['2-acetyloxybenzoic acid', '2-Acetoxybenzoic acid']
         """
@@ -700,7 +700,7 @@ def nci_cas_to_mol(cas_rn: str) -> Dict[str, Any]:
         Dictionary with molecular data, as
         :meth:`NCIChemicalIdentifierResolver.get_molecular_data` returns it
 
-    Example:
+    Examples:
         >>> nci_cas_to_mol("64-17-5")["formula"]                 # doctest: +SKIP
         'C2H6O'
     """
@@ -719,7 +719,7 @@ def nci_id_to_mol(identifier: str) -> Dict[str, Any]:
         Dictionary with molecular data, as
         :meth:`NCIChemicalIdentifierResolver.get_molecular_data` returns it
 
-    Example:
+    Examples:
         >>> nci_id_to_mol("CCO")["stdinchikey"]                  # doctest: +SKIP
         'InChIKey=LFQSCWFLJHTTHZ-UHFFFAOYSA-N'
     """
@@ -744,7 +744,7 @@ def nci_resolver(input_value: str, output_type: str, timeout: int = 30) -> Optio
     Raises:
         ValueError: If ``output_type`` is not a supported representation.
 
-    Example:
+    Examples:
         >>> nci_resolver("ethanol", "stdinchikey")                # doctest: +SKIP
         'InChIKey=LFQSCWFLJHTTHZ-UHFFFAOYSA-N'
     """
@@ -765,7 +765,7 @@ def nci_smiles_to_names(smiles: str) -> List[str]:
     Returns:
         List of chemical names, CAS numbers among them; empty if not found
 
-    Example:
+    Examples:
         >>> nci_smiles_to_names("CCO")[:3]                        # doctest: +SKIP
         ['ethanol', '121182-78-3', '64-17-5']
     """
@@ -787,7 +787,7 @@ def nci_name_to_smiles(name: str) -> Optional[str]:
     Returns:
         SMILES string or None if not found
 
-    Example:
+    Examples:
         >>> nci_name_to_smiles("caffeine")                        # doctest: +SKIP
         'Cn1cnc2N(C)C(=O)N(C)C(=O)c12'
     """
@@ -808,7 +808,7 @@ def nci_inchi_to_smiles(inchi: str) -> Optional[str]:
     Returns:
         SMILES string or None if not found
 
-    Example:
+    Examples:
         >>> nci_inchi_to_smiles("InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3")  # doctest: +SKIP
         'CCO'
     """
@@ -829,7 +829,7 @@ def nci_cas_to_inchi(cas_rn: str) -> Optional[str]:
     Returns:
         Standard InChI string or None if not found
 
-    Example:
+    Examples:
         >>> nci_cas_to_inchi("50-00-0")                           # doctest: +SKIP
         'InChI=1S/CH2O/c1-2/h1H2'
     """
@@ -850,7 +850,7 @@ def nci_get_molecular_weight(identifier: str) -> Optional[float]:
     Returns:
         Molecular weight as float or None if not found
 
-    Example:
+    Examples:
         >>> nci_get_molecular_weight("caffeine")                  # doctest: +SKIP
         194.1926
     """
@@ -872,7 +872,7 @@ def nci_get_formula(identifier: str) -> Optional[str]:
     Returns:
         Molecular formula string or None if not found
 
-    Example:
+    Examples:
         >>> nci_get_formula("caffeine")                           # doctest: +SKIP
         'C8H10N4O2'
     """

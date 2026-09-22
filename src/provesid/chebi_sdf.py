@@ -8,7 +8,7 @@ ID, name, synonym, InChIKey, formula and cross-reference with no network.
 
 The online ChEBI 2.0 REST client lives in :mod:`provesid.chebi`.
 
-Example:
+Examples:
     >>> from provesid import ChebiSDF
     >>> chebi = ChebiSDF()                              # doctest: +SKIP
     >>> chebi.get_compound_by_id("CHEBI:15377")['ChEBI NAME']   # doctest: +SKIP
@@ -46,7 +46,7 @@ class ChebiSDF:
         sdf_path (str): Path to ChEBI SDF file
         index (dict): In-memory index for fast lookups
 
-    Example:
+    Examples:
         >>> chebi_sdf = ChebiSDF()
         >>> compound = chebi_sdf.get_compound_by_id("CHEBI:15377")
         >>> print(compound['ChEBI NAME'])
@@ -148,7 +148,7 @@ class ChebiSDF:
             gzip.BadGzipFile: If the archive is damaged -- gzip's CRC and
                 length trailer catch a truncated transfer for free
 
-        Example:
+        Examples:
             >>> chebi_sdf = ChebiSDF(auto_download=False)   # doctest: +SKIP
             >>> chebi_sdf.download_sdf()                    # doctest: +SKIP
         """
@@ -441,7 +441,7 @@ class ChebiSDF:
         Returns:
             dict: Compound data, or None if not found
 
-        Example:
+        Examples:
             >>> chebi_sdf = ChebiSDF()
             >>> water = chebi_sdf.get_compound_by_id("CHEBI:15377")
             >>> print(water['ChEBI NAME'])
@@ -468,7 +468,7 @@ class ChebiSDF:
         Returns:
             list: List of matching compound data
 
-        Example:
+        Examples:
             >>> chebi_sdf = ChebiSDF()
             >>> results = chebi_sdf.search_by_name("water")
             >>> print(len(results))
@@ -507,7 +507,7 @@ class ChebiSDF:
             list: List of matching compound data. A partial match returns each
             compound once, in no particular order.
 
-        Example:
+        Examples:
             >>> sdf = ChebiSDF()
             >>> [c["ChEBI ID"] for c in sdf.search_by_synonym("aspirin")]
             ['CHEBI:15365']
@@ -545,7 +545,7 @@ class ChebiSDF:
         Returns:
             dict: Compound data, or None if not found
 
-        Example:
+        Examples:
             >>> ChebiSDF().search_by_inchikey("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")["ChEBI NAME"]
             'acetylsalicylic acid'
         """
@@ -565,7 +565,7 @@ class ChebiSDF:
             dict: Compound data, or None if not found. The match is on the
             exact string.
 
-        Example:
+        Examples:
             >>> ChebiSDF().search_by_inchi("InChI=1S/H2O/h1H2")["ChEBI ID"]
             'CHEBI:15377'
         """
@@ -585,7 +585,7 @@ class ChebiSDF:
             list: List of matching compound data. Only about 29 000 of
             ChEBI's ~192 000 entries carry a CAS number.
 
-        Example:
+        Examples:
             >>> [(c["ChEBI ID"], c["ChEBI NAME"]) for c in ChebiSDF().search_by_cas("7732-18-5")]
             [('CHEBI:15377', 'water'), ('CHEBI:29375', 'diprotium oxide')]
         """
@@ -610,7 +610,7 @@ class ChebiSDF:
             list: List of matching compound data. The formula must be written
             as ChEBI writes it.
 
-        Example:
+        Examples:
             >>> [c["ChEBI NAME"] for c in ChebiSDF().search_by_formula("H2O")]
             ['water', 'diprotium oxide']
         """
@@ -637,7 +637,7 @@ class ChebiSDF:
         Note:
             Reads every record in the file, which takes several seconds.
 
-        Example:
+        Examples:
             >>> three_star = ChebiSDF().filter_by_star_rating(3)  # doctest: +SKIP
             >>> len(three_star), three_star[:2]                   # doctest: +SKIP
             (52903, ['CHEBI:7', 'CHEBI:8'])
@@ -667,7 +667,7 @@ class ChebiSDF:
             list: List of compound data dictionaries, in the order asked;
             IDs not in the file are left out
 
-        Example:
+        Examples:
             >>> found = ChebiSDF().get_compounds_by_ids(["CHEBI:15377", "CHEBI:0", "CHEBI:15365"])
             >>> [c["ChEBI NAME"] for c in found]
             ['water', 'acetylsalicylic acid']
@@ -691,7 +691,7 @@ class ChebiSDF:
         Returns:
             pd.DataFrame: DataFrame with compound data
 
-        Example:
+        Examples:
             >>> chebi_sdf = ChebiSDF()
             >>> df = chebi_sdf.export_to_dataframe(["CHEBI:15377", "CHEBI:16236"])
             >>> print(df[['ChEBI ID', 'ChEBI NAME', 'FORMULA']])
@@ -727,7 +727,7 @@ class ChebiSDF:
             numbers, not compounds --- plus ``unique_formulas``,
             ``indexed_names`` and ``indexed_synonyms``.
 
-        Example:
+        Examples:
             >>> stats = ChebiSDF().get_database_stats()
             >>> stats["total_compounds"] > stats["compounds_with_cas"]
             True

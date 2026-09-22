@@ -10,7 +10,7 @@ OPSIN reads names; it does not look them up. ``"ethanol"`` and
 ``"2-acetyloxybenzoic acid"`` parse, while a trade name such as
 ``"aspirin"`` does not.
 
-Example:
+Examples:
     >>> from provesid.opsin import OPSIN, PYOPSIN
     >>> PYOPSIN().get_std_inchikey("ethanol")                 # doctest: +SKIP
     'LFQSCWFLJHTTHZ-UHFFFAOYSA-N'
@@ -50,7 +50,7 @@ class OPSINError(ServiceError):
     the ``status`` key of the dict they return, which is the contract they have
     always had.
 
-    Example:
+    Examples:
         >>> issubclass(OPSINTimeoutError, OPSINError)
         True
     """
@@ -65,7 +65,7 @@ class OPSINNotFoundError(OPSINError, NotFoundError):
     404, and :func:`opsin_classify` treats that body as the answer rather than
     as absence.
 
-    Example:
+    Examples:
         >>> issubclass(OPSINNotFoundError, NotFoundError)
         True
     """
@@ -76,7 +76,7 @@ class OPSINTimeoutError(OPSINError, ServiceTimeoutError):
     """
     Every attempt timed out or the connection could not be made.
 
-    Example:
+    Examples:
         >>> issubclass(OPSINTimeoutError, ServiceTimeoutError)
         True
     """
@@ -108,7 +108,7 @@ def opsin_classify(response: requests.Response) -> Outcome:
         :attr:`~provesid.http.Outcome.OK` for a 404, whose body is the answer;
         otherwise whatever :func:`~provesid.http.default_classify` says.
 
-    Example:
+    Examples:
         >>> class R: status_code = 404
         >>> opsin_classify(R()).name
         'OK'
@@ -137,7 +137,7 @@ def _not_resolved(result: Any) -> bool:
     Returns:
         True unless the result reports ``status`` as ``"SUCCESS"``.
 
-    Example:
+    Examples:
         >>> _not_resolved({"status": "FAILURE", "message": "uninterpretable"})
         True
         >>> _not_resolved({"status": "SUCCESS", "smiles": "CCO"})
@@ -161,7 +161,7 @@ def _any_not_resolved(results: Any) -> bool:
     Returns:
         True when the list is empty or any entry is not a success.
 
-    Example:
+    Examples:
         >>> _any_not_resolved([{"status": "SUCCESS"}, {"status": "FAILURE"}])
         True
         >>> _any_not_resolved([{"status": "SUCCESS"}])
@@ -185,7 +185,7 @@ class OPSIN:
         base_url: The OPSIN web service endpoint.
         use_cache: Whether lookups are served from the cache.
 
-    Example:
+    Examples:
         >>> OPSIN().base_url
         'https://www.ebi.ac.uk/opsin/ws/'
     """
@@ -198,7 +198,7 @@ class OPSIN:
             use_cache: Whether to use the cache for lookups (default True).
                 When False, skips the cache lookup but still stores results.
 
-        Example:
+        Examples:
             >>> OPSIN(use_cache=False).use_cache
             False
         """
@@ -244,7 +244,7 @@ class OPSIN:
             Tuple of the class path, the configured base URL and
             :attr:`CACHE_SCHEMA_VERSION`.
 
-        Example:
+        Examples:
             >>> OPSIN().__cache_key__()
             ('provesid.opsin.OPSIN', 'https://www.ebi.ac.uk/opsin/ws/', 2)
         """
@@ -257,7 +257,7 @@ class OPSIN:
 
         The same as ``provesid.clear_cache(service='opsin')``.
 
-        Example:
+        Examples:
             >>> opsin = OPSIN()
             >>> opsin.clear_cache()
             >>> opsin.get_cache_info()['file_count']
@@ -270,10 +270,10 @@ class OPSIN:
         Size and location of the OPSIN cache.
 
         Returns:
-            dict: As :func:`provesid.cache.get_cache_info` reports it for
-            ``service='opsin'``.
+            The statistics :func:`provesid.cache.get_cache_info` reports for
+                ``service='opsin'``.
 
-        Example:
+        Examples:
             >>> OPSIN().get_cache_info()['cache_directory'].endswith('opsin')
             True
         """
@@ -299,7 +299,7 @@ class OPSIN:
             ``message`` describes the failure; nothing is raised, and nothing
             is cached.
 
-        Example:
+        Examples:
             >>> OPSIN().get_id("ethanol")["smiles"]        # doctest: +SKIP
             'C(C)O'
             >>> OPSIN().get_id("notachemical")["status"]   # doctest: +SKIP
@@ -370,7 +370,7 @@ class OPSIN:
             ``"FAILURE"`` entry carrying OPSIN's explanation in ``message``,
             not a missing row.
 
-        Example:
+        Examples:
             >>> records = OPSIN().get_id_from_list(["ethanol", "benzene"])  # doctest: +SKIP
             >>> [(r["iupac_name"], r["status"]) for r in records]           # doctest: +SKIP
             [('ethanol', 'SUCCESS'), ('benzene', 'SUCCESS')]
@@ -399,7 +399,7 @@ class PYOPSIN:
     list of strings to match. A name OPSIN cannot parse gives ``""`` and a
     ``RuntimeWarning`` from ``py2opsin``; nothing is raised.
 
-    Example:
+    Examples:
         >>> opsin = PYOPSIN()
         >>> opsin.get_smiles("ethanol")                            # doctest: +SKIP
         'C(C)O'
@@ -414,7 +414,7 @@ class PYOPSIN:
             jar_fpath: Path to an OPSIN jar, or ``"default"`` for the one
                 ``py2opsin`` ships.
 
-        Example:
+        Examples:
             >>> PYOPSIN().jar_fpath
             'default'
         """
@@ -430,7 +430,7 @@ class PYOPSIN:
         Returns:
             The SMILES, or a list of them; ``""`` for a name OPSIN cannot parse.
 
-        Example:
+        Examples:
             >>> PYOPSIN().get_smiles("ethanol")                    # doctest: +SKIP
             'C(C)O'
             >>> PYOPSIN().get_smiles("notachemical12345")          # doctest: +SKIP
@@ -449,7 +449,7 @@ class PYOPSIN:
         Returns:
             The extended SMILES, or a list of them; ``""`` on failure.
 
-        Example:
+        Examples:
             >>> PYOPSIN().get_extended_smiles("ethanol")           # doctest: +SKIP
             'C(C)O |$_AV:1;2;O$|'
         """
@@ -466,7 +466,7 @@ class PYOPSIN:
         Returns:
             The InChI, or a list of them; ``""`` on failure.
 
-        Example:
+        Examples:
             >>> PYOPSIN().get_inchi("ethanol")                     # doctest: +SKIP
             'InChI=1/C2H6O/c1-2-3/h3H,2H2,1H3'
         """
@@ -483,7 +483,7 @@ class PYOPSIN:
         Returns:
             The standard InChI, or a list of them; ``""`` on failure.
 
-        Example:
+        Examples:
             >>> PYOPSIN().get_std_inchi("ethanol")                 # doctest: +SKIP
             'InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3'
         """
@@ -500,7 +500,7 @@ class PYOPSIN:
         Returns:
             The InChIKey, or a list of them; ``""`` on failure.
 
-        Example:
+        Examples:
             >>> PYOPSIN().get_std_inchikey("ethanol")              # doctest: +SKIP
             'LFQSCWFLJHTTHZ-UHFFFAOYSA-N'
         """
@@ -517,7 +517,7 @@ class PYOPSIN:
         Returns:
             The CML as an XML string, or a list of them; ``""`` on failure.
 
-        Example:
+        Examples:
             >>> PYOPSIN().get_CML("ethanol")[:38]                  # doctest: +SKIP
             "<?xml version='1.0' encoding='UTF-8'?>"
         """
@@ -541,7 +541,7 @@ class PYOPSIN:
             ``smiles``, ``extended_smiles``, ``inchi``, ``stdinchi``,
             ``stdinchikey`` and ``cml``.
 
-        Example:
+        Examples:
             >>> record = PYOPSIN().get_id("ethanol")               # doctest: +SKIP
             >>> record["status"], record["smiles"], record["stdinchikey"]  # doctest: +SKIP
             ('SUCCESS', 'C(C)O', 'LFQSCWFLJHTTHZ-UHFFFAOYSA-N')
@@ -574,7 +574,7 @@ class PYOPSIN:
             list: One :meth:`get_id` dict per name, in order, each with its own
             ``status``.
 
-        Example:
+        Examples:
             >>> records = PYOPSIN().get_id_from_list(["ethanol", "notachemical12345"])  # doctest: +SKIP
             >>> [(r["iupac_name"], r["smiles"], r["status"]) for r in records]           # doctest: +SKIP
             [('ethanol', 'C(C)O', 'SUCCESS'), ('notachemical12345', '', 'FAILURE')]

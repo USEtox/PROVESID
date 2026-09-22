@@ -45,7 +45,7 @@ and only then moves it into place.  Nothing is ever renamed onto the
 destination until every one of those has passed, so a failed download can
 never replace a good database with a broken one.
 
-Example:
+Examples:
     >>> from provesid.datasets import download_file
     >>> download_file(                                    # doctest: +SKIP
     ...     "https://ftp.ncbi.nlm.nih.gov/pubchem/Compound/Extras/CID-SMILES.gz",
@@ -114,7 +114,7 @@ class DownloadError(ServiceError):
     bytes on disk are known to be wrong, so resuming from them would only
     produce the same wrong file again.
 
-    Example:
+    Examples:
         >>> try:                                                 # doctest: +SKIP
         ...     download_file("https://zenodo.org/records/0/files/missing.db", "/tmp/x.db")
         ... except DownloadError as exc:
@@ -136,7 +136,7 @@ def md5_of_file(path: str, chunk_size: int = CHUNK_SIZE) -> str:
     Returns:
         The digest as lower-case hexadecimal.
 
-    Example:
+    Examples:
         >>> import tempfile, os
         >>> handle, path = tempfile.mkstemp()
         >>> _ = os.write(handle, b"provesid"); os.close(handle)
@@ -172,7 +172,7 @@ def read_checksum(url: str, *, session: Optional[requests.Session] = None,
         DownloadError: If the checksum file cannot be fetched or does not look
             like a digest.
 
-    Example:
+    Examples:
         >>> read_checksum(                                          # doctest: +SKIP
         ...     "https://ftp.ncbi.nlm.nih.gov/pubchem/Compound/Extras/CID-SMILES.gz.md5")
         '3659dd5c96fc506bb11b7fd8cce4553d'
@@ -286,7 +286,7 @@ def download_file(
             budget, if the checksum does not match, or if the server answered
             with a status that is not worth retrying.
 
-    Example:
+    Examples:
         >>> import sqlite3
         >>> def must_be_a_database(path):
         ...     sqlite3.connect(path).execute("SELECT 1 FROM compounds LIMIT 1")
@@ -547,7 +547,7 @@ class Dataset:
             user what is about to be fetched.
         note: Anything a user deciding whether to fetch this should know.
 
-    Example:
+    Examples:
         >>> chebi = DATASETS["chebi"]
         >>> chebi.title, chebi.patterns
         ('ChEBI SDF', ('chebi.sdf',))
@@ -700,7 +700,7 @@ class MissingDatasetError(ServiceError):
     A :class:`~provesid.http.ServiceError` so that the whole family stays
     catchable through one base, as :class:`DownloadError` is.
 
-    Example:
+    Examples:
         >>> import tempfile
         >>> require("chembl", tempfile.mkdtemp())
         Traceback (most recent call last):
@@ -720,7 +720,7 @@ def human_bytes(count: float) -> str:
         The size in the largest unit that leaves a number above 1, binary
         units, one decimal place.
 
-    Example:
+    Examples:
         >>> human_bytes(2322595840)
         '2.2 GiB'
         >>> human_bytes(0)
@@ -742,7 +742,7 @@ def dataset_names() -> List[str]:
     Returns:
         The keys of :data:`DATASETS`.
 
-    Example:
+    Examples:
         >>> dataset_names()
         ['pubchem', 'comptox', 'chebi', 'chembl', 'zeropm']
     """
@@ -791,7 +791,7 @@ def data_directory(data_dir: Optional[str] = None) -> str:
     Returns:
         Absolute path to the dataset directory.
 
-    Example:
+    Examples:
         >>> data_directory("/data/provesid")
         '/data/provesid'
         >>> data_directory() == user_dataset_path()
@@ -821,7 +821,7 @@ def dataset_files(name: str, data_dir: Optional[str] = None,
     Raises:
         KeyError: If ``name`` is not a known dataset.
 
-    Example:
+    Examples:
         >>> import tempfile
         >>> directory = tempfile.mkdtemp()
         >>> dataset_files("zeropm", directory)
@@ -857,7 +857,7 @@ def is_present(name: str, data_dir: Optional[str] = None) -> bool:
     Raises:
         KeyError: If ``name`` is not a known dataset.
 
-    Example:
+    Examples:
         >>> import tempfile
         >>> is_present("chembl", tempfile.mkdtemp())
         False
@@ -880,7 +880,7 @@ def missing(names: Optional[Union[str, Iterable[str]]] = None,
     Raises:
         KeyError: If a name is not in the registry.
 
-    Example:
+    Examples:
         >>> missing(["pubchem", "chembl"])            # doctest: +SKIP
         ['chembl']
     """
@@ -901,7 +901,7 @@ def fetch_command(names: Union[str, Iterable[str]]) -> str:
     Returns:
         A copy-pasteable Python call.
 
-    Example:
+    Examples:
         >>> fetch_command("chembl")
         "provesid.datasets.fetch('chembl')"
         >>> fetch_command(["pubchem", "chebi"])
@@ -1021,7 +1021,7 @@ def status(names: Optional[Union[str, Iterable[str]]] = None,
     Raises:
         KeyError: If a name is not in the registry.
 
-    Example:
+    Examples:
         >>> from provesid import datasets
         >>> datasets.status()[["dataset", "present", "size"]]   # doctest: +SKIP
           dataset  present      size
@@ -1092,7 +1092,7 @@ def plan(names: Optional[Union[str, Iterable[str]]] = None,
     Raises:
         KeyError: If a name is not in the registry.
 
-    Example:
+    Examples:
         >>> from provesid import datasets
         >>> todo = datasets.plan(["pubchem", "chebi"])        # doctest: +SKIP
         >>> datasets.human_bytes(                             # doctest: +SKIP
@@ -1189,7 +1189,7 @@ def fetch(names: Union[str, Iterable[str]], data_dir: Optional[str] = None,
         KeyError: If a name is not in the registry.
         DownloadError: If a transfer could not be completed.
 
-    Example:
+    Examples:
         >>> from provesid import datasets
         >>> datasets.fetch(["pubchem", "chebi"])            # doctest: +SKIP
         {'pubchem': '/home/me/.local/share/provesid/pubchem_id.db',
@@ -1276,7 +1276,7 @@ def remove(names: Union[str, Iterable[str]], data_dir: Optional[str] = None,
     Raises:
         KeyError: If a name is not in the registry.
 
-    Example:
+    Examples:
         >>> from provesid import datasets
         >>> datasets.remove("chembl", dry_run=True)          # doctest: +SKIP
         >>> datasets.remove("chembl")                        # doctest: +SKIP
@@ -1330,7 +1330,7 @@ def require(names: Union[str, Iterable[str]], data_dir: Optional[str] = None) ->
             downloaded.
         KeyError: If a name is not in the registry.
 
-    Example:
+    Examples:
         >>> from provesid import datasets
         >>> datasets.require(["pubchem", "chembl"])          # doctest: +SKIP
         Traceback (most recent call last):

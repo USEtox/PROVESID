@@ -11,23 +11,18 @@ Attributes:
     db_path (str): Path to the SQLite database file
     conn (sqlite3.Connection): Database connection
 
+Records are dicts keyed by the database's upper-case column names
+(``DTXSID``, ``PREFERRED_NAME``, ``CASRN``, ``INCHIKEY``, ``SMILES`` ...), plus
+``identifiers``, the ``IDENTIFIER`` column split into a list.
+
 Example:
     >>> from provesid import CompToxID
     >>> db = CompToxID()
-    >>>
-    >>> # Lookup by CASRN
     >>> result = db.get_by_casrn("50-78-2")  # Aspirin
-    >>> print(result['preferred_name'])
-    >>>
-    >>> # Lookup by InChIKey
-    >>> result = db.get_by_inchikey("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")
-    >>> print(result['dtxsid'])
-    >>>
-    >>> # Convert CASRN to DTXSID
-    >>> dtxsid = db.casrn_to_dtxsid("50-78-2")
-    >>>
-    >>> # Batch conversion
-    >>> results = db.batch_casrn_to_dtxsid(["50-78-2", "50-00-0"])
+    >>> result['PREFERRED_NAME'], result['DTXSID']
+    ('Aspirin', 'DTXSID5020108')
+    >>> db.batch_casrn_to_dtxsid(["50-78-2", "50-00-0"])
+    {'50-78-2': 'DTXSID5020108', '50-00-0': 'DTXSID7020637'}
 """
 
 import os
@@ -272,6 +267,11 @@ class CompToxID(SQLiteClient):
             provesid.datasets.DownloadError: If the download could not be
                 completed.
             RuntimeError: If the file that arrived is not the CompTox database.
+
+        Example:
+            >>> db = CompToxID()
+            >>> db.download_database(force=True)            # doctest: +SKIP
+            '/home/me/.local/share/provesid/comptox_chemicals.db'
         """
         download_url = url or self.db_url
 
@@ -332,6 +332,10 @@ class CompToxID(SQLiteClient):
 
         Returns:
             True when :data:`NAME_INDEX_TABLE` exists.
+
+        Example:
+            >>> isinstance(CompToxID().has_name_index, bool)
+            True
         """
         return self.conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
@@ -458,7 +462,17 @@ class CompToxID(SQLiteClient):
             dtxsid (str): DSSTox Substance ID (e.g., "DTXSID7020001")
 
         Returns:
-            dict: Chemical information including identifiers and properties, or None if not found
+            dict: Every column of the ``chemicals`` row --- ``DTXSID``,
+            ``DTXCID``, ``PREFERRED_NAME``, ``CASRN``, ``INCHIKEY``,
+            ``IUPAC_NAME``, ``SMILES``, ``MS_READY_SMILES``,
+            ``QSAR_READY_SMILES``, ``MOLECULAR_FORMULA``, ``AVERAGE_MASS``,
+            ``MONOISOTOPIC_MASS`` and ``IDENTIFIER`` --- plus ``identifiers``,
+            the last split into a list. None if not found.
+
+        Example:
+            >>> record = CompToxID().get_by_dtxsid("DTXSID5020108")
+            >>> record["PREFERRED_NAME"], record["CASRN"], record["identifiers"][:2]
+            ('Aspirin', '50-78-2', ['50-78-2', '11126-35-5'])
         """
         cursor = self.conn.cursor()
         cursor.execute(
@@ -487,7 +501,13 @@ class CompToxID(SQLiteClient):
             casrn (str): CAS Registry Number (e.g., "50-78-2")
 
         Returns:
-            dict: Chemical information, or None if not found
+            dict: The :meth:`get_by_dtxsid` record, or None if not found. Only
+            the chemical's own ``CASRN`` matches; for a retired or alternate
+            number see :meth:`get_by_alternate_casrn`.
+
+        Example:
+            >>> CompToxID().get_by_casrn("50-78-2")["DTXSID"]
+            'DTXSID5020108'
         """
         cursor = self.conn.cursor()
         cursor.execute(
@@ -573,7 +593,11 @@ class CompToxID(SQLiteClient):
             inchikey (str): Standard InChIKey (27 characters)
 
         Returns:
-            dict: Chemical information, or None if not found
+            dict: The :meth:`get_by_dtxsid` record, or None if not found
+
+        Example:
+            >>> CompToxID().get_by_inchikey("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")["DTXSID"]
+            'DTXSID5020108'
         """
         cursor = self.conn.cursor()
         cursor.execute(
@@ -596,10 +620,18 @@ class CompToxID(SQLiteClient):
         Get chemical information by SMILES string.
 
         Args:
-            smiles (str): SMILES string
+            smiles (str): SMILES string, matched as a string against CompTox's
+                own: another valid SMILES for the same structure finds nothing
 
         Returns:
-            dict: Chemical information, or None if not found
+            dict: The :meth:`get_by_dtxsid` record, or None if not found
+
+        Example:
+            >>> db = CompToxID()
+            >>> db.get_by_smiles("CC(=O)OC1=C(C=CC=C1)C(O)=O")["CASRN"]
+            '50-78-2'
+            >>> db.get_by_smiles("CC(=O)OC1=CC=CC=C1C(O)=O") is None
+            True
         """
         cursor = self.conn.cursor()
         cursor.execute(
@@ -622,10 +654,16 @@ class CompToxID(SQLiteClient):
         Get chemical information by preferred name (exact match).
 
         Args:
-            name (str): Preferred name
+            name (str): Preferred name, case included. :meth:`search_by_name`
+                with ``exact=True`` matches any name, ignoring case.
 
         Returns:
-            dict: Chemical information, or None if not found
+            dict: The :meth:`get_by_dtxsid` record, or None if not found
+
+        Example:
+            >>> db = CompToxID()
+            >>> db.get_by_name("Aspirin")["CASRN"], db.get_by_name("aspirin")
+            ('50-78-2', None)
         """
         cursor = self.conn.cursor()
         cursor.execute(
@@ -651,7 +689,11 @@ class CompToxID(SQLiteClient):
             dtxcid (str): DSSTox Compound ID (e.g., "DTXCID101")
 
         Returns:
-            dict: Chemical information, or None if not found
+            dict: The :meth:`get_by_dtxsid` record, or None if not found
+
+        Example:
+            >>> CompToxID().get_by_dtxcid("DTXCID50108")["PREFERRED_NAME"]
+            'Aspirin'
         """
         cursor = self.conn.cursor()
         cursor.execute(
@@ -774,7 +816,11 @@ class CompToxID(SQLiteClient):
             limit (int): Maximum number of results to return
 
         Returns:
-            list: List of matching chemicals
+            list: :meth:`get_by_dtxsid` records, in database order
+
+        Example:
+            >>> [r["PREFERRED_NAME"] for r in CompToxID().search_by_formula("C9H8O4", limit=2)]
+            ['Aspirin', '3,4-Dihydroxycinnamic acid']
         """
         cursor = self.conn.cursor()
         cursor.execute(
@@ -795,52 +841,182 @@ class CompToxID(SQLiteClient):
     # Conversion methods
 
     def casrn_to_dtxsid(self, casrn: str) -> Optional[str]:
-        """Convert CAS Registry Number to DTXSID."""
+        """
+        Convert CAS Registry Number to DTXSID.
+
+        Args:
+            casrn: CAS Registry Number.
+
+        Returns:
+            The DTXSID, or None if not found.
+
+        Example:
+            >>> db = CompToxID()
+            >>> db.casrn_to_dtxsid("50-78-2")
+            'DTXSID5020108'
+        """
         result = self.get_by_casrn(casrn)
         return result["DTXSID"] if result else None
 
     def casrn_to_inchikey(self, casrn: str) -> Optional[str]:
-        """Convert CAS Registry Number to InChIKey."""
+        """
+        Convert CAS Registry Number to InChIKey.
+
+        Args:
+            casrn: CAS Registry Number.
+
+        Returns:
+            The InChIKey, or None if not found.
+
+        Example:
+            >>> db = CompToxID()
+            >>> db.casrn_to_inchikey("50-78-2")
+            'BSYNRYMUTXBXSQ-UHFFFAOYSA-N'
+        """
         result = self.get_by_casrn(casrn)
         return result["INCHIKEY"] if result else None
 
     def casrn_to_smiles(self, casrn: str) -> Optional[str]:
-        """Convert CAS Registry Number to SMILES."""
+        """
+        Convert CAS Registry Number to SMILES.
+
+        Args:
+            casrn: CAS Registry Number.
+
+        Returns:
+            CompTox's SMILES, or None if not found.
+
+        Example:
+            >>> db = CompToxID()
+            >>> db.casrn_to_smiles("50-78-2")
+            'CC(=O)OC1=C(C=CC=C1)C(O)=O'
+        """
         result = self.get_by_casrn(casrn)
         return result["SMILES"] if result else None
 
     def inchikey_to_casrn(self, inchikey: str) -> Optional[str]:
-        """Convert InChIKey to CAS Registry Number."""
+        """
+        Convert InChIKey to CAS Registry Number.
+
+        Args:
+            inchikey: Standard InChIKey.
+
+        Returns:
+            The CAS number, or None if not found.
+
+        Example:
+            >>> db = CompToxID()
+            >>> db.inchikey_to_casrn("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")
+            '50-78-2'
+        """
         result = self.get_by_inchikey(inchikey)
         return result["CASRN"] if result else None
 
     def inchikey_to_dtxsid(self, inchikey: str) -> Optional[str]:
-        """Convert InChIKey to DTXSID."""
+        """
+        Convert InChIKey to DTXSID.
+
+        Args:
+            inchikey: Standard InChIKey.
+
+        Returns:
+            The DTXSID, or None if not found.
+
+        Example:
+            >>> db = CompToxID()
+            >>> db.inchikey_to_dtxsid("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")
+            'DTXSID5020108'
+        """
         result = self.get_by_inchikey(inchikey)
         return result["DTXSID"] if result else None
 
     def dtxsid_to_casrn(self, dtxsid: str) -> Optional[str]:
-        """Convert DTXSID to CAS Registry Number."""
+        """
+        Convert DTXSID to CAS Registry Number.
+
+        Args:
+            dtxsid: DSSTox Substance ID.
+
+        Returns:
+            The CAS number, or None if not found.
+
+        Example:
+            >>> db = CompToxID()
+            >>> db.dtxsid_to_casrn("DTXSID5020108")
+            '50-78-2'
+        """
         result = self.get_by_dtxsid(dtxsid)
         return result["CASRN"] if result else None
 
     def dtxsid_to_inchikey(self, dtxsid: str) -> Optional[str]:
-        """Convert DTXSID to InChIKey."""
+        """
+        Convert DTXSID to InChIKey.
+
+        Args:
+            dtxsid: DSSTox Substance ID.
+
+        Returns:
+            The InChIKey, or None if not found.
+
+        Example:
+            >>> db = CompToxID()
+            >>> db.dtxsid_to_inchikey("DTXSID5020108")
+            'BSYNRYMUTXBXSQ-UHFFFAOYSA-N'
+        """
         result = self.get_by_dtxsid(dtxsid)
         return result["INCHIKEY"] if result else None
 
     def dtxsid_to_smiles(self, dtxsid: str) -> Optional[str]:
-        """Convert DTXSID to SMILES."""
+        """
+        Convert DTXSID to SMILES.
+
+        Args:
+            dtxsid: DSSTox Substance ID.
+
+        Returns:
+            CompTox's SMILES, or None if not found.
+
+        Example:
+            >>> db = CompToxID()
+            >>> db.dtxsid_to_smiles("DTXSID5020108")
+            'CC(=O)OC1=C(C=CC=C1)C(O)=O'
+        """
         result = self.get_by_dtxsid(dtxsid)
         return result["SMILES"] if result else None
 
     def smiles_to_casrn(self, smiles: str) -> Optional[str]:
-        """Convert SMILES to CAS Registry Number."""
+        """
+        Convert SMILES to CAS Registry Number.
+
+        Args:
+            smiles: SMILES, matched as a string; see :meth:`get_by_smiles`.
+
+        Returns:
+            The CAS number, or None if not found.
+
+        Example:
+            >>> db = CompToxID()
+            >>> db.smiles_to_casrn("CC(=O)OC1=C(C=CC=C1)C(O)=O")
+            '50-78-2'
+        """
         result = self.get_by_smiles(smiles)
         return result["CASRN"] if result else None
 
     def smiles_to_dtxsid(self, smiles: str) -> Optional[str]:
-        """Convert SMILES to DTXSID."""
+        """
+        Convert SMILES to DTXSID.
+
+        Args:
+            smiles: SMILES, matched as a string; see :meth:`get_by_smiles`.
+
+        Returns:
+            The DTXSID, or None if not found.
+
+        Example:
+            >>> db = CompToxID()
+            >>> db.smiles_to_dtxsid("CCO")
+            'DTXSID9020584'
+        """
         result = self.get_by_smiles(smiles)
         return result["DTXSID"] if result else None
 
@@ -855,6 +1031,10 @@ class CompToxID(SQLiteClient):
 
         Returns:
             dict: Mapping of CAS -> DTXSID (None if not found)
+
+        Example:
+            >>> CompToxID().batch_casrn_to_dtxsid(["50-78-2", "0-00-0"])
+            {'50-78-2': 'DTXSID5020108', '0-00-0': None}
         """
         results = {}
         for casrn in casrn_list:
@@ -864,7 +1044,19 @@ class CompToxID(SQLiteClient):
     def batch_casrn_to_inchikey(
         self, casrn_list: List[str]
     ) -> Dict[str, Optional[str]]:
-        """Convert multiple CAS numbers to InChIKeys."""
+        """
+        Convert multiple CAS numbers to InChIKeys.
+
+        Args:
+            casrn_list (list): List of CAS numbers
+
+        Returns:
+            dict: Mapping of CAS -> InChIKey (None if not found)
+
+        Example:
+            >>> CompToxID().batch_casrn_to_inchikey(["50-78-2", "0-00-0"])
+            {'50-78-2': 'BSYNRYMUTXBXSQ-UHFFFAOYSA-N', '0-00-0': None}
+        """
         results = {}
         for casrn in casrn_list:
             results[casrn] = self.casrn_to_inchikey(casrn)
@@ -873,7 +1065,20 @@ class CompToxID(SQLiteClient):
     def batch_inchikey_to_casrn(
         self, inchikey_list: List[str]
     ) -> Dict[str, Optional[str]]:
-        """Convert multiple InChIKeys to CAS numbers."""
+        """
+        Convert multiple InChIKeys to CAS numbers.
+
+        Args:
+            inchikey_list (list): List of InChIKeys
+
+        Returns:
+            dict: Mapping of InChIKey -> CAS (None if not found)
+
+        Example:
+            >>> CompToxID().batch_inchikey_to_casrn(
+            ...     ["BSYNRYMUTXBXSQ-UHFFFAOYSA-N", "LFQSCWFLJHTTHZ-UHFFFAOYSA-N"])
+            {'BSYNRYMUTXBXSQ-UHFFFAOYSA-N': '50-78-2', 'LFQSCWFLJHTTHZ-UHFFFAOYSA-N': '64-17-5'}
+        """
         results = {}
         for inchikey in inchikey_list:
             results[inchikey] = self.inchikey_to_casrn(inchikey)

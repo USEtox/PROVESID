@@ -95,11 +95,31 @@ _V244_PROPERTY_INDICES: Dict[str, List[str]] = {
 
 
 class ChebifierError(Exception):
-    """Base class for errors raised by the chebifier taxonomy backend."""
+    """
+    Base class for errors raised by the chebifier taxonomy backend.
+
+    Raised on its own for a bad ensemble configuration, such as an
+    ``exclude_models`` name the ensemble does not have.
+
+    Example:
+        >>> ChebifierClassifier(exclude_models=["no_such_model"]).ensemble  # doctest: +SKIP
+        Traceback (most recent call last):
+        ...
+        provesid.taxonomy.ChebifierError: exclude_models names not in the ensemble configuration: ['no_such_model']. ...
+    """
 
 
 class ChebifierMissingError(ChebifierError):
-    """Raised when the optional ``chebifier`` dependency is not installed."""
+    """
+    Raised when the optional ``chebifier`` dependency is not installed.
+
+    Raised when the ensemble is first built, not on import or construction;
+    check :func:`chebifier_available` first to avoid it.
+
+    Example:
+        >>> issubclass(ChebifierMissingError, ChebifierError)
+        True
+    """
 
 
 def chebifier_available() -> bool:
@@ -113,8 +133,8 @@ def chebifier_available() -> bool:
 
     Example:
         >>> from provesid.taxonomy import chebifier_available
-        >>> if chebifier_available():
-        ...     ...  # safe to construct a ChebifierClassifier
+        >>> isinstance(chebifier_available(), bool)
+        True
     """
     return importlib.util.find_spec("chebifier") is not None
 
@@ -168,8 +188,8 @@ def default_ensemble_available() -> bool:
 
     Example:
         >>> from provesid.taxonomy import default_ensemble_available
-        >>> if default_ensemble_available():
-        ...     ...  # a full classify() call can succeed
+        >>> default_ensemble_available() == (missing_ensemble_modules() == [])
+        True
     """
     return not missing_ensemble_modules()
 
@@ -215,7 +235,16 @@ def ensure_v244_indices() -> Dict[str, str]:
 
     Returns:
         Mapping of property name to a status string: ``"patched"``, ``"ok"``
-        (already matching), or ``"missing"`` (index file not found).
+        (already matching), or ``"missing"`` (index file not found). Empty
+        when ``chebai_graph`` is not installed.
+
+    Note:
+        ``"patched"`` means a file inside the installed ``chebai_graph``
+        package was rewritten.
+
+    Example:
+        >>> ensure_v244_indices()                                  # doctest: +SKIP
+        {'BondType': 'ok', 'AtomNumHs': 'ok', 'NumAtomBonds': 'ok'}
     """
     try:
         import chebai_graph  # noqa: F401 - only need its location
@@ -480,8 +509,15 @@ class ChebifierClassifier:
     Example:
         >>> from provesid.taxonomy import ChebifierClassifier
         >>> clf = ChebifierClassifier()
-        >>> df = clf.classify(["c1ccccc1", "OCC1OC(O)C(O)C(O)C1O"])
-        >>> df[["smiles", "chebi_ids"]]  # doctest: +SKIP
+        >>> df = clf.classify(["c1ccccc1", "CCO"])                 # doctest: +SKIP
+        >>> df["inchikey"].tolist()                                # doctest: +SKIP
+        ['UHOVQNZJYSORNB-UHFFFAOYSA-N', 'LFQSCWFLJHTTHZ-UHFFFAOYSA-N']
+        >>> "30879" in df.loc[1, "chebi_ids"].split("|")           # doctest: +SKIP
+        True
+
+        CHEBI:30879 is "alcohol". The first call loads the whole ensemble,
+        which takes the better part of a minute; later calls for the same
+        structures come from the cache.
     """
 
     _CACHE_FUNC_NAME = "provesid.taxonomy.ChebifierClassifier"
@@ -510,7 +546,15 @@ class ChebifierClassifier:
     # -- lazy resources ----------------------------------------------------
     @property
     def chebifier_version(self) -> str:
-        """Installed chebifier version (falls back to the pinned version)."""
+        """
+        Installed chebifier version (falls back to the pinned version).
+
+        Part of every cache key, so upgrading chebifier re-classifies.
+
+        Example:
+            >>> ChebifierClassifier().chebifier_version            # doctest: +SKIP
+            '1.2.2'
+        """
         try:
             return importlib.import_module("chebifier").__version__
         except Exception:
@@ -526,6 +570,13 @@ class ChebifierClassifier:
             relative to the working directory (see
             :func:`ensure_element_class_mappings`). The previous directory is
             always restored.
+
+        Raises:
+            ChebifierMissingError: If ``chebifier`` is not installed.
+
+        Example:
+            >>> type(ChebifierClassifier().ensemble).__name__      # doctest: +SKIP
+            'BaseEnsemble'
         """
         if self._ensemble is None:
             base_ensemble_cls = _load_chebifier()
@@ -642,7 +693,13 @@ class ChebifierClassifier:
             Verified to reproduce ``predict_smiles_list``'s label sets exactly.
             The scores are the *smoothed* ones, i.e. the values the ontology
             consistency pass actually thresholds, so ``score > 0`` holds for
-            every returned label.
+            every returned label. Not cached; :meth:`classify` with
+            ``with_scores=True`` is.
+
+        Example:
+            >>> scores = ChebifierClassifier().predict_with_scores(["CCO"])[0]  # doctest: +SKIP
+            >>> scores["30879"], round(scores["2571"], 3)                        # doctest: +SKIP
+            (1.0, 0.866)
         """
         import torch
 
@@ -697,6 +754,15 @@ class ChebifierClassifier:
 
         Raises:
             ChebifierMissingError: If ``chebifier`` is not installed.
+            ValueError: If ``inchikeys`` is not the length of ``smiles``.
+
+        Example:
+            >>> clf = ChebifierClassifier(with_scores=True)
+            >>> row = clf.classify("CCO").iloc[0]                  # doctest: +SKIP
+            >>> row["source"], row["chebi_ids"].split("|")[:3]     # doctest: +SKIP
+            ('chebifier', ['134179', '23367', '24431'])
+            >>> row["confidence"].split("|")[:3]                   # doctest: +SKIP
+            ['1', '1', '1']
         """
         if isinstance(smiles, str):
             smiles_list: List[str] = [smiles]
@@ -822,6 +888,12 @@ class ChebifierClassifier:
 
         Raises:
             KeyError: If ``level`` is not a column of ``df``.
+
+        Example:
+            >>> table = pd.DataFrame({"inchikey": ["LFQSCWFLJHTTHZ-UHFFFAOYSA-N"],
+            ...                       "chebi_ids": ["30879|33822"]})
+            >>> ChebifierClassifier.to_labels(table)
+            {'LFQSCWFLJHTTHZ-UHFFFAOYSA-N': '30879|33822'}
         """
         if level not in df.columns:
             raise KeyError(f"Unknown level {level!r}; available: {list(df.columns)}")
@@ -854,6 +926,12 @@ def classify_chebifier(
 
     Raises:
         ChebifierMissingError: If ``chebifier`` is not installed.
+
+    Example:
+        >>> from provesid.taxonomy import classify_chebifier
+        >>> table = classify_chebifier("CCO")                     # doctest: +SKIP
+        >>> table.loc[0, "inchikey"]                              # doctest: +SKIP
+        'LFQSCWFLJHTTHZ-UHFFFAOYSA-N'
     """
     classifier = ChebifierClassifier(
         data_dir=data_dir, use_cache=use_cache, resolve_names=resolve_names

@@ -604,6 +604,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- **`CASCommonChem.smiles_to_detail` rarely returned the substance asked
+  for.** It passed the SMILES to CAS's search, which matches a SMILES only as
+  the exact string CAS stores, and took the first hit. `CCO` found nothing,
+  and CAS's own `OCC` returned ethanol-d6. It now searches by the standard
+  InChI that RDKit writes and keeps only records with that InChI. It prefers
+  those whose formula matches, which drops the dimers and polymers CAS files
+  under their repeat unit's InChI, and then the one with the most synonyms
+  (sodium chloride, not rock salt). `CCO`, `OCC` and `C(O)C` all give
+  64-17-5. A SMILES RDKit cannot read is `status` `"Invalid SMILES"`, and no
+  request is made. Each hit costs one cached detail request, up to
+  `CAS_SMILES_MAX_HITS` (50). The result is cached like `name_to_detail`'s.
 - **ZeroPM's mobility probabilities came back under each other's names.** In
   `zeropm-v0-0-4.sqlite`, the table `pm_probabilities` stores
   `probability_of_m` in the column named `m_or_vm`, `vm` in the one named `m`,

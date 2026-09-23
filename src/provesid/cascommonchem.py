@@ -19,10 +19,13 @@ Examples:
 """
 
 import os
+import re
 import json
 import requests
 import logging
 from typing import Any
+from rdkit import Chem, rdBase
+from rdkit.Chem.rdMolDescriptors import CalcMolFormula
 from .cache import cached
 from .config import get_cas_api_key
 from .http import HTTPClient, NotFoundError, ServiceError, ServiceTimeoutError
@@ -33,6 +36,13 @@ CAS_MIN_INTERVAL = 0.2
 per-second figure alongside the API key, so this is politeness: five
 requests a second is what the rest of the package uses for a service that
 has not said otherwise.
+"""
+
+
+CAS_SMILES_MAX_HITS = 50
+"""Most search hits [`smiles_to_detail`][provesid.cascommonchem.CASCommonChem.smiles_to_detail]
+fetches a record for. Every hit costs one request the first time, because a
+hit carries no formula. Water's InChI finds 30, most of them water clusters.
 """
 
 
@@ -357,10 +367,14 @@ class CASCommonChem:
     @cached(service='cas', skip_if=_lookup_failed)
     def name_to_detail(self, name: str, timeout=30):
         """
-        Returns compound details for a given name or SMILES using API v2.0
+        Returns compound details for a given name using API v2.0
+
+        CAS's search matches a name only if CAS lists it as a synonym
+        ("acetone" is found, "propan-2-one" is not). For a structure, use
+        [`smiles_to_detail`][provesid.cascommonchem.CASCommonChem.smiles_to_detail].
 
         Args:
-            name: Compound name or SMILES string
+            name: Compound name
             timeout: Request timeout in seconds
 
         Returns:
@@ -374,59 +388,146 @@ class CASCommonChem:
             >>> cas.name_to_detail("aspirin")["rn"]              # doctest: +SKIP
             '50-78-2'
         """
-        res = self._empty_res()
-        url = self.base_url + self.query_url[2] + "?q=" + requests.utils.quote(name)
+        hits, failure = self._search(name, timeout)
+        if failure is not None:
+            return failure
+        if not hits:
+            return self._not_found()
 
-        try:
-            res_call = self._http.get_json(url, timeout=timeout)
-        except CASCommonChemError as e:
-            res["status"] = self._failure_status(e)
-            res["found"] = False
-            if res["status"] == "Unauthorized - Check API Key":
-                self.logger.error("CAS API authentication failed. Check your API key.")
-            else:
-                self.logger.warning(f"CAS search failed for name '{name}': {e}")
-            return res
-        except Exception as e:
-            res["status"] = "Error"
-            res["found"] = False
-            self.logger.error(f"Unexpected error for name '{name}': {e}")
-            return res
-
-        if not res_call.get("count"):
-            res["status"] = "Not found"
-            res["found"] = False
-            return res
-
-        if res_call["count"] > 1:
+        if len(hits) > 1:
             self.logger.warning(f"Multiple compounds found for '{name}', using first result")
 
-        # Get CAS RN from first result and fetch details
-        cas_rn = res_call["results"][0]["rn"]
-        return self.cas_to_detail(cas_rn)
+        return self.cas_to_detail(hits[0]["rn"])
 
+    @cached(service='cas', skip_if=_lookup_failed)
     def smiles_to_detail(self, smiles: str, timeout=30):
         """
-        Look a substance up by SMILES, through CAS's search.
+        Look a substance up by structure: search CAS by InChI, keep the exact match.
 
-        The same call as
-        [`name_to_detail`][provesid.cascommonchem.CASCommonChem.name_to_detail]:
-        CAS's search accepts a SMILES where it accepts a name.
+        CAS's search matches a SMILES only as the exact string CAS stores
+        (``OCC`` finds ethanol, ``CCO`` does not), and even then its first hit
+        can be an isotopologue. So the SMILES is not sent. RDKit writes its
+        standard InChI, which CAS matches whatever the SMILES spelling, and
+        which keeps isotopes apart. The hits are then narrowed down:
+
+        1. The record's InChI must equal the query's. CAS gives oligomers and
+           polymers the InChI of their repeat unit, so for ethanol it also
+           finds "Ethanol, dimer".
+        2. Records whose formula is RDKit's formula for the SMILES are
+           preferred. That drops the dimer, whose formula is
+           ``(C2H6O)2``. When no record passes, all of step 1's are kept, since
+           CAS writes some salts differently (``C2H4O2.Na``).
+        3. Of those left, the record with the most synonyms wins: sodium
+           chloride (65) over rock salt (6), both ``ClNa``. When more than
+           one was left, the others are logged at WARNING.
+
+        Each hit costs one detail request the first time it is seen, up to
+        ``CAS_SMILES_MAX_HITS``. The detail answers are cached, and so is the
+        result. A convenience layer over CAS's ``/search`` and ``/detail``
+        calls.
 
         Args:
             smiles: SMILES string.
-            timeout: Request timeout in seconds.
+            timeout: Request timeout in seconds, per request.
 
         Returns:
             Dictionary with compound details, as
-            [`name_to_detail`][provesid.cascommonchem.CASCommonChem.name_to_detail].
+            [`cas_to_detail`][provesid.cascommonchem.CASCommonChem.cas_to_detail]
+            returns them. ``status`` is ``"Invalid SMILES"`` when RDKit cannot
+            read the SMILES (no request is made), and ``"Not found"`` when no
+            record has its InChI.
 
         Examples:
             >>> cas = CASCommonChem(api_key="your-cas-api-key")
             >>> cas.smiles_to_detail("CCO")["rn"]                # doctest: +SKIP
             '64-17-5'
+            >>> cas.smiles_to_detail("C1=CC=CC=C1")["name"]      # doctest: +SKIP
+            'Benzene'
+            >>> cas.smiles_to_detail("not-a-smiles")["status"]
+            'Invalid SMILES'
         """
-        return self.name_to_detail(smiles, timeout)
+        with rdBase.BlockLogs():
+            mol = Chem.MolFromSmiles(smiles) if smiles and smiles.strip() else None
+            inchi = Chem.MolToInchi(mol) if mol is not None else ""
+        if not inchi:
+            res = self._empty_res()
+            res["status"] = "Invalid SMILES"
+            res["found"] = False
+            return res
+
+        hits, failure = self._search(inchi, timeout)
+        if failure is not None:
+            return failure
+        if len(hits) > CAS_SMILES_MAX_HITS:
+            self.logger.warning(
+                f"{len(hits)} CAS hits for '{smiles}'; examining the first {CAS_SMILES_MAX_HITS}")
+
+        records = [self.cas_to_detail(hit["rn"], timeout)
+                   for hit in hits[:CAS_SMILES_MAX_HITS]]
+        same_inchi = [r for r in records if r["found"] and r.get("inchi") == inchi]
+        formula = CalcMolFormula(mol)
+        same_formula = [r for r in same_inchi
+                        if self._plain_formula(r.get("molecularFormula")) == formula]
+        candidates = same_formula or same_inchi
+        if not candidates:
+            self.logger.debug(f"No CAS record has the InChI of '{smiles}': {inchi}")
+            return self._not_found()
+
+        best = max(candidates, key=lambda r: len(r.get("synonyms") or []))
+        if len(candidates) > 1:
+            others = ", ".join(r["rn"] for r in candidates if r is not best)
+            self.logger.warning(
+                f"Several CAS records match '{smiles}'; using {best['rn']}, not {others}")
+        return best
+
+    def _search(self, query: str, timeout=30):
+        """
+        Run CAS's ``/search`` and return ``(hits, failure)``.
+
+        ``hits`` is the list of ``{"rn", "name", "images"}`` dicts CAS
+        returned (empty when it found nothing), and ``failure`` is None. When
+        the request fails, ``hits`` is None and ``failure`` is the result dict
+        to hand back, with its ``status``, as
+        [`cas_to_detail`][provesid.cascommonchem.CASCommonChem.cas_to_detail]
+        reports failures.
+        """
+        url = self.base_url + self.query_url[2] + "?q=" + requests.utils.quote(query)
+        try:
+            data = self._http.get_json(url, timeout=timeout)
+        except CASCommonChemError as e:
+            res = self._empty_res()
+            res["status"] = self._failure_status(e)
+            res["found"] = False
+            if res["status"] == "Unauthorized - Check API Key":
+                self.logger.error("CAS API authentication failed. Check your API key.")
+            else:
+                self.logger.warning(f"CAS search failed for '{query}': {e}")
+            return None, res
+        except Exception as e:
+            res = self._empty_res()
+            res["status"] = "Error"
+            res["found"] = False
+            self.logger.error(f"Unexpected error searching CAS for '{query}': {e}")
+            return None, res
+        return (data.get("results") or [] if data.get("count") else []), None
+
+    def _not_found(self):
+        """The result dict for a search that CAS answered with no match."""
+        res = self._empty_res()
+        res["status"] = "Not found"
+        res["found"] = False
+        return res
+
+    @staticmethod
+    def _plain_formula(formula) -> str:
+        """
+        CAS's formula without its HTML markup.
+
+        Examples:
+            >>> CASCommonChem._plain_formula("(C<sub>2</sub>H<sub>6</sub>O)<sub>2</sub>")
+            '(C2H6O)2'
+        """
+        return re.sub(r"<[^>]+>", "", formula or "")
 
     def clear_cache(self):
         """

@@ -4134,11 +4134,9 @@ Items 1 and 2 are fixed (§31.6). Writing the notebooks turned up five more:
 
 ### 31.4 Still open
 
-- **The CAS Common Chemistry notebook is not executed.** The key stored in
-  `~/.config/provesid/config.json` is still the placeholder written in §28.4,
-  and it outranks the environment. The notebook is committed without outputs
-  and runs as soon as a valid key is stored.
-- §31.3 items 3 and 5 to 8. Item 4 is fixed (§31.7).
+- ~~**The CAS Common Chemistry notebook is not executed.**~~ Executed on
+  2026-09-23 with a real key (§31.8).
+- §31.3 items 3 and 5 to 8. Items 4 and 9 are fixed (§31.7, §31.9).
 - `examples/notebooks/` still tracks `curated-solubility-dataset.csv` and
   `unique_cas_list.csv`, which nothing uses. The ESOL file moved to
   `examples/search/`.
@@ -4265,3 +4263,58 @@ The swap that §31.3 proposed would have left TFA "M, not vM".
   with a sqlite3-only reproduction and the two smaller faults above. When a
   release fixes the file, `test_the_stored_mobility_columns_are_still_misnamed`
   fails, and `_PM_PROBABILITY_SELECT` goes back to the stored names.
+
+### 31.8 The CAS Common Chemistry notebook, executed 2026-09-23
+
+The real key is now stored, and the notebook ran against the live service
+without errors. The first run showed three places where the text promised
+more than the output delivered, and the notebook now says what happens:
+
+- `name_to_detail("propan-2-one")` is "Not found", while "acetone" finds
+  67-64-1. CAS's search matches only the synonyms it lists. That is the
+  service, not the client.
+- The formaldehyde cell displayed `smile`, which CAS's v2 record always leaves
+  empty. It now shows `canonicalSmile`, and the text notes the HTML in
+  `molecularFormula` and the `InChIKey=` prefix.
+- **§31.3 item 9, a client defect: `smiles_to_detail` rarely returns the right
+  substance.** CAS's search matches a SMILES only as the exact string CAS
+  stores. `CCO` finds nothing, and CAS's own `OCC` finds 6 records, the
+  first of them ethanol-d6 (1516-08-1), then ethanol's dimer (42845-45-4).
+  Ethanol itself (64-17-5) is not first. InChIKeys need the `InChIKey=` prefix,
+  and a full InChI finds `[42845-45-4, 64-17-5]`. The method passes the string
+  through and takes hit 0. Candidate fix, **open**: search by the InChI that
+  RDKit writes from the SMILES, and prefer the hit whose record's InChI equals
+  it, rather than hit 0. The notebook shows the failure and points to CAS
+  numbers and `Search`.
+
+### 31.9 `smiles_to_detail` by InChI, 2026-09-23 (§31.3 item 9, fixed)
+
+The candidate fix was not enough on its own. Every hit of an InChI search
+has exactly the query's InChI, because CAS files dimers, polymers and
+water clusters under the InChI of the repeat unit. Probed live:
+
+| SMILES | hits | CAS's order | picked |
+|---|---|---|---|
+| `CCO` | 2 | ethanol dimer, ethanol | 64-17-5 |
+| `c1ccccc1` | 4 | homopolymer, dimer, benzene, trimer | 71-43-2 |
+| `C=O` | 3 | paraformaldehyde, formaldehyde, dimer | 50-00-0 |
+| `O` | 30 | water clusters, ..., water | 7732-18-5 |
+| `[Na+].[Cl-]` | 2 | rock salt, sodium chloride (both `ClNa`) | 7647-14-5 |
+
+So the selection has three steps. (1) The record's InChI equals the query's.
+(2) Its formula, stripped of HTML, equals RDKit's `CalcMolFormula`. If no
+record passes, step 1's set is kept, because CAS writes some salts as
+`C2H4O2.Na`. (3) The record with the most synonyms wins, and the others are
+logged at WARNING. A hit carries only `rn`, `name` and an image, so each one
+costs a detail request, which is cached, up to `CAS_SMILES_MAX_HITS = 50`.
+The search is factored into `_search`, which `name_to_detail` now shares. Its
+behaviour is unchanged.
+
+- Tests: 8 offline tests (spelling-independent search, oligomer skipped,
+  synonym tie-break, formula fallback, isotopologue not accepted, unreadable
+  SMILES refused without a request, auth failure reported). The live test no
+  longer skips on "Not found": it asserts 64-17-5, plus 4 parametrised
+  substances. 27 of 27 live tests pass with the real key. They need
+  `CAS_API_KEY` in the environment; the stored key is not read by the test
+  module.
+- The CAS notebook now shows five SMILES resolving correctly, re-executed.

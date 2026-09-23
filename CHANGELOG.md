@@ -604,6 +604,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- **`Search` passed on CompTox's and ZeroPM's non-standard InChIKeys.**
+  CompTox stores a key computed from a non-standard InChI (flag `N`, as in
+  `PGRHXDWITVMQBC-UHFFFAOYNA-N`) for 131,885 of its 1.15 million keys, and
+  ZeroPM a non-standard InChI and key for 18,710 of its 359,221 substances.
+  Such a key never equals the standard key another source publishes. Three
+  things went wrong. `InChIKey` came back non-standard whenever CompTox
+  filled it. A DTXSID query then looked up the other sources by that key and
+  found nothing: `DTXSID6020014` (dehydroacetic acid) and `DTXSID8020040`
+  (aldrin) had one source in support, and now have four and three. And a
+  standard-key query missed the CompTox row, so `DTXSID` stayed empty. Every
+  candidate now carries the standard InChI and key, recomputed from the
+  structure when the source's are not standard
+  (`provesid.tools.standardize_inchi_and_key`, called by `make_candidate`).
+  `CompToxID.get_by_inchikey` and `ZeroPM.get_id_table_from_inchikey` also
+  try the key with its other flag, which finds the 98% of CompTox's and 96%
+  of ZeroPM's non-standard rows where only the flag differs. New helpers:
+  `provesid.utils.is_standard_inchikey` and `inchikey_flag_variants`.
 - **`CASCommonChem.smiles_to_detail` rarely returned the substance asked
   for.** It passed the SMILES to CAS's search, which matches a SMILES only as
   the exact string CAS stores, and took the first hit. `CCO` found nothing,

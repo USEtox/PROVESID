@@ -50,7 +50,7 @@ from typing import Optional
 # Try relative import first, fall back to direct import for testing
 from .datasets import download_file
 from .sqlite_client import SQLiteClient
-from .utils import user_dataset_path
+from .utils import inchikey_flag_variants, user_dataset_path
 
 
 PM_PROBABILITY_COLUMNS = (
@@ -1565,10 +1565,15 @@ class ZeroPM(SQLiteClient):
         This method retrieves the inchi_id for the InChIKey, then finds all associated
         query_ids and their CAS numbers. It also includes synonyms and sources.
 
+        About 5% of ZeroPM's substances are stored under a non-standard InChI
+        and InChIKey. A key is also looked up with its other standard flag
+        (``...SA-N`` / ``...NA-N``), so a standard key finds those rows where
+        only the flag differs; the key given is preferred when both exist.
+
         Parameters
         ----------
         inchikey : str
-            InChIKey string
+            InChIKey string, standard or not
 
         Returns
         -------
@@ -1588,12 +1593,16 @@ class ZeroPM(SQLiteClient):
         0     1     50-00-0
         3     1  30525-89-4
         """
-        # Get inchi_id and inchi from InChIKey
-        self.cursor.execute("""
+        # Get inchi_id and inchi from InChIKey, in either flag spelling
+        spellings = inchikey_flag_variants(inchikey)
+        placeholders = ", ".join("?" * len(spellings))
+        self.cursor.execute(f"""
             SELECT inchi_id, inchi
             FROM substances
-            WHERE inchikey = ?
-        """, (inchikey,))
+            WHERE inchikey IN ({placeholders})
+            ORDER BY inchikey = ? DESC
+            LIMIT 1
+        """, (*spellings, inchikey))
         result = self.cursor.fetchone()
 
         if not result:

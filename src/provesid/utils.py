@@ -1,6 +1,7 @@
 """
-Small helpers shared across PROVESID: CAS number checking and the
-directories where datasets and cached responses live.
+Small helpers shared across PROVESID: CAS number checking, telling a
+standard InChIKey from a non-standard one, and the directories where datasets
+and cached responses live.
 
 Examples:
     >>> from provesid.utils import check_CASRN
@@ -9,6 +10,7 @@ Examples:
 """
 
 import os
+import re
 
 from platformdirs import user_cache_dir, user_data_dir
 
@@ -59,6 +61,68 @@ def check_CASRN(cas_rn: str):
 
     # Validate the check digit
     return calculated_check_digit % 10 == check_digit
+
+_INCHIKEY_PATTERN = re.compile(r"^[A-Z]{14}-[A-Z]{8}[SN]A-[A-Z]$")
+
+
+def is_standard_inchikey(inchikey) -> bool:
+    """Tell a standard InChIKey from a non-standard one.
+
+    The ninth character of the second block is the flag: ``S`` for a key
+    computed from a standard InChI, ``N`` for one computed with non-standard
+    options. The two never compare equal, even for the same structure, so a
+    non-standard key cannot be matched against the standard keys that PubChem,
+    ChEBI and ChEMBL publish. CompTox stores non-standard keys for about 11%
+    of its substances and ZeroPM for about 5%.
+
+    Args:
+        inchikey: The candidate key.
+
+    Returns:
+        (bool): True for a well-formed standard key; False for a non-standard
+            key, a malformed string, or None.
+
+    Examples:
+        >>> is_standard_inchikey("PGRHXDWITVMQBC-UHFFFAOYSA-N")
+        True
+        >>> is_standard_inchikey("PGRHXDWITVMQBC-UHFFFAOYNA-N")
+        False
+        >>> is_standard_inchikey("InChIKey=PGRHXDWITVMQBC-UHFFFAOYSA-N")
+        False
+    """
+    return (
+        isinstance(inchikey, str)
+        and bool(_INCHIKEY_PATTERN.match(inchikey))
+        and inchikey[23] == "S"
+    )
+
+
+def inchikey_flag_variants(inchikey: str) -> list:
+    """Return an InChIKey and the same key with the other standard flag.
+
+    For most non-standard keys the hash blocks are the ones the standard key
+    has, and only the flag differs: 98% of CompTox's and 96% of ZeroPM's.
+    Looking up both spellings finds those rows from either spelling. The rest
+    differ in the stereo hash and are not found this way.
+
+    Args:
+        inchikey: A key to look up.
+
+    Returns:
+        (list): ``[inchikey, variant]``, the given key first; or
+            ``[inchikey]`` when it is not a well-formed key.
+
+    Examples:
+        >>> inchikey_flag_variants("PGRHXDWITVMQBC-UHFFFAOYSA-N")
+        ['PGRHXDWITVMQBC-UHFFFAOYSA-N', 'PGRHXDWITVMQBC-UHFFFAOYNA-N']
+        >>> inchikey_flag_variants("not a key")
+        ['not a key']
+    """
+    if not isinstance(inchikey, str) or not _INCHIKEY_PATTERN.match(inchikey):
+        return [inchikey]
+    other = "N" if inchikey[23] == "S" else "S"
+    return [inchikey, inchikey[:23] + other + inchikey[24:]]
+
 
 def data_path():
     """

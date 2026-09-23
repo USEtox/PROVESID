@@ -29,11 +29,12 @@ from .chembl import CheMBL
 
 # Optional RDKit import
 try:
-    from rdkit import Chem
+    from rdkit import Chem, rdBase
     from rdkit.Chem import Descriptors
     RDKIT_AVAILABLE = True
 except ImportError:
     Chem = None
+    rdBase = None
     RDKIT_AVAILABLE = False
     logging.warning("RDKit not available. Install with: pip install rdkit-pypi")
 
@@ -276,6 +277,72 @@ def inchikey_from_smiles(smiles: Optional[str]) -> Optional[str]:
         return None
 
 
+def standardize_inchi_and_key(
+    smiles: Optional[str], inchi: Optional[str], inchikey: Optional[str]
+) -> Tuple[Optional[str], Optional[str]]:
+    """Replace a non-standard InChI or InChIKey with the standard one.
+
+    CompTox stores a non-standard InChIKey (flag ``N``, as in
+    ``PGRHXDWITVMQBC-UHFFFAOYNA-N``) for about 11% of its substances, and
+    ZeroPM a non-standard InChI (``InChI=1/...``) and key for about 5%. Such
+    a key never equals the standard key another source publishes for the
+    same structure, so it cannot be clustered with it or used to look the
+    structure up elsewhere. This computes the standard InChI and key from the
+    structure, the SMILES when there is one and the InChI otherwise.
+
+    A value that is already standard, or missing, is returned unchanged. A
+    string that is not an InChIKey at all is also left alone.
+
+    Args:
+        smiles: The source's structure as SMILES, or None.
+        inchi: The source's InChI, or None.
+        inchikey: The source's InChIKey, or None.
+
+    Returns:
+        An ``(inchi, inchikey)`` tuple. A non-standard value is replaced by
+        the standard one, or by None when no standard one can be computed
+        (the structure is missing, RDKit cannot read it, or RDKit is not
+        installed).
+
+    Examples:
+        >>> standardize_inchi_and_key(
+        ...     "CC(=O)C1C(=O)OC(C)=CC1=O", None, "PGRHXDWITVMQBC-UHFFFAOYNA-N")
+        (None, 'PGRHXDWITVMQBC-UHFFFAOYSA-N')
+        >>> standardize_inchi_and_key(None, "InChI=1/CH2O/c1-2/h1H2", None)
+        ('InChI=1S/CH2O/c1-2/h1H2', None)
+        >>> standardize_inchi_and_key("C=O", None, "WSFSSNUMVMOOMR-UHFFFAOYSA-N")
+        (None, 'WSFSSNUMVMOOMR-UHFFFAOYSA-N')
+    """
+    inchi_is_nonstandard = not is_missing(inchi) and str(inchi).startswith("InChI=1/")
+    key_is_nonstandard = (
+        not is_missing(inchikey)
+        and len(str(inchikey)) == 27
+        and str(inchikey)[23] == "N"
+    )
+    if not (inchi_is_nonstandard or key_is_nonstandard):
+        return inchi, inchikey
+
+    standard_inchi = None
+    if RDKIT_AVAILABLE and Chem is not None:
+        # RDKit's InChI warnings ("Omitted undefined stereo") are expected for
+        # these structures and say nothing the caller can act on.
+        with rdBase.BlockLogs():
+            try:
+                mol = Chem.MolFromSmiles(str(smiles)) if not is_missing(smiles) else None
+                if mol is None and not is_missing(inchi):
+                    mol = Chem.MolFromInchi(str(inchi))
+                if mol is not None:
+                    standard_inchi = Chem.MolToInchi(mol) or None
+            except Exception:
+                standard_inchi = None
+    standard_key = Chem.InchiToInchiKey(standard_inchi) if standard_inchi else None
+
+    return (
+        standard_inchi if inchi_is_nonstandard else inchi,
+        standard_key if key_is_nonstandard else inchikey,
+    )
+
+
 def first_cas(cas_values: List[str]) -> Optional[str]:
     """Pick one CAS number out of a candidate's list.
 
@@ -323,7 +390,10 @@ def make_candidate(
     where the other came from. The SMILES is canonicalised on the way in, and
     the molecular mass is taken from the source when it gives one and computed
     from the structure when it does not — both so that two sources stating the
-    same compound differently still compare equal.
+    same compound differently still compare equal. For the same reason a
+    non-standard InChI or InChIKey, which CompTox and ZeroPM store for some
+    substances, is replaced by the standard one; see
+    [`standardize_inchi_and_key`][provesid.tools.standardize_inchi_and_key].
 
     Args:
         source: Display name of the source, e.g. ``"ChEBI"``. This is what
@@ -332,8 +402,8 @@ def make_candidate(
         iupac_name: The IUPAC name, where the source distinguishes it.
         molecular_formula: The molecular formula as the source states it.
         smiles: The structure as SMILES.
-        inchi: The structure as InChI.
-        inchikey: The InChIKey.
+        inchi: The structure as InChI. A non-standard one is replaced.
+        inchikey: The InChIKey. A non-standard one is replaced.
         dtxsid: The DSSTox identifier, for sources that carry one.
         molecular_mass: The mass the source states; falls back to the mass
             RDKit computes from ``smiles``.
@@ -353,8 +423,12 @@ def make_candidate(
         'CC(=O)Oc1ccccc1C(=O)O'
         >>> round(cand["molecular_mass"], 2)
         180.16
+        >>> make_candidate("CompTox", smiles="CC(=O)C1C(=O)OC(C)=CC1=O",
+        ...                inchikey="PGRHXDWITVMQBC-UHFFFAOYNA-N")["InChIKey"]
+        'PGRHXDWITVMQBC-UHFFFAOYSA-N'
     """
     canonical_smiles, rdkit_mass = smiles_to_canonical_and_mass(smiles)
+    inchi, inchikey = standardize_inchi_and_key(smiles, inchi, inchikey)
     return {
         "source": source,
         "name": name,

@@ -4121,7 +4121,8 @@ Items 1 and 2 are fixed (§31.6). Writing the notebooks turned up five more:
    `Search` passes the key through as `InChIKey`, and it can never equal a
    standard key computed elsewhere. The Search tutorial explains this and
    compares skeletons. Recomputing the key from the SMILES, or preferring a
-   standard key from another source, is the fix to weigh.
+   standard key from another source, is the fix to weigh. *Fixed, §33: it
+   went further than the output column, and ZeroPM has the same problem.*
 6. **`PYOPSIN.get_id_from_list` misaligns `cml`.** py2opsin returns the CML
    of a list as one multi-line document. Each record's `cml` holds one line
    of it (`"<?xml …"`, `"<cml …"`, `"    <atomArray>"`), not its own
@@ -4347,3 +4348,82 @@ dependency, but nothing in `src/` imports it.
 With this, every numbered step of §6 is done except step 7, which is postponed
 (§17.0). The items still open are §31.3 items 3, 5, 6, 7 and 8, the two
 unused CSVs in `examples/notebooks/`, §4.13 and §30.7.
+
+## 33. Landed on 2026-09-23 — non-standard InChIKeys (§31.3 item 5)
+
+### 33.1 The size of it
+
+The key's flag, the ninth character of its second block, is `S` for a key
+from a standard InChI and `N` otherwise. Counted in the installed databases:
+
+| source | keys | non-standard | of which only the flag differs | stereo hash differs too | no RDKit key |
+|---|---:|---:|---:|---:|---:|
+| CompTox | 1,153,067 | 131,885 (11%) | 97.7% | 2.1% | 0.14% |
+| ZeroPM | 359,221 | 18,710 (5%) | 95.6% | 4.3% | 0.1% (metals) |
+| PubChemID, ChEBI, ChEMBL | | 0 | | | |
+
+The shares are from 5,000 CompTox and 4,000 ZeroPM rows sampled at random,
+with the standard key computed by RDKit from the row's SMILES (CompTox) or
+InChI (ZeroPM). ZeroPM stores 17,207 of its 18,710 as a second row beside
+the standard one, under another `inchi_id`.
+
+### 33.2 What it broke, besides the output column
+
+§31.3 saw only the `InChIKey` column. Probed before the fix:
+
+| query | before | after |
+|---|---|---|
+| DTXSID `DTXSID6020014` (dehydroacetic acid) | 1 source, `...NA-N` | 4 sources, standard key |
+| DTXSID `DTXSID8020040` (aldrin) | 1 source, `...NA-N` | 3 sources, standard key |
+| InChIKey `PGRHXDWITVMQBC-UHFFFAOYSA-N` | 3 sources, `DTXSID` None | 4 sources, `DTXSID6020014` |
+| CAS `520-45-6`, `cluster_by_skeleton=False` | two hits, CompTox split off | one hit, 4 sources |
+
+A DTXSID query looks the other sources up by the key CompTox returns, so for
+11% of DTXSIDs it found nothing but CompTox. A standard-key query missed the
+CompTox row. Without skeleton clustering, CompTox's candidate was a cluster
+of its own. In the default CAS and name runs the column was right whenever
+ChEBI filled it first, which is why the tutorial showed only 30.
+
+### 33.3 The fix
+
+- `tools.standardize_inchi_and_key(smiles, inchi, inchikey)`, called by
+  `make_candidate`, so it covers every source at once. A standard or missing
+  value is untouched, and nothing is recomputed. A non-standard InChI or key
+  is replaced by the one RDKit computes from the SMILES, or from the InChI
+  when there is no SMILES, or by None when neither can be read. A
+  non-standard key is never passed on as if it could match.
+- `CompToxID.get_by_inchikey` and `ZeroPM.get_id_table_from_inchikey` look up
+  `inchikey_flag_variants(key)`, the key given and the key with the other
+  flag, preferring the key given. That finds the rows where only the flag
+  differs; the stereo-hash ones are left to skeleton matching. The records
+  returned are as stored. For ZeroPM this matters only for the 1,503
+  substances with no standard row.
+- `utils.is_standard_inchikey` and `utils.inchikey_flag_variants`, in
+  `utils` because `comptox.py` and `zeropm.py` cannot import `tools`, which
+  imports `zeropm`.
+
+Tests: `tests/test_nonstandard_inchikeys.py`, 14 tests. Unit tests on a
+three-row CompTox database cover recomputation from SMILES and from InChI,
+an unreadable structure giving None, standard values left alone, clustering
+without skeletons, the flag-variant lookup and exact-spelling preference.
+Integration tests on the installed databases cover the probes above and a
+ZeroPM substance stored only under its non-standard key. With the `Search`,
+source, candidate, CompTox and ZeroPM suites and the doctests of the six
+modules: 715 passed, 3 skipped.
+
+The Search tutorial is re-executed. "Identical" keys against ESOL's own
+SMILES rose from 875 to 902, "same skeleton" fell from 126 to 99, and the
+support counts are unchanged. Its advice to compare skeletons or recompute
+keys is gone; it now checks that no returned key is non-standard.
+
+### 33.4 Found on the way, not done
+
+- **CompTox has no index on `INCHIKEY`.** The Zenodo file indexes DTXSID,
+  CASRN and the preferred name only, so every `get_by_inchikey` scans 1.2
+  million rows: 0.2 s, before and after this fix. `Search` pays it for each
+  InChIKey and InChI query, and each name query with `use_opsin=True`. CAS
+  and plain name runs do not. An index built on first use, like the name
+  index, would make it instant.
+- ZeroPM's `get_id_table_from_inchi` matches the InChI string exactly, so a
+  standard InChI does not find the 1,503 substances stored only under a
+  non-standard one. ZeroPM is off in `Search` by default.

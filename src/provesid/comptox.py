@@ -35,7 +35,7 @@ from typing import Dict, List, Optional, Any, Union
 
 from .datasets import download_file
 from .sqlite_client import SQLiteClient
-from .utils import user_dataset_path
+from .utils import inchikey_flag_variants, user_dataset_path
 
 NAME_INDEX_TABLE = "chemical_names"
 """The table
@@ -607,8 +607,15 @@ class CompToxID(SQLiteClient):
         """
         Get chemical information by InChIKey.
 
+        About 11% of CompTox's substances are stored under a non-standard
+        InChIKey (flag ``N``, as in ``PGRHXDWITVMQBC-UHFFFAOYNA-N``). A key is
+        also looked up with its other flag, so a standard key finds those rows
+        where only the flag differs, about 98% of them. The key given is
+        preferred when both exist. The record returned carries the key as
+        CompTox stores it.
+
         Args:
-            inchikey (str): Standard InChIKey (27 characters)
+            inchikey (str): InChIKey (27 characters), standard or not
 
         Returns:
             (dict): The
@@ -618,13 +625,19 @@ class CompToxID(SQLiteClient):
         Examples:
             >>> CompToxID().get_by_inchikey("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")["DTXSID"]
             'DTXSID5020108'
+            >>> CompToxID().get_by_inchikey("PGRHXDWITVMQBC-UHFFFAOYSA-N")["INCHIKEY"]
+            'PGRHXDWITVMQBC-UHFFFAOYNA-N'
         """
+        spellings = inchikey_flag_variants(inchikey)
+        placeholders = ", ".join("?" * len(spellings))
         cursor = self.conn.cursor()
         cursor.execute(
-            """
-            SELECT * FROM chemicals WHERE INCHIKEY = ?
+            f"""
+            SELECT * FROM chemicals WHERE INCHIKEY IN ({placeholders})
+            ORDER BY INCHIKEY = ? DESC
+            LIMIT 1
         """,
-            (inchikey,),
+            (*spellings, inchikey),
         )
 
         row = cursor.fetchone()

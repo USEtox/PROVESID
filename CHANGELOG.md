@@ -821,6 +821,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PubChemAPI.get_cache_info`.
 
 ### Changed
+- **The README describes the package as it now is: offline first, with
+  `Search` in front.** It opens with a `Search` run and its real output, then
+  covers `datasets` and the five databases with their download and on-disk
+  sizes, the online clients, and links to the executed tutorials. The Python
+  badge says 3.12+, matching `requires-python`. ClassyFire is no longer
+  listed as an available service, and the README points to Chebifier instead.
 - **The tutorials are executed notebooks, rewritten against the current API.**
   Each tutorial in `examples/` is now an `.ipynb` with the outputs of a run,
   so the site shows what every call returns. The old `.md` tutorials had

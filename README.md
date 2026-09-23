@@ -1,219 +1,157 @@
 # PROVESID
 
-[![Documentation Status](https://github.com/USEtox/PROVESID/actions/workflows/mkdocs-deploy.yml/badge.svg)](https://usetox.github.io/PROVESID/)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Documentation](https://github.com/USEtox/PROVESID/actions/workflows/mkdocs-deploy.yml/badge.svg)](https://usetox.github.io/PROVESID/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-PROVESID is a member of the family of pre**PRO**cessing and **VE**rification of **S**ubstance data `PROVES`. `PROVESID` provides Pythonic access to online services of chemical identifiers and data. The goal is to have a clean interface to the most important online databases with a simple, intuitive (and documented), up-to-date, and extendable interface. We offer interfaces to [PubChem](https://pubchem.ncbi.nlm.nih.gov/), [NCI chemical identifier resolver](https://cactus.nci.nih.gov/chemical/structure), [CAS Common Chemistry](https://commonchemistry.cas.org/), [IUPAC OPSIN](https://www.ebi.ac.uk/opsin/), [ChEBI](https://www.ebi.ac.uk/chebi/beta/), and [ClassyFire](http://classyfire.wishartlab.com/). We highly recommend the new users to jump head-first into [examples folder](./examples/) and get started by playing with the code. We also keep documenting the old and new functionalities [here](https://usetox.github.io/PROVESID/). The package also aims to provide an offline platform when data files are availbale from the mentioned online tools.
-
-# Installation
-
-The package can be installed from PyPi by running
-
-```
-pip install provesid
-```
-
-To install the latest development version (for developers and enthusiasts, and also for the latest features), clone or download this repository, for to the root folder and install it by
-
-```
-pip install -e .
-```
-
-We very strongly recommend using [uv](https://docs.astral.sh/uv/getting-started/installation/). `PROVESID` is has a small Python codebase but its data files, when fully downloaded by the user's request, can occupy more than 30 Gb of disk space! `uv` makes sure that the package is installed only once and linked in other virtual environments. It  barely changes your `pip` workflow, and is much faster -and more pleasant- to use. After installing `uv`, simply type:
-
-```
-uv pip install provesid
-```
-
-or for the development version (recommended for now):
-
-```
-uv pip install git+https://github.com/USEtox/PROVESID
-```
-
-# Examples
-
-**PubChem**
+PROVESID resolves chemical identifiers and retrieves chemical data, **offline
+first**. It keeps local copies of PubChem, EPA CompTox, ChEBI, ChEMBL and
+ZeroPM, answers from them, and asks the online services only when you let it.
+It is part of **PROVES**, a family of packages for pre**PRO**cessing and
+**VE**rification of **S**ubstance data.
 
 ```python
-from provesid.pubchem import PubChemAPI
-pc = PubChemAPI()  # Now with unlimited caching!
-cids_aspirin = pc.get_cids_by_name('aspirin')
-res_basic = pc.get_basic_compound_info(cids_aspirin[0])
+from provesid import Search
+
+with Search("cas") as s:
+    df = s.search(["50-00-0", "64-17-5", "1912-24-9"])
+df[["query", "name", "canonical_smiles", "InChIKey", "n_source_support", "confidence"]]
 ```
 
-which returns
+```text
+       query          name         canonical_smiles                     InChIKey  n_source_support  confidence
+0    50-00-0  formaldehyde                      C=O  WSFSSNUMVMOOMR-UHFFFAOYSA-N                 3      0.9000
+1    64-17-5       ethanol                      CCO  LFQSCWFLJHTTHZ-UHFFFAOYSA-N                 4      0.8906
+2  1912-24-9      atrazine  CCNc1nc(Cl)nc(NC(C)C)n1  MXWJVTOOROXGIU-UHFFFAOYSA-N                 4      0.9000
+```
+
+`Search` asks every installed database about each identifier, keeps the
+structure they agree on, and reports how many sources agreed. The same class
+takes names, SMILES, InChIs, InChIKeys, DTXSIDs and formulas. No request
+leaves the machine unless you pass `online_fallback=True`.
+
+## Install
+
+```bash
+uv pip install provesid                                # from PyPI
+uv pip install git+https://github.com/USEtox/PROVESID  # the development version
+```
+
+`pip` works as well. Python 3.12 or later is required.
+
+## The offline databases
+
+The package is small, but the databases are large. None of them ships with
+the package, and none is downloaded until you ask for it by name:
 
 ```python
-{
-  "CID": 2244,
-  "MolecularFormula": "C9H8O4",
-  "MolecularWeight": "180.16",
-  "SMILES": "CC(=O)OC1=CC=CC=C1C(=O)O",
-  "InChI": "InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)",
-  "InChIKey": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
-  "IUPACName": "2-acetyloxybenzoic acid",
-  "success": true,
-  "cid": 2244,
-  "error": null
-}
+from provesid import datasets
+
+datasets.status()                                # what is installed, and where
+datasets.plan(["pubchem", "comptox", "chebi"])   # what a download would cost
+datasets.fetch(["pubchem", "comptox", "chebi"])  # install them
+datasets.remove("chembl")                        # reclaim the space
 ```
 
-**PubChem View for data**
+| name | client | role | download | on disk |
+|---|---|---|---:|---:|
+| `pubchem` | `PubChemID` | CAS, name, InChIKey and formula lookups; the broadest source | 14.3 GiB | 2.3 GiB |
+| `comptox` | `CompToxID` | DTXSID lookups, and curated CAS–name pairs | 817 MiB | 1.1 GiB |
+| `chebi` | `ChebiSDF` | curated structures, synonyms and ChEBI IDs | 250 MiB | 954 MiB |
+| `chembl` | `CheMBL` | adds ChEMBL IDs to structures already found | 5.7 GiB | 2.4 GiB |
+| `zeropm` | `ZeroPM` | regulatory inventories, persistence and mobility; off in `Search` unless `use_zeropm=True` | 439 MiB | 439 MiB |
+
+All five are about 21.5 GiB to download and 7.2 GiB to keep. While ChEMBL
+unpacks, the install needs up to about 38 GiB of free disk space.
+Downloads resume after an interruption, and each file is checked before it
+replaces an existing one.
+
+The databases go into one per-user directory shared by every virtual
+environment on the machine (`~/.local/share/provesid` on Linux). Set
+`PROVESID_DATA_DIR`, or pass `data_dir=` to any client, to put them elsewhere.
+`Search` uses whatever is installed and reports which sources it used in
+`df.attrs["sources_available"]`.
+
+Each database can also be used directly:
 
 ```python
-from provesid import PubChemView, get_property_table
-logp_table = get_property_table(cids_aspirin[0], "LogP")
-logp_table
+from provesid import PubChemID
+
+with PubChemID(auto_download=False) as db:
+    db.cas_to_inchi("50-78-2")
+    db.properties(2244, ["MolecularFormula", "InChIKey"], use_online_fallback=False)
+    db.descriptors(2244, ["TPSA", "MolLogP"])  # RDKit descriptors, computed locally
 ```
 
-which returns a table with the reported values of `logP` for aspirin (including the references for each data point).
+## Online services
 
-**Chemical Identifier Resolver**
+| client | service |
+|---|---|
+| `PubChemAPI` | [PubChem PUG-REST](https://pubchem.ncbi.nlm.nih.gov/) |
+| `PubChemView` | PubChem PUG-View: experimental properties, with values parsed into numbers and SI units |
+| `NCIChemicalIdentifierResolver` | [NCI/CADD Chemical Identifier Resolver](https://cactus.nci.nih.gov/chemical/structure) |
+| `ChEBI` | [ChEBI](https://www.ebi.ac.uk/chebi/) web service |
+| `CASCommonChem` | [CAS Common Chemistry](https://commonchemistry.cas.org/); needs an API key |
+| `OPSIN` | [OPSIN](https://www.ebi.ac.uk/opsin/) name-to-structure; `PYOPSIN` runs it locally, with Java |
 
 ```python
-from provesid import NCIChemicalIdentifierResolver
-resolver = NCIChemicalIdentifierResolver()
-# smiles for formaldehyde
-smiles = resolver.resolve("50-00-0", 'smiles')
-print(f"SMILES for CASRN 50-00-0 is {smiles}") # SMILES for CASRN 50-00-0 is C=O
-# inchi for aspirin
-inchi = resolver.resolve("50-78-2", "stdinchi") # InChI for 50-78-2 is InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)
-print(f"InChI for 50-78-2 is {inchi}")
+from provesid import PubChemAPI, PubChemView, NCIChemicalIdentifierResolver
+
+pc = PubChemAPI()
+cid = pc.get_cids_by_name("aspirin")[0]                       # 2244
+melting = PubChemView().get_property_table(cid, "Melting Point")
+smiles = NCIChemicalIdentifierResolver().resolve("50-00-0", "smiles")  # "C=O"
 ```
 
-**OPSIN**
-This is the online `OPSIN` interface. A local interface also exist that uses `py2opsin` python package and the `JAVA` executables of the `OPSIN` library. You can use the local version (recommended) by loading the `PYOPSIN` clss instead of `OPSIN`.
-```python
-from provesid import OPSIN
-opsin = OPSIN()
-methane_result = opsin.get_id("methane")
-```
+The online clients share one transport. It paces requests per host, retries
+what is worth retrying, and stops asking a host that has said to wait. Their
+answers are cached on disk under `~/.cache/provesid/`, or `PROVESID_CACHE_DIR`.
 
-which returns:
+The CAS Common Chemistry key is stored once and picked up by every later
+`CASCommonChem()`:
 
 ```python
-{'status': 'SUCCESS',
- 'message': '',
- 'inchi': 'InChI=1/CH4/h1H4',
- 'stdinchi': 'InChI=1S/CH4/h1H4',
- 'stdinchikey': 'VNWKTOKETHGBQD-UHFFFAOYSA-N',
- 'smiles': 'C'}
- ```
+from provesid import set_cas_api_key, CASCommonChem
 
-**CAS Common Chemistry**
-
-```python
-# One-time API key setup
-from provesid import set_cas_api_key
-set_cas_api_key("your-cas-api-key")  # Configure once
-
-# Then use anywhere without specifying API key
-from provesid import CASCommonChem
-ccc = CASCommonChem()  # Automatically uses stored API key
-water_info = ccc.cas_to_detail("7732-18-5")
-print("Water (7732-18-5):")
-print(f"  Name: {water_info.get('name')}")
-print(f"  Molecular Formula: {water_info.get('molecularFormula')}")
-print(f"  Molecular Mass: {water_info.get('molecularMass')}")
-print(f"  SMILES: {water_info.get('smile')}")
-print(f"  InChI: {water_info.get('inchi')}")
-print(f"  Status: {water_info.get('status')}")
+set_cas_api_key("your-cas-api-key")
+CASCommonChem().cas_to_detail("7732-18-5")["name"]  # "Water"
 ```
 
-which returns
+`ClassyFireAPI` is still in the package, but the ClassyFire service has not
+classified a new structure since February 2023. For ChEBI chemical classes
+computed offline, install the `chebifier` extra; see the
+[Chebifier guide](https://usetox.github.io/PROVESID/guide/chebifier/).
 
-```
-Water (7732-18-5):
-  Name: Water
-  Molecular Formula: H<sub>2</sub>O
-  Molecular Mass: 18.02
-  SMILES: O
-  InChI: InChI=1S/H2O/h1H2
-  Status: Success
-```
+## Documentation and tutorials
 
-**ChEBI**
+The [documentation](https://usetox.github.io/PROVESID/) has a quick start,
+guides and an API reference generated from the docstrings. The tutorials are
+executed notebooks in [`examples/`](./examples/):
 
-Access to the European Bioinformatics Institute ChEBI (Chemical Entities of Biological Interest) database. See the [tutorial notebook](./examples/ChEBI/ChEBI_tutorial.ipynb).
+- [Resolving a dataset with `Search`](./examples/search/search_tutorial.ipynb), the place to start
+- [PubChem](./examples/pubchem/pubchem_tutorial.ipynb) and [PubChem View](./examples/pubchemview/pubchem_view_tutorial.ipynb)
+- [ChEMBL](./examples/chembl/chembl_tutorial.ipynb)
+- [ChEBI](./examples/ChEBI/ChEBI_tutorial.ipynb) and [ChEBI SDF](./examples/ChEBI/chebi_sdf_tutorial.ipynb)
+- [ZeroPM](./examples/zeropm/zeropm-example.ipynb)
+- [Chemical Identifier Resolver](./examples/resolver/chem_id_resolver_tutorial.ipynb)
+- [CAS Common Chemistry](./examples/CCC/CAS_Common_Chemistry_tutorial.ipynb)
+- [OPSIN](./examples/OPSIN/opsin_tutorial.ipynb)
 
-**ZeroPM Global Chemical Inventory**
+Shorter scripts sit beside them, one folder per feature.
 
-PROVESID now includes access to the [ZeroPM](https://database.zeropm.eu/) global chemical inventory database, which provides information about chemicals listed in regulatory inventories worldwide. The database is automatically downloaded on first use:
+## Related tools
 
-```python
-from provesid.zeropm import ZeroPM
+PROVESID learned from these packages and resources:
 
-# Initialize - database downloads automatically if not present
-zpm = ZeroPM()
+- [PubChemPy](https://github.com/mcs07/PubChemPy) ([docs](https://docs.pubchempy.org/en/latest/))
+- [CIRpy](https://github.com/mcs07/CIRpy) ([docs](https://cirpy.readthedocs.io/en/latest/))
+- the [IUPAC FAIR Chemistry Cookbook](https://iupac.github.io/WFChemCookbook/intro.html), for tutorials on chemistry web APIs
 
-# Query by CAS number
-query_id = zpm.query_cas("50-00-0")  # Formaldehyde
+## Planned
 
-# Get SMILES from CAS
-smiles = zpm.get_smiles_from_cas("50-00-0")
+- [UniChem](https://www.ebi.ac.uk/unichem/api/docs) cross-references.
+- The [ChEBI ontology](https://ftp.ebi.ac.uk/pub/databases/chebi/ontology/), read with [pronto](https://github.com/althonos/pronto).
+- Structure standardisation with the [ChEMBL Structure Pipeline](https://github.com/chembl/ChEMBL_Structure_Pipeline); this may go to `IMPROVES` instead.
 
-# Search by chemical name
-results = zpm.query_similar_name("formaldehyde", threshold=80)
-
-# Query by regulatory inventory
-eu_chemicals = zpm.query_by_inventory(inventory_name="REACH")
-
-# Query by country
-us_chemicals = zpm.query_by_country(country_name="United States")
-
-# Get all available inventories
-inventories = zpm.get_all_inventories()
-
-# Get database statistics
-stats = zpm.get_database_stats()
-```
-
-The database file (~400MB) is downloaded automatically from [GitHub](https://github.com/ZeroPM-H2020/global-chemical-inventory-database) on first use and cached locally. You can also manually download it:
-
-```python
-# Manual download (only needed if auto-download fails)
-zpm = ZeroPM(auto_download=False)  # Skip auto-download
-zpm.download_database()  # Manually trigger download
-```
-
-Large offline datasets are now stored in a shared per-user data directory
-(platform-specific via `platformdirs`) instead of inside each virtual
-environment. This avoids repeated downloads when you use multiple environments.
-
-Power-user controls:
-
-- Set `PROVESID_DATA_DIR` to override the default dataset directory.
-- Set `PROVESID_CACHE_DIR` to override the default cache directory. Cached API
-  responses live under `~/.cache/provesid/<service>/` (and the platform
-  equivalents), separately from the datasets, because they are disposable —
-  see [Caching](./docs/guide/caching.md).
-- Pass `data_dir=...` to `ChebiSDF`, `CheMBL`, `CompToxID`, `PubChemID`,
-  `ZeroPM`, or `Search`.
-- Use `redownload=True` in constructors, or `download_database(..., force=True)` /
-  `download_sdf(..., force=True)` to force a fresh download.
-
-See the [ZeroPM tutorial notebook](./examples/zeropm/zeropm-example.ipynb) for more examples.
-
-**ClassyFire**
-
-See the [tutorial notebook](./examples/ClassyFire/classyfire_tutorial.md).
-
-# Other tools
-
-Several other Python (and other) packages and sample codes are available. We are inspired by them and tried to improve upon them based on our personal experiences working with chemical identifiers and data.  
-
-  - [PubChemPy](https://github.com/mcs07/PubChemPy) and [docs](https://docs.pubchempy.org/en/latest/)  
-  - [CIRpy](https://github.com/mcs07/CIRpy) and [docs](https://cirpy.readthedocs.io/en/latest/)  
-  - [IUPAC cookbook](https://iupac.github.io/WFChemCookbook/intro.html) for a tutorial on using various web APIs.  
-  - more?
-
-# TODO list
-
-We will provide Python interfaces to more online services. Please [open an issue](https://github.com/USEtox/PROVESID/issues) and let us know what else you would like to have included.  
-
-Add data and tool for [Chebi ontology](https://ftp.ebi.ac.uk/pub/databases/chebi/ontology/) data using [pronto](https://github.com/althonos/pronto)  
-Add an interface to the [ChEMBL standardization pipeline](https://link.springer.com/article/10.1186/s13321-020-00456-1) using its [Python package](https://github.com/chembl/ChEMBL_Structure_Pipeline); this feature may be added to `IMPROVES`.  
-
-Add [UniChem](https://www.ebi.ac.uk/unichem/api/docs) API
+Please [open an issue](https://github.com/USEtox/PROVESID/issues) to suggest
+another source or to report a problem.

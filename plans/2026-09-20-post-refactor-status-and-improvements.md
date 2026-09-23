@@ -457,8 +457,8 @@ Steps are independently committable and leave the suite green.
 | 16 | ~~circuit breaker on the shared `RateLimiter`~~ **done, §27** | 4.12 | M |
 | 17 | ~~docstrings with examples, module by module~~ **done, §28** | 4.12 | L |
 | 18 | ~~rebuild `docs/`; delete `docs/examples/`; drop `docs/plans/` from the nav~~ **done, §29** | 4.9 | M |
-| 19 | ~~notebooks, `search/` first~~ **done, §31** (CAS notebook awaits a key) | 4.11 | L |
-| 20 | rewrite `README.md` around offline-first and `Search` | 4.10 | S |
+| 19 | ~~notebooks, `search/` first~~ **done, §31** | 4.11 | L |
+| 20 | ~~rewrite `README.md` around offline-first and `Search`~~ **done, §32** | 4.10 | S |
 
 Step 1 comes first because it is the largest single win in the document, costs
 almost nothing, and needs no download — it reclaims 27 GB on a machine that
@@ -4318,3 +4318,32 @@ behaviour is unchanged.
   `CAS_API_KEY` in the environment; the stored key is not read by the test
   module.
 - The CAS notebook now shows five SMILES resolving correctly, re-executed.
+
+## 32. Landed on 2026-09-23 — step 20, the README (§4.10)
+
+`README.md` is rewritten to mirror `docs/index.md`, with links that work on
+GitHub. Each point of §4.10:
+
+- **`Search` comes first.** The page opens with `Search("cas")` on
+  formaldehyde, ethanol and atrazine, with the output of a run on this
+  machine (3, 4 and 4 sources agreeing), and says that no request leaves the
+  machine without `online_fallback=True`.
+- **The tutorial links** point at the ten executed notebooks of §31.6. All
+  of them resolve.
+- **The badge** says Python 3.12+.
+- **ClassyFire** is no longer listed as a service. One paragraph says the
+  service has classified nothing new since February 2023 and points to the
+  Chebifier guide.
+- **The sizes** are a table from `datasets.plan()` (§14): 21.5 GiB to
+  download, 7.2 GiB to keep, up to about 38 GiB free while ChEMBL unpacks.
+
+Every code block was run before the commit: `Search`, `PubChemID`
+(`cas_to_inchi`, `properties`, `descriptors`), `PubChemAPI`, `PubChemView`,
+the NCI resolver and `CASCommonChem`. The "TODO list" became "Planned", with
+the same three items (UniChem, the ChEBI ontology, the ChEMBL Structure
+Pipeline). None of the three is implemented: `chembl-structure-pipeline` is a
+dependency, but nothing in `src/` imports it.
+
+With this, every numbered step of §6 is done except step 7, which is postponed
+(§17.0). The items still open are §31.3 items 3, 5, 6, 7 and 8, the two
+unused CSVs in `examples/notebooks/`, §4.13 and §30.7.

@@ -604,6 +604,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- **`OPSIN.get_id("")` sent the request.** The URL then ended in `ws/.json`,
+  and OPSIN answered about the name "ws". A blank or whitespace-only name is
+  now a `FAILURE` with `message` "empty name", and no request is made.
 - **`datasets.status()` and `remove("chembl")` could not see an interrupted
   ChEMBL download.** The registry looked for `chembl_NN_sqlite.tar.gz`, but the
   download is saved as `chembl_NN.db.tar.gz`. A half-finished 5.8 GB `.part`
@@ -790,6 +793,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PubChemAPI.get_cache_info`.
 
 ### Changed
+- **The tutorials are executed notebooks, rewritten against the current API.**
+  Each tutorial in `examples/` is now an `.ipynb` with the outputs of a run,
+  so the site shows what every call returns. The old `.md` tutorials had
+  broken silently: every ChEBI field printed `None`, PubChem View raised on
+  `PropertyData.source` and plotted °F melting points as °C, the CAS
+  tutorial ran on a stub that invented records, and the ZeroPM tutorial
+  wrote indexes and a view into the installed database. New:
+  `examples/search/search_tutorial.ipynb` resolves the 1,144 names of the ESOL
+  solubility set offline and checks every answer against the dataset's own
+  structures. The ClassyFire tutorial is now a short page saying the service
+  no longer classifies. `scripts/validate_docs_local.sh` checks that no
+  notebook holds an error output and that every link in one names a built
+  page.
+- **PubChem name searches match whole names by default.**
+  `PubChemAPI.get_cids_by_name`, `get_compounds_by_name` and
+  `find_cids_comprehensive` default to `name_type="complete"`, which is
+  PUG-REST's own default. With `"word"`, any name containing the word matched,
+  and PubChem's first CID was often another compound.
+  `get_cids_by_name("caffeine")` returned `[9871508, 56841593, 3081207, 2519,
+  ...]` and now returns `[2519]`; ibuprofen goes from 303 CIDs, the first of
+  them 24848049, to `[3672]`. CAS numbers and substance-domain queries give
+  the same answers either way. Pass `name_type="word"` for the old behaviour.
+  `Search` already asked for `"complete"` and is unaffected. The two cached
+  methods moved to cache version 2, so an answer cached under the old default
+  is not served for the new one.
 - **The documentation is rebuilt around the docstrings.** Every API page is
   now a short lead and a `:::` directive: `docs/api/` goes from 4 045
   hand-written lines, which had drifted from the code, to 207, and every

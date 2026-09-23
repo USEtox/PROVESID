@@ -41,15 +41,16 @@ nav:
   # The tutorials live in examples/, not docs/: scripts/mkdocs_hooks.py
   # serves them at these paths.
   - Tutorials:
-    - PubChem: examples/pubchem/pubchem_tutorial.md
-    - PubChem View: examples/pubchemview/pubchem_view_tutorial.md
-    - ChEMBL: examples/chembl/chembl_tutorial.md
-    - ChEBI: examples/ChEBI/ChEBI_tutorial.md
-    - ChEBI SDF: examples/ChEBI/chebi_sdf_tutorial.md
-    - ZeroPM: examples/zeropm/zeropm-example.md
-    - Chemical ID Resolver: examples/resolver/chem_id_resolver_tutorial.md
-    - CAS Common Chemistry: examples/CCC/CAS_Common_Chemistry_tutorial.md
-    - OPSIN: examples/OPSIN/opsin_tutorial.md
+    - Resolving a dataset with Search: examples/search/search_tutorial.ipynb
+    - PubChem: examples/pubchem/pubchem_tutorial.ipynb
+    - PubChem View: examples/pubchemview/pubchem_view_tutorial.ipynb
+    - ChEMBL: examples/chembl/chembl_tutorial.ipynb
+    - ChEBI: examples/ChEBI/ChEBI_tutorial.ipynb
+    - ChEBI SDF: examples/ChEBI/chebi_sdf_tutorial.ipynb
+    - ZeroPM: examples/zeropm/zeropm-example.ipynb
+    - Chemical ID Resolver: examples/resolver/chem_id_resolver_tutorial.ipynb
+    - CAS Common Chemistry: examples/CCC/CAS_Common_Chemistry_tutorial.ipynb
+    - OPSIN: examples/OPSIN/opsin_tutorial.ipynb
     - ClassyFire: examples/ClassyFire/classyfire_tutorial.md
   - API Reference:
     - Overview: api/index.md

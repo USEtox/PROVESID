@@ -457,7 +457,7 @@ Steps are independently committable and leave the suite green.
 | 16 | ~~circuit breaker on the shared `RateLimiter`~~ **done, §27** | 4.12 | M |
 | 17 | ~~docstrings with examples, module by module~~ **done, §28** | 4.12 | L |
 | 18 | ~~rebuild `docs/`; delete `docs/examples/`; drop `docs/plans/` from the nav~~ **done, §29** | 4.9 | M |
-| 19 | notebooks, `search/` first | 4.11 | L |
+| 19 | ~~notebooks, `search/` first~~ **done, §31** (CAS notebook awaits a key) | 4.11 | L |
 | 20 | rewrite `README.md` around offline-first and `Search` | 4.10 | S |
 
 Step 1 comes first because it is the largest single win in the document, costs
@@ -4035,3 +4035,191 @@ not the range's `*_min_si`/`*_max_si`.
   `relative_crossrefs`/`scoped_crossrefs` would allow the shorter
   `` [`PRESETS`][] ``, at the price of resolution that depends on scope.
 - §27.6, §26.5, §24.5's other items, §23.5, §4.13 and §22.6 are unchanged.
+
+## 31. Step 19 begun on 2026-09-23 — the tutorials reviewed (§4.11, §29.5)
+
+§29.5 left the ten tutorials in the nav moved but unread. Before any becomes a
+notebook, each was converted with jupytext to a script and run on this machine
+on 2026-09-23 with every dataset installed and a CAS key in the config file.
+Each output was then read against the code. **All ten exit 0, and that proves
+little.** Nearly every cell catches its own exceptions, so a broken cell prints
+`None` or "Error: …" and moves on. Nothing in the build notices, because
+`mkdocs-jupyter` runs with `execute: false` and the pages ship with no outputs.
+
+### 31.1 What a reader gets, tutorial by tutorial
+
+| Tutorial | Runs? | State |
+|---|---|---|
+| `ChEBI/ChEBI_tutorial.md` (543) | yes | **Broken.** Every field lookup uses the retired SOAP keys (`chebiAsciiName`, `Formulae`, `smiles`, `inchiKey`, `Synonyms`, `DatabaseLinks`). ChEBI 2.0 returns `name`, `chemical_data.formula`, `default_structure.smiles`, `names.SYNONYM`, `database_accessions`. About 90 printed values are `None`. The ontology cells find 0 parents and 0 children. The summary lists `get_lite_entity`, which does not exist. |
+| `ChEBI/chebi_sdf_tutorial.md` (161) | yes | Works. No title, no intro, no kernelspec. Exact-name "glucose" finds 0, and the export silently drops CHEBI:17234. Neither is a bug: in ChEBI 2.0 17234 is a class with no structure, so it is not in the SDF. The example is badly chosen. §9 prints thousands of characters of database links. |
+| `CCC/CAS_Common_Chemistry_tutorial.md` (322) | yes | **Misleading.** It decides on "demo mode" from the environment only, so it missed the key stored with `set_cas_api_key` (§29.3) and ran every cell against `_CASDemoStub`. The stub fabricates records with `status: "Success"`, including for `0000-00-0`. The §6 table about telling absence from failure is then shown with output that contradicts it. |
+| `ClassyFire/classyfire_tutorial.md` (1 122) | yes | **Service down.** Every submit is HTTP 500 (§4.8). The longest tutorial in the site is a list of failures. |
+| `OPSIN/opsin_tutorial.md` (360) | yes | Works. Mislabelled cases: `propan-2-ol` and `isopropanol` are captioned "acetone", and `2-phenylpropionic acid` is called ibuprofen. `get_id("")` sends a request and OPSIN answers about "ws", the URL's last path segment (see §31.3). |
+| `pubchem/pubchem_tutorial.md` (525) | yes | Works, with wrong results. `get_cids_by_name("caffeine")[0]` is **9871508**, not 2519, and ibuprofen's is 24848049, not 3672 (see §31.3). Its property "database" puts °F and °C in one column (caffeine melts at "460.0"). Its `smiles` column is all `None`: it reads `CanonicalSMILES`, which PubChem renamed `SMILES`. A sentence stops mid-way ("by providing a `sid` to the"). It has seven H1 headings and a second copy of the PubChemView tutorial. It is written as a changelog ("backward compatible", "new capability", "Key Improvements", "no more `["PC_Compounds"][0]`"). |
+| `pubchemview/pubchem_view_tutorial.md` (506) | yes | **Partly broken.** `PropertyData.source` does not exist (3 errors). `get_property_summary` is read for `unique_values` and `sources`, which it does not return (`values`, `references`). Melting points are pulled with a hand regex and plotted as °C, although every one is °F. This is the one mistake `ParsedValue.value_si` was written to prevent, and the PubChem tutorial teaches it. "Auto-Ignition Temperature", "LC50" and "LD50" are not headings, so they are 0/5 by construction. `get_property_safely` is defined twice and used before its definition. It prints the unit twice ("275 °F (NTP, 1992) °F"). |
+| `resolver/chem_id_resolver_tutorial.md` (587) | yes | Works, with wrong answers. It prints `cas` as if it were one number, but CACTUS returns a newline-joined, unranked list, so ibuprofen "is" 58560-75-1 and ethanol 121182-78-3. The timeout demo "succeeds" at 0.001 s because the answer comes from the cache. It prints literal `\n` (`"\\n"`) five times. `mw` is labelled `exact_mass`. A "heavy_atom_estimate" counts capital letters in the formula. "Legacy" appears four times. |
+| `chembl/chembl_tutorial.md` (268) | yes | Works. Its setup text is wrong: it gives "~5GB compressed, ~29GB uncompressed". The README gives 5.8 GB transferred and 2.4 GiB installed as the extract. It says "release 37", but the registry installs 36. "Next steps" points at the bioactivity tables, which the extract drops (§9.1), and at `data/schema_documentation.txt`, a stray file (§4.12). It ends with "[Link to your docs]". |
+| `zeropm/zeropm-example.md` (847) | yes | Works, but **it writes to the user's database.** §12 runs `create_indexes()`, and §13 creates and drops a view in the installed `zeropm-v0-0-4.sqlite`. Running it here changed the file's mtime. `PRAGMA integrity_check` is `ok` and no view is left over, but a tutorial must not change a dataset. Its first cell is `importlib.reload` "to pick up the new method", ahead of the title. Most examples are `LIMIT 1` rows of arbitrary chemicals rather than a named one. It has two §14s and two §15s, with the summary in the middle. |
+
+### 31.2 Across all ten
+
+- **Nothing leads offline.** The package's entry point, `Search`, has no
+  tutorial. Nor do `PubChemID`, `CompToxID` or `datasets`. Five of the ten are
+  online-only services. This is §4.11's gap, and it is why step 19 says
+  `search/` first.
+- **The site shows no output.** `execute: false` makes each page source only.
+  A reader never sees what a call returns, and a broken cell looks like a
+  working one.
+- **Catch-all `except Exception` everywhere.** It hid every failure in §31.1
+  from the run. A tutorial should let a real error surface and handle only the
+  failure it is demonstrating.
+- **History instead of behaviour.** "new", "legacy", "backward compatible",
+  "improved", "now". §29.1 dropped this from the guides, and the same rule
+  applies here.
+- **Undated and unmeasured claims**: "over 185,000 entities", "500,000+
+  substances", "the only package that implements PubChem View".
+- **Hygiene**: `examples/notebooks/` tracks 4 MB of CSVs (`curated-solubility-dataset.csv`,
+  `solubility_data_ESOL.csv`, `unique_cas_list.csv`) that nothing references
+  since d96963d deleted their notebook, plus three untracked
+  `:Zone.Identifier` files.
+
+### 31.3 Defects in the package found by the review
+
+These are code, not tutorial text, and are listed so they are not lost:
+
+1. **`PubChemAPI.get_cids_by_name` defaults to `name_type="word"`.** A word
+   match returns every compound whose synonyms contain the word, in PubChem's
+   order: 142 CIDs for "aspirin". "caffeine" gives `[9871508, 56841593,
+   3081207, 2519, …]`, and `name_type="complete"` gives `[2519]`. Any caller
+   that takes `[0]` gets the wrong compound. PUG-REST's own default is a
+   complete match.
+2. **`OPSIN.get_id("")`** sends the request, and OPSIN parses the URL's last
+   path segment. An empty name should be refused locally.
+3. **`NCIChemicalIdentifierResolver`'s `cas`** comes back as one
+   newline-joined string, and `stdinchikey` keeps CACTUS's `InChIKey=`
+   prefix. Both are the raw service format. Dev-principle §3 keeps the raw
+   call, so a parsed wrapper is the place to fix it, if anywhere.
+
+Items 1 and 2 are fixed (§31.6). Writing the notebooks turned up five more:
+
+4. **ZeroPM's mobility columns are swapped in the data.** In
+   `zeropm-v0-0-4.sqlite`, table `pm_probabilities`, the persistence
+   columns obey their identities (`not_p + p_or_vp = 1` and
+   `p + vp = p_or_vp`) in 99.2% of the 130,954 rows. The mobility columns do
+   so as labelled in 1.3% of rows, and in 99.9% with `probability_of_m_or_vm`
+   and `probability_of_vm` exchanged. Atrazine reads `vm` 0.986 and `m_or_vm`
+   0.542. `get_pm_probabilities` passes the columns through under their
+   labels, so every `m_or_vm` and `vm` it returns is the other one. The
+   remedy (swap them in the reader, with this evidence, or report upstream)
+   is a scientific decision and is **open**. The ZeroPM tutorial shows only
+   the persistence columns until then.
+5. **`Search` returns CompTox's non-standard InChIKeys.** CompTox stores, for
+   some compounds, a key computed from a non-standard InChI (its second
+   block ends `…NA`, as in `ISTJMQSHILQAEC-UHFFFAOYNA-N`). In the ESOL run all
+   31 such keys came from CompTox. When CompTox supplies the primary record,
+   `Search` passes the key through as `InChIKey`, and it can never equal a
+   standard key computed elsewhere. The Search tutorial explains this and
+   compares skeletons. Recomputing the key from the SMILES, or preferring a
+   standard key from another source, is the fix to weigh.
+6. **`PYOPSIN.get_id_from_list` misaligns `cml`.** py2opsin returns the CML
+   of a list as one multi-line document. Each record's `cml` holds one line
+   of it (`"<?xml …"`, `"<cml …"`, `"    <atomArray>"`), not its own
+   molecule. The other fields line up. The OPSIN tutorial leaves CML out.
+7. **The PUG-View parser misses `"Solubility in water, g/100ml at 25 °C:
+   0.18"`** (benzene). It parses neither the value nor the unit.
+8. **`ClassyFireAPI.get_query(1)` returns `None`** where `curl` gets HTTP 200
+   and `Done` for the same URL. The client makes the request with no timeout
+   and turns every `RequestException` into `e.response`. Step 7.
+
+### 31.4 Still open
+
+- **The CAS Common Chemistry notebook is not executed.** The key stored in
+  `~/.config/provesid/config.json` is still the placeholder written in §28.4,
+  and it outranks the environment. The notebook is committed without outputs
+  and runs as soon as a valid key is stored.
+- §31.3 items 3 to 8. Item 4 needs a decision.
+- `examples/notebooks/` still tracks `curated-solubility-dataset.csv` and
+  `unique_cas_list.csv`, which nothing uses. The ESOL file moved to
+  `examples/search/`.
+- The README (step 20) still describes the old tutorials.
+
+### 31.5 Decisions taken, 2026-09-23
+
+- **ClassyFire**: cut to one short page that says the service is down and
+  gives the calls unexecuted, with a pointer to Chebifier. It stays in the nav
+  until step 7.
+- **`get_cids_by_name`** defaults to `name_type="complete"` (§31.3 item 1),
+  after checking its callers. `"word"` stays available.
+- **Format**: executed `.ipynb`, with outputs committed, run once on this
+  machine. The site shows real output and the build stays offline. An online
+  cell's output is dated by the run.
+
+### 31.6 Landed on 2026-09-23 — the tutorials rewritten as executed notebooks
+
+- **Ten notebooks, and one page.** Every tutorial in the nav except
+  ClassyFire is now an `.ipynb` whose outputs were produced on this machine on
+  2026-09-23 with all five databases installed. Each was rewritten against the
+  current API, not patched. Each prose claim was then checked against the
+  run's own output, and three claims were corrected after the first run. The
+  old `.md` sources are deleted, so there is one copy of each.
+  - **New: `examples/search/search_tutorial.ipynb`**, first in the nav. It
+    resolves the 1,144 names of the ESOL solubility set (Delaney 2004) offline
+    with `Search.enrich`, in 3 min 21 s. 1,038 resolve. Their structures are
+    checked against the dataset's own SMILES: 875 are identical, 126 share the
+    skeleton and 37 differ. It reads the 37: most are ESOL's errors (esters
+    carrying other esters' SMILES, wrong PCB isomers, malformed rings), and a
+    few are the lookup's (alloxantin → allantoin, 8,8'- for 2,2'-biquinoline,
+    and hydrazobenzene → phenylhydrazine from two agreeing databases). It then
+    shows what `"strict"` keeps (28 of 37), what `"recall"` recovers (5 of 8
+    typos right, 3 wrong) and what the online fallback adds (3 of 4).
+  - **PubChem** now starts from `PubChemID` (lookups, `properties()` with its
+    `Source`, `descriptors()`) and moves to PUG-REST for synonyms, substances,
+    computed properties and structure search. **PubChem View** builds a
+    five-solvent property table in SI units, which is the task the old
+    tutorial did in mixed °F and °C. **ChEBI** is written for the 2.0 record
+    shape, including the ontology, structure search and secondary IDs.
+    **ChEMBL**, **ChEBI SDF**, **ZeroPM**, **OPSIN** (with `PYOPSIN`, whose
+    InChIKeys agree 7 of 7 with the web service) and **CACTUS** keep their
+    subjects, with the errors of §31.1 removed. ZeroPM gains the inventories,
+    persistence probabilities and multicomponent substances the old
+    tutorial left out, and it no longer writes to the database. The file's
+    mtime is unchanged by a run.
+  - **ClassyFire** is a short Markdown page: the service is down, the calls
+    are shown unexecuted, and there is a pointer to Chebifier.
+- **Links inside notebooks point at the published site.** mkdocs-jupyter
+  renders a notebook's Markdown without MkDocs' link handling, so a relative
+  `../../guide/x.md` broke on the site (it resolved under `examples/`) and in
+  the repository (the guides are under `docs/`). They are now absolute
+  `https://usetox.github.io/PROVESID/...` URLs, which work on the site, on
+  GitHub and in Jupyter.
+- **`scripts/validate_docs_local.sh`** no longer round-trips the tutorials
+  through jupytext, which only the quick start still needs. It checks that
+  the rendered Search, PubChem and ChEMBL pages show outputs, that no
+  notebook holds an error output, and that every site link in a notebook
+  names a page the build produced. A planted dead link fails it.
+- **Code**:
+  - `get_cids_by_name`, `get_compounds_by_name`, `find_cids_comprehensive`
+    and the unused `_get_compounds_by_name_impl` default to `name_type="complete"`
+    (§31.3 item 1). CAS numbers and substance-domain queries answered the same
+    under both, and common names now answer with the right compound
+    (ibuprofen: 303 CIDs → `[3672]`). The two cached methods moved to cache
+    version 2. A key holds only the arguments passed, so without the bump a
+    call omitting `name_type` was still served the `"word"` answer. That was
+    observed, and it is not hypothetical.
+  - `OPSIN.get_id` refuses a blank name without a request (§31.3 item 2).
+    The test that accepted any outcome now asserts it, and it asserts that
+    no request is made.
+- Links to the tutorials in `docs/`, `mkdocs.yml`, the hook's docstring,
+  `examples/chembl/README.md` and the README's ClassyFire link updated. The
+  Search tutorial is linked from the quick start, the Search guide and its
+  API page.
+
+#### 31.6.1 Validation
+
+- `scripts/validate_docs_local.sh`: `mkdocs build --strict` clean, every
+  notebook free of error outputs, every notebook link a built page.
+- `pytest tests/test_pubchem*.py tests/test_opsin.py tests/test_search*.py
+  tests/test_sources*.py`: 718 passed.
+  `pytest --doctest-modules src/provesid/opsin.py src/provesid/pubchem.py`:
+  68 passed, 10 skipped.
+- Full `pytest`: 1511 passed, 33 skipped.

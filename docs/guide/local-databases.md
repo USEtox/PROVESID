@@ -181,4 +181,4 @@ structure another source found — but it answers lookups by ChEMBL ID, name,
 SMILES, InChI and InChIKey itself, and reports molecular properties, the
 parent–salt hierarchy and pesticide classifications. A
 compacted extract answers every `CheMBL` method exactly as the full release
-does. See the [ChEMBL tutorial](../examples/chembl/chembl_tutorial.md).
+does. See the [ChEMBL tutorial](../examples/chembl/chembl_tutorial.ipynb).

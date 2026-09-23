@@ -302,17 +302,26 @@ class OPSIN:
             carries OPSIN's explanation of which part of the name it could not
             read. On a transport failure ``status`` is ``"FAILURE"`` and
             ``message`` describes the failure; nothing is raised, and nothing
-            is cached.
+            is cached. A blank name is a ``"FAILURE"`` without a request:
+            sent, it would leave the URL ending in ``ws/.json``, and OPSIN
+            would answer about the name "ws".
 
         Examples:
             >>> OPSIN().get_id("ethanol")["smiles"]        # doctest: +SKIP
             'C(C)O'
             >>> OPSIN().get_id("notachemical")["status"]   # doctest: +SKIP
             'FAILURE'
+            >>> OPSIN().get_id("  ")["message"]
+            'empty name'
         """
-        apiurl = self.base_url + iupac_name + '.json'
         res = self._empty_res()
         res["iupac_name"] = iupac_name
+        if not iupac_name.strip():
+            res["status"] = "FAILURE"
+            res["message"] = "empty name"
+            return res
+
+        apiurl = self.base_url + iupac_name + '.json'
 
         try:
             jsondata = self._http.get_json(apiurl, timeout=timeout)

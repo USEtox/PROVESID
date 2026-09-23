@@ -198,7 +198,7 @@ See the [ZeroPM tutorial notebook](./examples/zeropm/zeropm-example.ipynb) for m
 
 **ClassyFire**
 
-See the [tutorial notebook](./examples/ClassyFire/classyfire_tutorial.ipynb).
+See the [tutorial notebook](./examples/ClassyFire/classyfire_tutorial.md).
 
 # Other tools
 

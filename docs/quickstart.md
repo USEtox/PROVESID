@@ -115,5 +115,6 @@ print("SMILES:", resolver.resolve("aspirin", "smiles"))
 
 - [Installing the offline databases](guide/datasets.md)
 - [Resolving identifiers with Search](guide/search.md)
-- [PubChem tutorial](examples/pubchem/pubchem_tutorial.md)
+- [Resolving a real dataset with Search](examples/search/search_tutorial.ipynb), a tutorial
+- [PubChem tutorial](examples/pubchem/pubchem_tutorial.ipynb)
 - [API reference](api/index.md)

@@ -8,7 +8,7 @@ ChEMBL is a manually curated database of bioactive molecules with drug-like prop
 
 ## Files
 
-- `chembl_tutorial.md` - Comprehensive tutorial covering all ChEMBL functionality
+- `chembl_tutorial.ipynb` - Comprehensive tutorial covering all ChEMBL functionality
 - `compact_demo.py` - Shrink a ChEMBL release already on disk, ~27.7 GiB to ~2.4 GiB
 - `download_source_demo.py` - `CheMBL(source=...)`: install as the 2.4 GiB
   extract from the SQLite release or from the MySQL dump, or keep the full release

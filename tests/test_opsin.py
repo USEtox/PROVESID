@@ -426,21 +426,17 @@ class TestOPSINErrorHandling:
                 # URL encoding errors are acceptable
                 assert any(keyword in str(e).lower() for keyword in ['url', 'encoding', 'request'])
     
-    def test_empty_and_whitespace_names(self, opsin):
-        """Test handling of empty and whitespace-only names"""
-        empty_names = ['', '   ', '\t', '\n', '  \t\n  ']
-        
-        for name in empty_names:
-            try:
-                result = opsin.get_id(name)
-                assert 'status' in result
-                # Should handle gracefully, likely with FAILURE status
-                if result['status'] not in ['FAILURE', 'Internal server error']:
-                    # Some might be processed as valid (unlikely but possible)
-                    pass
-            except Exception:
-                # Request errors for empty names are acceptable
-                pass
+    def test_empty_and_whitespace_names(self, opsin, monkeypatch):
+        """A blank name fails locally: sent, OPSIN would parse the URL's "ws"."""
+        def no_request(*args, **kwargs):
+            raise AssertionError("a blank name must not be sent")
+        monkeypatch.setattr(opsin._http, "get_json", no_request)
+
+        for name in ['', '   ', '\t', '\n', '  \t\n  ']:
+            result = opsin.get_id(name)
+            assert result['status'] == 'FAILURE'
+            assert result['message'] == 'empty name'
+            assert result['iupac_name'] == name
     
     def test_very_long_names(self, opsin):
         """Test handling of very long compound names"""

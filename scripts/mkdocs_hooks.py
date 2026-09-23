@@ -5,7 +5,7 @@ MkDocs hooks for the PROVESID documentation. Wired up in ``mkdocs.yml`` under
 **The tutorials are served from ``examples/``.** They live in
 ``examples/<area>/`` next to the scripts they go with, and that is the only
 copy. Each is added to the site at the path it would have had inside
-``docs/`` --- ``examples/pubchem/pubchem_tutorial.md`` --- so the nav and the
+``docs/`` --- ``examples/pubchem/pubchem_tutorial.ipynb`` --- so the nav and the
 links in ``docs/`` name them as if they were there. A tutorial is any ``.md``
 or ``.ipynb`` file under ``examples/`` except a folder's ``README.md``, which
 describes the scripts beside it for someone reading the repository. The

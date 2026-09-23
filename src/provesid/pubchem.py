@@ -354,7 +354,7 @@ class PubChemNotFoundError(PubChemError, NotFoundError):
         >>> api.get_cids_by_name("xyzzy-no-such")             # doctest: +SKIP
         Traceback (most recent call last):
         ...
-        provesid.pubchem.PubChemNotFoundError: No data for https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/xyzzy-no-such/cids/JSON?name_type=word (HTTP 404)
+        provesid.pubchem.PubChemNotFoundError: No data for https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/xyzzy-no-such/cids/JSON?name_type=complete (HTTP 404)
     """
     pass
 
@@ -902,7 +902,7 @@ class PubChemAPI:
         return result
 
     def _get_compounds_by_name_impl(self, name: str, output_format: str = OutputFormat.JSON,
-                                   name_type: str = "word") -> Any:
+                                   name_type: str = "complete") -> Any:
         """Implementation method for get_compounds_by_name with caching"""
         url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.NAME, name,
                              Operation.RECORD, output_format, name_type=name_type)
@@ -920,15 +920,18 @@ class PubChemAPI:
 
         return result
 
-    @cached(service='pubchem')
+    # version=2: name_type's default became "complete". A key holds only the
+    # arguments passed, so without the bump a call that omits name_type
+    # would still be served the "word" answer cached under the old default.
+    @cached(service='pubchem', version=2)
     def get_compounds_by_name(self, name: str, output_format: str = OutputFormat.JSON,
-                             name_type: str = "word") -> Any:
+                             name_type: str = "complete") -> Any:
         """
         Get compounds by name
 
-        ``name_type="word"`` (the default) matches every compound one of whose
-        names contains the word, so a common name returns many records;
-        ``"complete"`` matches whole names only.
+        ``name_type="complete"`` (the default) matches whole names only;
+        ``"word"`` matches every compound one of whose names contains the
+        word, so a common name returns many records.
 
         Args:
             name: Compound name
@@ -945,10 +948,10 @@ class PubChemAPI:
 
         Examples:
             >>> api = PubChemAPI()
-            >>> len(api.get_compounds_by_name("aspirin"))                 # doctest: +SKIP
-            142
-            >>> api.get_compounds_by_name("aspirin", name_type="complete")["id"]  # doctest: +SKIP
+            >>> api.get_compounds_by_name("aspirin")["id"]                # doctest: +SKIP
             {'id': {'cid': 2244}}
+            >>> len(api.get_compounds_by_name("aspirin", name_type="word"))  # doctest: +SKIP
+            142
         """
         url = self._build_url(Domain.COMPOUND, CompoundDomainNamespace.NAME, name,
                              Operation.RECORD, output_format, name_type=name_type)
@@ -1452,16 +1455,23 @@ class PubChemAPI:
         # Return empty list if no synonyms found
         return []
 
-    @cached(service='pubchem')
+    # version=2: name_type's default became "complete". A key holds only the
+    # arguments passed, so without the bump a call that omits name_type
+    # would still be served the "word" answer cached under the old default.
+    @cached(service='pubchem', version=2)
     def get_cids_by_name(self, name: str, output_format: str = OutputFormat.JSON,
-                        name_type: str = "word", domain: str = Domain.COMPOUND) -> Any:
+                        name_type: str = "complete", domain: str = Domain.COMPOUND) -> Any:
         """
         Get CIDs by name from compound or substance domain
 
         Args:
             name: Compound or substance name
             output_format: Desired output format
-            name_type: Name search type ("word" or "complete")
+            name_type: ``"complete"`` (the default) matches whole names;
+                ``"word"`` matches any name containing the word, which for a
+                common name returns hundreds of CIDs whose first is often not
+                the compound asked for ("caffeine" gives 9871508 first, and
+                2519 fourth).
             domain: Search domain (Domain.COMPOUND or Domain.SUBSTANCE)
 
         Returns:
@@ -1480,8 +1490,10 @@ class PubChemAPI:
 
         Examples:
             >>> api = PubChemAPI()
-            >>> api.get_cids_by_name("aspirin")[:3]               # doctest: +SKIP
-            [2244, 1983, 9871508]
+            >>> api.get_cids_by_name("caffeine")                  # doctest: +SKIP
+            [2519]
+            >>> api.get_cids_by_name("caffeine", name_type="word")[:4]  # doctest: +SKIP
+            [9871508, 56841593, 3081207, 2519]
             >>> api.get_cids_by_name("50-78-2", domain=Domain.SUBSTANCE)  # doctest: +SKIP
             [12280114, 2244, 67252, 3434975]
         """
@@ -2466,7 +2478,7 @@ class PubChemAPI:
                 'total_synonyms': 0
             }
 
-    def find_cids_comprehensive(self, name: str, name_type: str = "word") -> Dict[str, Any]:
+    def find_cids_comprehensive(self, name: str, name_type: str = "complete") -> Dict[str, Any]:
         """
         Search for CIDs in both compound and substance domains
 

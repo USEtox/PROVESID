@@ -4,7 +4,8 @@
 SMILES, InChIs, InChIKeys, DTXSIDs or formulas — asks every installed offline
 database about each, and returns one table: the structure the databases agree
 on, every identifier they hold for it, where each came from, and how confident
-the answer is.
+the answer is. The [Search tutorial](../examples/search/search_tutorial.ipynb)
+works through a real dataset with it.
 
 ```python
 from provesid import Search

@@ -136,5 +136,5 @@ rows[1]
 #  'value_min_si': 411.15, 'value_max_si': 413.15, 'unit_si': 'K', ...}
 ```
 
-The [PubChem View tutorial](../examples/pubchemview/pubchem_view_tutorial.md)
+The [PubChem View tutorial](../examples/pubchemview/pubchem_view_tutorial.ipynb)
 walks through a full example.

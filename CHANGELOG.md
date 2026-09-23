@@ -621,6 +621,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   try the key with its other flag, which finds the 98% of CompTox's and 96%
   of ZeroPM's non-standard rows where only the flag differs. New helpers:
   `provesid.utils.is_standard_inchikey` and `inchikey_flag_variants`.
+- **ZeroPM's InChI lookups missed substances stored under a non-standard
+  InChI.** They compared the InChI as a string, so a standard InChI
+  (`InChI=1S/...`) could not match one stored only as `InChI=1/...`. When
+  the string misses, `get_id_table_from_inchi` and `get_cas_from_inchi`
+  (and so `get_cas_from_smiles`) now compute the InChIKey and look it up
+  with either flag. This finds 536 of the 816 substances no standard InChI
+  matched, such as trans-1,4-cyclohexanediol (6995-79-5). The other 280
+  have relative stereo (`/s2`), which a standard InChI cannot express.
+  `get_cas_from_inchikey`, `get_smiles_from_inchikey` and
+  `batch_get_cas_from_inchikey` now try both flags, like
+  `get_id_table_from_inchikey`. The `inchi` and `inchikey` columns of
+  `get_id_table_from_inchi` hold ZeroPM's stored values.
 - **`CASCommonChem.smiles_to_detail` rarely returned the substance asked
   for.** It passed the SMILES to CAS's search, which matches a SMILES only as
   the exact string CAS stores, and took the first hit. `CCO` found nothing,

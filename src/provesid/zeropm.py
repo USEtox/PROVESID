@@ -41,7 +41,7 @@ Examples:
 
 import sqlite3
 import os
-from rdkit import Chem
+from rdkit import Chem, rdBase
 import logging
 from rapidfuzz import process, fuzz, utils
 import pandas as pd
@@ -306,6 +306,73 @@ class ZeroPM(SQLiteClient):
         except Exception as e:
             logging.warning(f"Error converting InChI to SMILES: {e}")
             return None
+
+    def _find_substance_by_inchikey(self, inchikey):
+        """The ``substances`` row stored under an InChIKey, in either flag spelling.
+
+        About 5% of ZeroPM's substances are stored under a non-standard InChI
+        and InChIKey. The key is looked up as given and with its other flag
+        (``...SA-N`` / ``...NA-N``, see
+        [`inchikey_flag_variants`][provesid.utils.inchikey_flag_variants]),
+        preferring the key as given.
+
+        Parameters
+        ----------
+        inchikey : str
+            InChIKey, standard or not
+
+        Returns
+        -------
+        tuple or None
+            ``(inchi_id, inchi, inchikey)`` as stored, or None
+        """
+        spellings = inchikey_flag_variants(inchikey)
+        placeholders = ", ".join("?" * len(spellings))
+        self.cursor.execute(f"""
+            SELECT inchi_id, inchi, inchikey
+            FROM substances
+            WHERE inchikey IN ({placeholders})
+            ORDER BY inchikey = ? DESC
+            LIMIT 1
+        """, (*spellings, inchikey))
+        return self.cursor.fetchone()
+
+    def _find_substance_by_inchi(self, inchi):
+        """The ``substances`` row an InChI names, stored standard or not.
+
+        The InChI is matched as a string first. When that misses, its
+        InChIKey is computed with RDKit and looked up in both flag spellings
+        (see
+        [`_find_substance_by_inchikey`][provesid.zeropm.ZeroPM._find_substance_by_inchikey]).
+        That lets a standard InChI (``InChI=1S/...``) find a substance
+        stored only under a non-standard one (``InChI=1/...``) whose key
+        differs by the flag alone, and the reverse. A non-standard InChI with
+        relative stereo (``/s2``) hashes differently from any standard one
+        and is still not found.
+
+        Parameters
+        ----------
+        inchi : str
+            InChI string, standard or not
+
+        Returns
+        -------
+        tuple or None
+            ``(inchi_id, inchi, inchikey)`` as stored, or None when neither
+            the string nor its key is in the database, or when the string is
+            not an InChI
+        """
+        self.cursor.execute("""
+            SELECT inchi_id, inchi, inchikey
+            FROM substances
+            WHERE inchi = ?
+        """, (inchi,))
+        row = self.cursor.fetchone()
+        if row or not str(inchi).startswith("InChI="):
+            return row
+        with rdBase.BlockLogs():
+            inchikey = Chem.InchiToInchiKey(inchi)
+        return self._find_substance_by_inchikey(inchikey) if inchikey else None
 
     def query_cas(self, cas_rn):
         """
@@ -706,10 +773,14 @@ class ZeroPM(SQLiteClient):
         """
         Returns the CAS number(s) from an InChI string.
 
+        The InChI is found as in
+        [`get_id_table_from_inchi`][provesid.zeropm.ZeroPM.get_id_table_from_inchi]:
+        as a string, else by its InChIKey with either flag.
+
         Parameters
         ----------
         inchi : str
-            InChI string
+            InChI string, standard or not
 
         Returns
         -------
@@ -729,12 +800,7 @@ class ZeroPM(SQLiteClient):
         True
         """
         # First, find the inchi_id
-        self.cursor.execute("""
-            SELECT inchi_id
-            FROM substances
-            WHERE inchi = ?
-        """, (inchi,))
-        result = self.cursor.fetchone()
+        result = self._find_substance_by_inchi(inchi)
         if not result:
             return None
 
@@ -760,10 +826,13 @@ class ZeroPM(SQLiteClient):
         """
         Returns the CAS number(s) from an InChIKey.
 
+        The key is looked up with either flag, as in
+        [`get_id_table_from_inchikey`][provesid.zeropm.ZeroPM.get_id_table_from_inchikey].
+
         Parameters
         ----------
         inchikey : str
-            InChIKey string
+            InChIKey string, standard or not
 
         Returns
         -------
@@ -777,13 +846,8 @@ class ZeroPM(SQLiteClient):
         >>> "64-17-5" in zpm.get_cas_from_inchikey("LFQSCWFLJHTTHZ-UHFFFAOYSA-N")
         True
         """
-        # First, find the inchi_id
-        self.cursor.execute("""
-            SELECT inchi_id
-            FROM substances
-            WHERE inchikey = ?
-        """, (inchikey,))
-        result = self.cursor.fetchone()
+        # First, find the inchi_id, under either flag spelling
+        result = self._find_substance_by_inchikey(inchikey)
         if not result:
             return None
 
@@ -808,12 +872,14 @@ class ZeroPM(SQLiteClient):
     def get_smiles_from_inchikey(self, inchikey):
         """
         Returns the SMILES from an InChIKey.
-        SMILES is generated on-the-fly from InChI using RDKit.
+        SMILES is generated on-the-fly from InChI using RDKit. The key is
+        looked up with either flag, as in
+        [`get_id_table_from_inchikey`][provesid.zeropm.ZeroPM.get_id_table_from_inchikey].
 
         Parameters
         ----------
         inchikey : str
-            InChIKey string
+            InChIKey string, standard or not
 
         Returns
         -------
@@ -826,18 +892,13 @@ class ZeroPM(SQLiteClient):
         >>> zpm.get_smiles_from_inchikey("LFQSCWFLJHTTHZ-UHFFFAOYSA-N")
         'CCO'
         """
-        # Get InChI from InChIKey
-        self.cursor.execute("""
-            SELECT inchi
-            FROM substances
-            WHERE inchikey = ?
-        """, (inchikey,))
-        result = self.cursor.fetchone()
+        # Get InChI from InChIKey, under either flag spelling
+        result = self._find_substance_by_inchikey(inchikey)
 
         if not result:
             return None
 
-        inchi = result[0]
+        inchi = result[1]
         return self._inchi_to_smiles(inchi)
 
     def get_cas_from_smiles(self, smiles):
@@ -1402,10 +1463,21 @@ class ZeroPM(SQLiteClient):
         This method retrieves the inchi_id for the InChI, then finds all associated
         query_ids and their CAS numbers. It also includes synonyms and sources.
 
+        About 5% of ZeroPM's substances are stored under a non-standard InChI
+        (``InChI=1/...``). The InChI is matched as a string first; when that
+        misses, its InChIKey is computed and looked up with either flag, as
+        in
+        [`get_id_table_from_inchikey`][provesid.zeropm.ZeroPM.get_id_table_from_inchikey].
+        So a standard InChI finds a substance stored only under a
+        non-standard one whose key differs by the flag alone: 536 of the
+        816 such substances that no standard InChI matched as a string. The
+        other 280 have relative stereo (``/s2``), which a standard InChI
+        cannot express.
+
         Parameters
         ----------
         inchi : str
-            InChI string
+            InChI string, standard or not
 
         Returns
         -------
@@ -1415,6 +1487,7 @@ class ZeroPM(SQLiteClient):
             One row per query --- CAS number or name --- that reaches the
             structure, best rank first; ``cas`` is NaN for a name query. The
             synonyms are those of the first CAS number, on every row.
+            ``inchi`` and ``inchikey`` are as ZeroPM stores them.
 
         Examples
         --------
@@ -1424,20 +1497,22 @@ class ZeroPM(SQLiteClient):
            query_id  rank         cas
         0      8671     1     50-00-0
         3     35725     1  30525-89-4
+
+        trans-1,4-Cyclohexanediol is stored only under a non-standard InChI:
+
+        >>> df = zpm.get_id_table_from_inchi(
+        ...     "InChI=1S/C6H12O2/c7-5-1-2-6(8)4-3-5/h5-8H,1-4H2/t5-,6-")
+        >>> df["cas"].dropna().tolist(), df["inchikey"].unique().tolist()
+        (['6995-79-5'], ['VKONPUDBRVKQLM-IZLXSQMJNA-N'])
         """
-        # Get inchi_id and inchikey from InChI
-        self.cursor.execute("""
-            SELECT inchi_id, inchikey
-            FROM substances
-            WHERE inchi = ?
-        """, (inchi,))
-        result = self.cursor.fetchone()
+        # Get inchi_id, and the InChI and InChIKey as stored
+        result = self._find_substance_by_inchi(inchi)
 
         if not result:
             self.logger.debug("InChI %s not found in database", inchi)
             return None
 
-        inchi_id, inchikey = result
+        inchi_id, inchi, inchikey = result
 
         # Get all query_ids and ranks for this inchi_id
         self.cursor.execute("""
@@ -1594,22 +1669,13 @@ class ZeroPM(SQLiteClient):
         3     1  30525-89-4
         """
         # Get inchi_id and inchi from InChIKey, in either flag spelling
-        spellings = inchikey_flag_variants(inchikey)
-        placeholders = ", ".join("?" * len(spellings))
-        self.cursor.execute(f"""
-            SELECT inchi_id, inchi
-            FROM substances
-            WHERE inchikey IN ({placeholders})
-            ORDER BY inchikey = ? DESC
-            LIMIT 1
-        """, (*spellings, inchikey))
-        result = self.cursor.fetchone()
+        result = self._find_substance_by_inchikey(inchikey)
 
         if not result:
             self.logger.debug("InChIKey %s not found in database", inchikey)
             return None
 
-        inchi_id, inchi = result
+        inchi_id, inchi, _ = result
 
         # Get all query_ids and ranks for this inchi_id
         self.cursor.execute("""
@@ -2073,7 +2139,9 @@ class ZeroPM(SQLiteClient):
         dict
             Dictionary mapping InChIKeys to CAS numbers (or None if not found);
             one number as a string, several as a list, as broad as
-            [`get_cas_from_inchi`][provesid.zeropm.ZeroPM.get_cas_from_inchi]
+            [`get_cas_from_inchi`][provesid.zeropm.ZeroPM.get_cas_from_inchi].
+            Each key is looked up with either flag, as in
+            [`get_cas_from_inchikey`][provesid.zeropm.ZeroPM.get_cas_from_inchikey].
 
         Examples
         --------
@@ -2088,15 +2156,13 @@ class ZeroPM(SQLiteClient):
         if not inchikey_list:
             return {}
 
-        # First, get inchi_ids for all inchikeys
-        placeholders = ','.join('?' * len(inchikey_list))
-        self.cursor.execute(f"""
-            SELECT inchikey, inchi_id
-            FROM substances
-            WHERE inchikey IN ({placeholders})
-        """, inchikey_list)
-
-        inchikey_to_id = {row[0]: row[1] for row in self.cursor.fetchall()}
+        # First, get inchi_ids for all inchikeys, each under either flag
+        # spelling as in get_cas_from_inchikey; each lookup is one index probe
+        inchikey_to_id = {}
+        for inchikey in inchikey_list:
+            found = self._find_substance_by_inchikey(inchikey)
+            if found:
+                inchikey_to_id[inchikey] = found[0]
 
         # Get all CAS numbers for these inchi_ids
         if not inchikey_to_id:

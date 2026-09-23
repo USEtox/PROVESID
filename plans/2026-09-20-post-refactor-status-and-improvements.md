@@ -4426,7 +4426,8 @@ keys is gone; it now checks that no returned key is non-standard.
   index, would make it instant. *Done, §34.*
 - ZeroPM's `get_id_table_from_inchi` matches the InChI string exactly, so a
   standard InChI does not find the 1,503 substances stored only under a
-  non-standard one. ZeroPM is off in `Search` by default.
+  non-standard one. ZeroPM is off in `Search` by default. *Done, §35: 816
+  of them were out of reach, not 1,503, and 536 are now found.*
 
 ## 34. Landed on 2026-09-23 — an index on CompTox's `INCHIKEY` (§33.4)
 
@@ -4471,3 +4472,52 @@ suites: 634 passed. Doctests of `comptox`, `sources` and `search`: 41 passed,
 CompTox's `SMILES`, `DTXCID` and `MOLECULAR_FORMULA` are unindexed too, at
 0.13 to 0.17 s a lookup. `Search` reads `SMILES` for each SMILES query. They
 are left as they are.
+
+## 35. Landed on 2026-09-23 — ZeroPM finds a non-standard InChI (§33.4)
+
+### 35.1 The size of it
+
+§33.4 counted 1,503 non-standard rows with no row under the standard-flag
+key. For each one, RDKit read the stored InChI and wrote the standard InChI:
+
+| the standard InChI | substances |
+|---|---:|
+| matches another row as a string, which a query already found | 687 |
+| misses as a string, but its key with the other flag is this row's | 535 |
+| the same, and the key finds another row | 1 |
+| misses both: relative stereo (`/s2`) against absolute (`/m0/s1`) | 280 |
+
+Those 687 are stored twice. The non-standard key's stereo hash differs from
+the standard row's, which is why §33.4 counted them. The real gap was 816
+substances, and a key lookup closes 536 of them. The 280 are out of reach,
+since a standard InChI cannot express relative stereo. `Search` can still
+reach them by skeleton.
+
+### 35.2 The fix
+
+- `ZeroPM._find_substance_by_inchi` matches the string, then computes the
+  InChIKey with `Chem.InchiToInchiKey` (under `rdBase.BlockLogs`, and only
+  for a string starting `InChI=`). It looks the key up through
+  `_find_substance_by_inchikey`, the flag-variant query from §33 now
+  shared. It returns `(inchi_id, inchi, inchikey)` as stored.
+- `get_id_table_from_inchi` and `get_cas_from_inchi` use it, and so does
+  `get_cas_from_smiles`, which goes through `get_cas_from_inchi`. The
+  table's `inchi` column is the stored InChI, not the query. The two differ
+  only on the new fallback.
+- `get_cas_from_inchikey`, `get_smiles_from_inchikey` and
+  `batch_get_cas_from_inchikey` still matched the key exactly, while §33
+  gave `get_id_table_from_inchikey` both flags. They use
+  `_find_substance_by_inchikey` too. The batch now probes the index key by
+  key instead of one `IN` query, so it cannot disagree with the single-key
+  method.
+
+Tests: 11 more in `tests/test_nonstandard_inchikeys.py`. Unit tests on an
+in-memory `substances` table cover both directions (standard to stored
+non-standard, and the reverse), a miss, non-InChI strings and the stored
+values returned. Integration tests on the installed ZeroPM cover
+trans-1,4-cyclohexanediol by InChI, by key through all three key readers,
+the relative-stereo limit, and `Search("inchi", use_zeropm=True)`. Before
+the fix that search found the diol in CompTox only; now ZeroPM supports it
+too. With the `Search`, sources, CompTox, non-standard-key, ZeroPM and
+SQLite-lifecycle suites: 645 passed. Doctests of `zeropm`, `comptox`,
+`sources`, `search`, `utils` and `tools`: 139 passed, 3 skipped.

@@ -20,6 +20,7 @@ from provesid.comptox import CompToxID
 from provesid.search import Search, _cluster_candidates
 from provesid.tools import make_candidate, standardize_inchi_and_key
 from provesid.utils import inchikey_flag_variants, is_standard_inchikey
+from provesid.zeropm import ZeroPM
 
 # Dehydroacetic acid as CompTox stores it, and its standard key.
 DEHYDROACETIC_SMILES = "CC(=O)C1C(=O)OC(C)=CC1=O"
@@ -174,14 +175,101 @@ def test_comptox_is_not_split_off_without_skeleton_clustering(installed):
     assert df.iloc[0]["n_source_support"] >= 3
 
 
-@pytest.mark.integration
-def test_zeropm_finds_a_substance_stored_only_under_its_non_standard_key():
-    from provesid import ZeroPM
+# ── ZeroPM's InChI lookups ───────────────────────────────────────────────────
+
+# trans-1,4-Cyclohexanediol (6995-79-5): ZeroPM stores only the non-standard
+# InChI, which differs from the standard one by its prefix alone.
+DIOL_STANDARD_INCHI = "InChI=1S/C6H12O2/c7-5-1-2-6(8)4-3-5/h5-8H,1-4H2/t5-,6-"
+DIOL_STORED_INCHI = "InChI=1/C6H12O2/c7-5-1-2-6(8)4-3-5/h5-8H,1-4H2/t5-,6-"
+DIOL_STANDARD_KEY = "VKONPUDBRVKQLM-IZLXSQMJSA-N"
+DIOL_STORED_KEY = "VKONPUDBRVKQLM-IZLXSQMJNA-N"
+ETHANOL_INCHI = "InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3"
+ETHANOL_KEY = "LFQSCWFLJHTTHZ-UHFFFAOYSA-N"
+
+
+@pytest.fixture
+def zeropm_substances():
+    """A ZeroPM client over a ``substances`` table alone, in memory."""
+    connection = sqlite3.connect(":memory:")
+    connection.execute(
+        "CREATE TABLE substances (inchi_id INTEGER PRIMARY KEY, inchi TEXT, inchikey TEXT)"
+    )
+    connection.executemany("INSERT INTO substances VALUES (?, ?, ?)", [
+        (1, DIOL_STORED_INCHI, DIOL_STORED_KEY),
+        (2, ETHANOL_INCHI, ETHANOL_KEY),
+    ])
+    client = object.__new__(ZeroPM)
+    client._adopt_connection(connection, db_path=":memory:")
+    with client:
+        yield client
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("inchi,inchi_id", [
+    (DIOL_STORED_INCHI, 1),                         # as stored
+    (DIOL_STANDARD_INCHI, 1),                       # standard, stored non-standard
+    ("InChI=1/C2H6O/c1-2-3/h3H,2H2,1H3", 2),        # non-standard, stored standard
+    ("InChI=1S/C2H6O/c1-3-2/h1H3", None),           # dimethyl ether: not there
+    ("not an InChI", None),
+    ("InChI=1S/garbage", None),
+])
+def test_an_inchi_is_found_by_string_or_by_its_key(zeropm_substances, inchi, inchi_id):
+    found = zeropm_substances._find_substance_by_inchi(inchi)
+    assert (found[0] if found else None) == inchi_id
+
+
+@pytest.mark.unit
+def test_the_row_found_by_key_is_returned_as_stored(zeropm_substances):
+    assert tuple(zeropm_substances._find_substance_by_inchi(DIOL_STANDARD_INCHI)) == (
+        1, DIOL_STORED_INCHI, DIOL_STORED_KEY,
+    )
+
+
+@pytest.fixture(scope="module")
+def zeropm():
     try:
-        zpm = ZeroPM(auto_download=False)
+        client = ZeroPM(auto_download=False)
     except FileNotFoundError:  # pragma: no cover - environment dependent
         pytest.skip("ZeroPM is not installed")
-    with zpm:
-        table = zpm.get_id_table_from_inchikey("ANPMEHLBMHHCML-UHFFFAOYSA-N")
+    with client:
+        yield client
+
+
+@pytest.mark.integration
+def test_zeropm_finds_a_substance_stored_only_under_its_non_standard_key(zeropm):
+    table = zeropm.get_id_table_from_inchikey("ANPMEHLBMHHCML-UHFFFAOYSA-N")
     assert table is not None
     assert "173524-60-2" in table["cas"].tolist()
+
+
+@pytest.mark.integration
+def test_zeropm_finds_a_substance_stored_only_under_its_non_standard_inchi(zeropm):
+    table = zeropm.get_id_table_from_inchi(DIOL_STANDARD_INCHI)
+    assert table["cas"].dropna().tolist() == ["6995-79-5"]
+    assert set(table["inchi"]) == {DIOL_STORED_INCHI}
+    assert zeropm.get_cas_from_inchi(DIOL_STANDARD_INCHI) == "6995-79-5"
+
+
+@pytest.mark.integration
+def test_every_zeropm_key_lookup_tries_both_flags(zeropm):
+    assert zeropm.get_cas_from_inchikey(DIOL_STANDARD_KEY) == "6995-79-5"
+    assert zeropm.get_smiles_from_inchikey(DIOL_STANDARD_KEY) == "O[C@H]1CC[C@H](O)CC1"
+    assert zeropm.batch_get_cas_from_inchikey([DIOL_STANDARD_KEY, "XXXXXXXXXXXXXX-UHFFFAOYSA-N"]) == {
+        DIOL_STANDARD_KEY: "6995-79-5", "XXXXXXXXXXXXXX-UHFFFAOYSA-N": None,
+    }
+
+
+@pytest.mark.integration
+def test_relative_stereo_is_still_out_of_reach(zeropm):
+    """Stored as ``/t9-,10+,11-,12-/s2``: no standard InChI hashes the same."""
+    standard = ("InChI=1S/C13H20O2/c1-4-15-13(14)12-10-6-5-9(7-10)11(12)8(2)3"
+                "/h5-6,8-12H,4,7H2,1-3H3/t9-,10+,11-,12-/m0/s1")
+    assert zeropm.get_id_table_from_inchi(standard) is None
+
+
+@pytest.mark.integration
+def test_search_by_inchi_reaches_zeropm(installed, zeropm):
+    with Search("inchi", use_zeropm=True, show_progress=False) as s:
+        row = s.search([DIOL_STANDARD_INCHI]).iloc[0]
+    assert row["source_details"]["ZeroPM"]["found"]
+    assert row["InChIKey"] == DIOL_STANDARD_KEY

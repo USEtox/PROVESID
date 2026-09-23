@@ -4423,7 +4423,51 @@ keys is gone; it now checks that no returned key is non-standard.
   million rows: 0.2 s, before and after this fix. `Search` pays it for each
   InChIKey and InChI query, and each name query with `use_opsin=True`. CAS
   and plain name runs do not. An index built on first use, like the name
-  index, would make it instant.
+  index, would make it instant. *Done, §34.*
 - ZeroPM's `get_id_table_from_inchi` matches the InChI string exactly, so a
   standard InChI does not find the 1,503 substances stored only under a
   non-standard one. ZeroPM is off in `Search` by default.
+
+## 34. Landed on 2026-09-23 — an index on CompTox's `INCHIKEY` (§33.4)
+
+`CREATE INDEX idx_inchikey ON chemicals(INCHIKEY)` on the installed database:
+1.1 s to build, 41 MiB added to 1.16 GB. The 1,153,067 non-null keys are all
+distinct.
+
+| | before | after |
+|---|---:|---:|
+| `get_by_inchikey`, hit or miss | 0.2 s | 0.04 ms |
+| `comptox_skeleton_search`, a miss | 0.9 s | 0.04 ms |
+| the same, a hit | | 0.1 ms |
+
+- `_ensure_inchikey_index`, called by `get_by_inchikey`, looks for the index
+  once per client and builds it when it is missing, logging a WARNING
+  because it writes to the user's file. A read-only file logs the failure
+  once and goes on scanning. `download_database` builds it after the name
+  index. There is no public `build_…` method, since it takes a second.
+- `comptox_skeleton_search` runs `GLOB 'SKELETON*'`. `LIKE` is
+  case-insensitive, so it cannot use an index on a `BINARY` column. It
+  scanned the table even after the index existed. InChIKeys are upper case,
+  so both match the same rows. It runs only after `get_by_inchikey` has
+  missed, so by then the index exists.
+- `logger`, `_name_index_ready`, `_inchikey_index_checked` and
+  `_index_lock` (one lock for both indexes, formerly `_name_index_lock`) are
+  class attributes. `test_search_new_methods` builds a `CompToxID` with
+  `object.__new__` and `_adopt_connection`, which `SQLiteClient` documents as
+  supported, and the first InChIKey lookup on it raised `AttributeError`. An
+  exact `search_by_name` on such a client had the same fault, unnoticed. The
+  build messages name `db_file` rather than `db_path` for the same reason.
+
+Tests: `tests/test_comptox_inchikey_index.py`, 9 tests on a four-row
+database. They cover: no index until the first lookup; built once, logged
+once; a database that already has it left alone; four concurrent first
+lookups; read-only scanning with one warning; `download_database` building
+both indexes (download stubbed); the query plans of the lookup and the
+skeleton search; and identical answers with and without the index. With the
+`Search`, sources, CompTox, non-standard-key, ZeroPM and SQLite-lifecycle
+suites: 634 passed. Doctests of `comptox`, `sources` and `search`: 41 passed,
+3 skipped.
+
+CompTox's `SMILES`, `DTXCID` and `MOLECULAR_FORMULA` are unindexed too, at
+0.13 to 0.17 s a lookup. `Search` reads `SMILES` for each SMILES query. They
+are left as they are.

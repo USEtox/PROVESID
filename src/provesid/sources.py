@@ -190,8 +190,12 @@ def rank_rows_by_completeness(rows: Optional[List[Dict[str, Any]]]) -> List[Dict
 def comptox_skeleton_search(comptox: Any, skeleton: str) -> List[Dict[str, Any]]:
     """Search CompTox for InChIKeys sharing a 14-character skeleton.
 
-    Runs a ``LIKE 'skeleton%'`` query on CompTox's SQLite table, since the
-    client has no public prefix search.
+    Runs a ``GLOB 'skeleton*'`` query on CompTox's SQLite table, since the
+    client has no public prefix search.  ``GLOB``, being case-sensitive, can
+    use the InChIKey index that
+    [`CompToxID.get_by_inchikey`][provesid.comptox.CompToxID.get_by_inchikey]
+    builds, where ``LIKE`` would scan the table.  InChIKeys are upper case,
+    so the two match the same rows.
 
     Args:
         comptox: An open [`CompToxID`][provesid.comptox.CompToxID] client.
@@ -208,8 +212,8 @@ def comptox_skeleton_search(comptox: Any, skeleton: str) -> List[Dict[str, Any]]
     """
     try:
         cur = comptox.conn.execute(
-            "SELECT * FROM chemicals WHERE INCHIKEY LIKE ? LIMIT 20",
-            (f"{skeleton}%",),
+            "SELECT * FROM chemicals WHERE INCHIKEY GLOB ? LIMIT 20",
+            (f"{skeleton}*",),
         )
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]

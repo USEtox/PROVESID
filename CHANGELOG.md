@@ -838,6 +838,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PubChemAPI.get_cache_info`.
 
 ### Changed
+- **CompTox InChIKey lookups use an index, built on first use.** The
+  downloaded database indexes DTXSID, CASRN and the preferred name only, so
+  each `CompToxID.get_by_inchikey` scanned 1.2 million rows (0.2 s), and a
+  skeleton search that missed took 0.9 s. `Search` paid this for each
+  InChIKey and InChI query, and for each name query with `use_opsin=True`.
+  The first InChIKey lookup now adds `idx_inchikey` (about 1 s and 41 MiB,
+  logged once), and `download_database` builds it together with the name
+  index. A lookup then takes about 0.04 ms. A read-only database is scanned
+  as before. `sources.comptox_skeleton_search` matches with `GLOB` instead of
+  `LIKE`: `LIKE` ignores case and so cannot use the index. InChIKeys are
+  upper case, so it finds the same rows. A `CompToxID` built with
+  `object.__new__` and `_adopt_connection` now has its index state, so it no
+  longer raises on its first InChIKey lookup or exact name lookup.
 - **The README describes the package as it now is: offline first, with
   `Search` in front.** It opens with a `Search` run and its real output, then
   covers `datasets` and the five databases with their download and on-disk

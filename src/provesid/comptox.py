@@ -44,6 +44,12 @@ adds to the database: one row per distinct name of each chemical, keyed by
 [`name_key`][provesid.comptox.name_key].
 """
 
+INCHIKEY_INDEX = "idx_inchikey"
+"""The index on ``chemicals(INCHIKEY)`` that the first InChIKey lookup adds
+(see [`get_by_inchikey`][provesid.comptox.CompToxID.get_by_inchikey]).  The
+downloaded database indexes ``DTXSID``, ``CASRN`` and ``PREFERRED_NAME`` only.
+"""
+
 _CAS_NUMBER = re.compile(r"\d{2,7}-\d{2}-\d")
 """The shape of a CAS Registry Number, for inputs that must be one."""
 
@@ -146,6 +152,26 @@ def _build_name_index(connection: sqlite3.Connection) -> int:
     return connection.execute(f"SELECT COUNT(*) FROM {NAME_INDEX_TABLE}").fetchone()[0]
 
 
+def _build_inchikey_index(connection: sqlite3.Connection) -> None:
+    """Create [`INCHIKEY_INDEX`][provesid.comptox.INCHIKEY_INDEX] unless it exists.
+
+    Without it every InChIKey lookup scans the 1.2 M rows, about 0.2 s; with
+    it a lookup takes microseconds.  On the 2025 release it takes about 1 s
+    to build and adds about 41 MiB.
+
+    Args:
+        connection: A read-write connection to a CompTox database.
+
+    Raises:
+        sqlite3.OperationalError: If the database is read-only or stays locked
+            beyond the connection's timeout.
+    """
+    connection.execute(
+        f"CREATE INDEX IF NOT EXISTS {INCHIKEY_INDEX} ON chemicals(INCHIKEY)"
+    )
+    connection.commit()
+
+
 class CompToxID(SQLiteClient):
     """
     Interface to CompTox Chemicals Dashboard SQLite database.
@@ -170,6 +196,20 @@ class CompToxID(SQLiteClient):
         "https://zenodo.org/records/18833587/files/comptox_chemicals.db"
     )
     DEFAULT_DB_SIZE_MB = 856
+
+    logger = logging.getLogger(__name__)
+
+    # The index state is declared here rather than in __init__, so that a
+    # client built with object.__new__ and _adopt_connection (see
+    # SQLiteClient) has it too; the first lookup sets it on the instance.
+    # Whether exact name lookups can use the name index: None until the
+    # first one checks, then True, or False for good when it cannot be built
+    # (a read-only file).  Whether the first InChIKey lookup has made sure of
+    # the InChIKey index; without it lookups still work, by scanning.  The
+    # lock keeps two threads, or two clients, from building either at once.
+    _name_index_ready: Optional[bool] = None
+    _inchikey_index_checked = False
+    _index_lock = threading.Lock()
 
     def __init__(
         self,
@@ -198,15 +238,6 @@ class CompToxID(SQLiteClient):
         Raises:
             FileNotFoundError: If database file doesn't exist and auto_download is False.
         """
-        self.logger = logging.getLogger(__name__)
-
-        # Whether exact name lookups can use the name index: None until the
-        # first one checks, then True, or False for good when it cannot be
-        # built (a read-only file).  The lock keeps two threads from building
-        # it twice.
-        self._name_index_ready: Optional[bool] = None
-        self._name_index_lock = threading.Lock()
-
         if db_path is None:
             base_dir = data_dir or user_dataset_path()
             db_path = os.path.join(base_dir, self.DEFAULT_DB_NAME)
@@ -319,17 +350,19 @@ class CompToxID(SQLiteClient):
         )
 
         # Built now, while the user is already waiting for a download, rather
-        # than on the first name lookup.  A failure here costs nothing that
-        # the lazy build in search_by_name will not retry.
-        self.logger.warning("Building the CompTox name index (~20 s, ~290 MiB).")
+        # than on the first lookup.  A failure here costs nothing that the
+        # lazy builds in search_by_name and get_by_inchikey will not retry.
+        self.logger.warning("Building the CompTox name and InChIKey indexes (~20 s, ~330 MiB).")
         connection = sqlite3.connect(self.db_path)
         try:
             _build_name_index(connection)
+            _build_inchikey_index(connection)
         except sqlite3.Error as exc:
-            self.logger.warning("CompTox name index not built: %s", exc)
+            self.logger.warning("CompTox indexes not built: %s", exc)
         finally:
             connection.close()
         self._name_index_ready = None
+        self._inchikey_index_checked = False
         return self.db_path
 
     @property
@@ -380,7 +413,7 @@ class CompToxID(SQLiteClient):
             ...     db.build_name_index()
             5128983
         """
-        with self._name_index_lock:
+        with self._index_lock:
             rows = _build_name_index(self.conn)
             self._name_index_ready = True
         return rows
@@ -395,7 +428,7 @@ class CompToxID(SQLiteClient):
         """
         if self._name_index_ready is not None:
             return self._name_index_ready
-        with self._name_index_lock:
+        with self._index_lock:
             if self._name_index_ready is None:
                 if self.has_name_index:
                     self._name_index_ready = True
@@ -403,7 +436,7 @@ class CompToxID(SQLiteClient):
                     self.logger.warning(
                         "Building the CompTox name index, once, so exact name "
                         "lookups find synonyms (~20 s, ~290 MiB added to %s).",
-                        self.db_path,
+                        self.db_file,
                     )
                     try:
                         _build_name_index(self.conn)
@@ -416,6 +449,38 @@ class CompToxID(SQLiteClient):
                         )
                         self._name_index_ready = False
         return self._name_index_ready
+
+    def _ensure_inchikey_index(self) -> None:
+        """Make sure the InChIKey index exists, building it once if it does not.
+
+        Called by every InChIKey lookup; only the first one per client looks.
+        When the index cannot be built (a read-only file) the failure is
+        logged once and lookups scan the table instead.
+        """
+        if self._inchikey_index_checked:
+            return
+        with self._index_lock:
+            if self._inchikey_index_checked:
+                return
+            exists = self.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?",
+                (INCHIKEY_INDEX,),
+            ).fetchone()
+            if not exists:
+                self.logger.warning(
+                    "Building the CompTox InChIKey index, once (~1 s, ~41 MiB "
+                    "added to %s).",
+                    self.db_file,
+                )
+                try:
+                    _build_inchikey_index(self.conn)
+                except sqlite3.OperationalError as exc:
+                    self.logger.warning(
+                        "CompTox InChIKey index could not be built (%s); "
+                        "InChIKey lookups will scan the table (~0.2 s each).",
+                        exc,
+                    )
+            self._inchikey_index_checked = True
 
     def _verify_database(self):
         """Verify the database has the expected table structure."""
@@ -614,6 +679,10 @@ class CompToxID(SQLiteClient):
         preferred when both exist. The record returned carries the key as
         CompTox stores it.
 
+        The first call adds an index on ``INCHIKEY`` to the database, about
+        1 s and 41 MiB, so that lookups take microseconds rather than a 0.2 s
+        scan. A read-only database is scanned instead.
+
         Args:
             inchikey (str): InChIKey (27 characters), standard or not
 
@@ -628,6 +697,7 @@ class CompToxID(SQLiteClient):
             >>> CompToxID().get_by_inchikey("PGRHXDWITVMQBC-UHFFFAOYSA-N")["INCHIKEY"]
             'PGRHXDWITVMQBC-UHFFFAOYNA-N'
         """
+        self._ensure_inchikey_index()
         spellings = inchikey_flag_variants(inchikey)
         placeholders = ", ".join("?" * len(spellings))
         cursor = self.conn.cursor()

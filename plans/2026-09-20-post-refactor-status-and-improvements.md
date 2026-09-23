@@ -4112,7 +4112,8 @@ Items 1 and 2 are fixed (§31.6). Writing the notebooks turned up five more:
    labels, so every `m_or_vm` and `vm` it returns is the other one. The
    remedy (swap them in the reader, with this evidence, or report upstream)
    is a scientific decision and is **open**. The ZeroPM tutorial shows only
-   the persistence columns until then.
+   the persistence columns until then. *Fixed, §31.7: it is a three-column
+   rotation, not a swap.*
 5. **`Search` returns CompTox's non-standard InChIKeys.** CompTox stores, for
    some compounds, a key computed from a non-standard InChI (its second
    block ends `…NA`, as in `ISTJMQSHILQAEC-UHFFFAOYNA-N`). In the ESOL run all
@@ -4137,7 +4138,7 @@ Items 1 and 2 are fixed (§31.6). Writing the notebooks turned up five more:
   `~/.config/provesid/config.json` is still the placeholder written in §28.4,
   and it outranks the environment. The notebook is committed without outputs
   and runs as soon as a valid key is stored.
-- §31.3 items 3 to 8. Item 4 needs a decision.
+- §31.3 items 3 and 5 to 8. Item 4 is fixed (§31.7).
 - `examples/notebooks/` still tracks `curated-solubility-dataset.csv` and
   `unique_cas_list.csv`, which nothing uses. The ESOL file moved to
   `examples/search/`.
@@ -4223,3 +4224,44 @@ Items 1 and 2 are fixed (§31.6). Writing the notebooks turned up five more:
   `pytest --doctest-modules src/provesid/opsin.py src/provesid/pubchem.py`:
   68 passed, 10 skipped.
 - Full `pytest`: 1511 passed, 33 skipped.
+
+### 31.7 ZeroPM's mobility columns, 2026-09-23 (§31.3 item 4)
+
+**Decision: correct them in the reader, and report the fault upstream.** The
+identities alone could not choose the fix. They show that the column named
+`vm` holds P(M or vM), but not which of the other two holds M and which vM.
+The swap that §31.3 proposed would have left TFA "M, not vM".
+
+- **Evidence.** (1) Identities over the 130,954 rows: `not_m + m_or_vm = 1`
+  holds in 4.1% as stored, and in 99.9% with the column named `vm` read as
+  `m_or_vm`. The persistence columns hold in 99.2% as stored. (2) Upstream:
+  `csv_files/pm_probabilities.csv` (main, pushed 2026-01-16) orders the
+  columns `not_m, m, vm, m_or_vm`. `recreate_tables.sql` declares `not_m,
+  m_or_vm, m, vm` and copies with `INSERT ... SELECT *`. Of the SQLite's rows,
+  95,334 match a CSV row by value (`not_p` and `not_m` to 9 decimals). On all
+  of them, CSV `m` = stored `m_or_vm`, CSV `vm` = stored `m`, and CSV
+  `m_or_vm` = stored `vm`. No other assignment matches. (3) Substances: as
+  corrected, TFA, acesulfame and 1,4-dioxane read vM 0.99. Naphthalene
+  (log Koc ~3) reads M 0.50 and vM 0.005, and PAHs, PCB-153 and DDT read
+  `not_m` 1.00.
+- **Code.** `_PM_PROBABILITY_SELECT` in `zeropm.py` is the one SELECT list
+  that relabels the columns, and all three readers use it.
+  `PM_PROBABILITY_COLUMNS` names the fields. Five tests: the identities
+  over every reader's output, a canary that fails when a release fixes the
+  stored columns, three vM substances, naphthalene, and the three readers
+  agreeing on atrazine.
+- **Tutorial.** The ZeroPM notebook's "Persistence and mobility" section shows
+  all eight fields for atrazine and a mobility table for TFA, dioxane,
+  atrazine, naphthalene, benzo[a]pyrene and formaldehyde (no probabilities).
+  It was re-executed, and the database's mtime was unchanged.
+- **Two more upstream faults, found on the way and not fixed here.** The CSV
+  on main has 144,351 rows keyed by `zeropm_id`, but its IDs do not match
+  `zeropm_chemicals` (read that way, DDT is mobile and benzo[a]pyrene is
+  half mobile). The SQLite has 130,954 rows keyed by `inchi_id`, which gives
+  chemically sensible values, and 13,515 of them have a NULL `inchi_id` and
+  cannot be reached. Both belong in the upstream report.
+- **Reported upstream** on 2026-09-23 as
+  [ZeroPM-H2020/global-chemical-inventory-database#12](https://github.com/ZeroPM-H2020/global-chemical-inventory-database/issues/12),
+  with a sqlite3-only reproduction and the two smaller faults above. When a
+  release fixes the file, `test_the_stored_mobility_columns_are_still_misnamed`
+  fails, and `_PM_PROBABILITY_SELECT` goes back to the stored names.

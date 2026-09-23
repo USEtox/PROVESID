@@ -53,6 +53,45 @@ from .sqlite_client import SQLiteClient
 from .utils import user_dataset_path
 
 
+PM_PROBABILITY_COLUMNS = (
+    'probability_of_not_p', 'probability_of_p_or_vp',
+    'probability_of_p', 'probability_of_vp',
+    'probability_of_not_m', 'probability_of_m_or_vm',
+    'probability_of_m', 'probability_of_vm', 'n',
+)
+"""The probability fields every reader returns, in order.
+
+``not_p + p_or_vp = 1`` and ``p + vp = p_or_vp``, and the same for M.
+"""
+
+_PM_PROBABILITY_SELECT = """
+    pm.probability_of_not_p, pm.probability_of_p_or_vp,
+    pm.probability_of_p, pm.probability_of_vp,
+    pm.probability_of_not_m,
+    pm.probability_of_vm AS probability_of_m_or_vm,
+    pm.probability_of_m_or_vm AS probability_of_m,
+    pm.probability_of_m AS probability_of_vm,
+    pm.n
+"""
+# The SELECT list of ``pm_probabilities pm``, in PM_PROBABILITY_COLUMNS order.
+#
+# In zeropm-v0-0-4.sqlite three mobility columns hold each other's values.
+# Upstream's pm_probabilities.csv orders them not_m, m, vm, m_or_vm; the
+# table declares not_m, m_or_vm, m, vm; and recreate_tables.sql copies with a
+# positional ``INSERT ... SELECT *``. So the column named m_or_vm holds m, m
+# holds vm, and vm holds m_or_vm. Evidence, from the file (2026-09-23):
+#
+# - As named, not_m + m_or_vm = 1 in 4% of the 130 954 rows; read as here,
+#   in 99.9%. The persistence columns hold in 99.2% as named.
+# - The 95 334 rows that match a row of upstream's CSV by value match it
+#   column for column under this mapping, and under no other.
+# - Very mobile substances come out very mobile: TFA, acesulfame and
+#   1,4-dioxane read vm 0.99; naphthalene (log Koc ~3) reads m 0.50, vm 0.005.
+#
+# The identities alone cannot tell m from vm; the CSV and the substances can.
+# tests/test_zeropm.py checks all of it, and fails if a release fixes the file.
+
+
 class ZeroPM(SQLiteClient):
     """
     Class to extract data from the ZeroPM SQLite database using SQL queries.
@@ -3105,9 +3144,13 @@ class ZeroPM(SQLiteClient):
             - probability_of_vp: Probability of very persistent
             - probability_of_not_m: Probability of NOT mobile
             - probability_of_m_or_vm: Probability of mobile OR very mobile
-            - probability_of_m: Probability of mobile
+            - probability_of_m: Probability of mobile but not very mobile
             - probability_of_vm: Probability of very mobile
             - n: Sample size
+
+            ``probability_of_p`` likewise excludes the very persistent, so
+            ``p + vp = p_or_vp`` and ``not_p + p_or_vp = 1``; the same holds
+            for M.
             Returns None if not found, or if ZeroPM assessed the chemical
             but published no probabilities for it --- formaldehyde is one.
 
@@ -3122,13 +3165,23 @@ class ZeroPM(SQLiteClient):
         >>> probs = zpm.get_pm_probabilities(inchi_id=6210)
         >>> round(probs["probability_of_p"], 3)
         0.4
-        >>> round(zpm.get_pm_probabilities(cas="64-17-5")["probability_of_m"], 3)
-        0.682
+        >>> tfa = zpm.get_pm_probabilities(cas="76-05-1")
+        >>> round(tfa["probability_of_vm"], 3), round(tfa["probability_of_m_or_vm"], 3)
+        (0.995, 1.0)
         >>> zpm.get_pm_probabilities(cas="50-00-0") is None
         True
 
         Note
         ----
+        Three of the mobility columns in ``zeropm-v0-0-4.sqlite`` hold each
+        other's values: the one named ``m_or_vm`` holds ``m``, ``m`` holds
+        ``vm``, and ``vm`` holds ``m_or_vm``. The file was loaded positionally
+        from a CSV that orders them differently. This method, like
+        [`batch_get_pm_probabilities`][provesid.zeropm.ZeroPM.batch_get_pm_probabilities]
+        and [`get_all_zeropm_chemicals`][provesid.zeropm.ZeroPM.get_all_zeropm_chemicals],
+        returns each value under its true name. A query of the table
+        written by hand gets the stored names.
+
         ``pm_probabilities`` is keyed on ``inchi_id``, so a ``zeropm_id`` is
         translated first via
         [`zeropm_id_to_inchi_id`][provesid.zeropm.ZeroPM.zeropm_id_to_inchi_id].
@@ -3144,28 +3197,17 @@ class ZeroPM(SQLiteClient):
             if inchi_id is None:
                 return None
 
-        self.cursor.execute("""
-            SELECT probability_of_not_p, probability_of_p_or_vp, probability_of_p, probability_of_vp,
-                   probability_of_not_m, probability_of_m_or_vm, probability_of_m, probability_of_vm, n
-            FROM pm_probabilities
-            WHERE inchi_id = ?
+        self.cursor.execute(f"""
+            SELECT {_PM_PROBABILITY_SELECT}
+            FROM pm_probabilities pm
+            WHERE pm.inchi_id = ?
         """, (inchi_id,))
         result = self.cursor.fetchone()
 
         if not result:
             return None
 
-        return {
-            'probability_of_not_p': result[0],
-            'probability_of_p_or_vp': result[1],
-            'probability_of_p': result[2],
-            'probability_of_vp': result[3],
-            'probability_of_not_m': result[4],
-            'probability_of_m_or_vm': result[5],
-            'probability_of_m': result[6],
-            'probability_of_vm': result[7],
-            'n': result[8]
-        }
+        return dict(zip(PM_PROBABILITY_COLUMNS, result))
 
     def is_in_zeropm(self, cas=None, inchi_id=None):
         """
@@ -3515,21 +3557,15 @@ class ZeroPM(SQLiteClient):
         1          2    101901             0.438  1
         """
         if include_pm_probs:
-            query = """
+            query = f"""
                 SELECT zc.zeropm_id, zc.inchi_id, s.inchi, s.inchikey,
-                       pm.probability_of_not_p, pm.probability_of_p_or_vp,
-                       pm.probability_of_p, pm.probability_of_vp,
-                       pm.probability_of_not_m, pm.probability_of_m_or_vm,
-                       pm.probability_of_m, pm.probability_of_vm, pm.n
+                       {_PM_PROBABILITY_SELECT}
                 FROM zeropm_chemicals zc
                 JOIN substances s ON zc.inchi_id = s.inchi_id
                 LEFT JOIN pm_probabilities pm ON zc.inchi_id = pm.inchi_id
             """
             columns = ['zeropm_id', 'inchi_id', 'inchi', 'inchikey',
-                      'probability_of_not_p', 'probability_of_p_or_vp',
-                      'probability_of_p', 'probability_of_vp',
-                      'probability_of_not_m', 'probability_of_m_or_vm',
-                      'probability_of_m', 'probability_of_vm', 'n']
+                       *PM_PROBABILITY_COLUMNS]
         else:
             query = """
                 SELECT zc.zeropm_id, zc.inchi_id, s.inchi, s.inchikey
@@ -3607,10 +3643,10 @@ class ZeroPM(SQLiteClient):
         Examples
         --------
         >>> df = ZeroPM().batch_get_pm_probabilities(cas_list=["50-00-0", "64-17-5", "0-00-0"])
-        >>> df[["cas", "probability_of_p", "probability_of_m"]].round(3)
-               cas  probability_of_p  probability_of_m
-        0  50-00-0               NaN               NaN
-        1  64-17-5             0.307             0.682
+        >>> df[["cas", "probability_of_p", "probability_of_vm"]].round(3)
+               cas  probability_of_p  probability_of_vm
+        0  50-00-0               NaN                NaN
+        1  64-17-5             0.307              0.682
         """
         if cas_list is not None:
             # Convert CAS to inchi_ids
@@ -3632,10 +3668,7 @@ class ZeroPM(SQLiteClient):
         placeholders = ','.join('?' * len(inchi_id_list))
         query = f"""
             SELECT zc.inchi_id, s.inchi, s.inchikey,
-                   pm.probability_of_not_p, pm.probability_of_p_or_vp,
-                   pm.probability_of_p, pm.probability_of_vp,
-                   pm.probability_of_not_m, pm.probability_of_m_or_vm,
-                   pm.probability_of_m, pm.probability_of_vm, pm.n
+                   {_PM_PROBABILITY_SELECT}
             FROM zeropm_chemicals zc
             JOIN substances s ON zc.inchi_id = s.inchi_id
             LEFT JOIN pm_probabilities pm ON zc.inchi_id = pm.inchi_id
@@ -3646,11 +3679,7 @@ class ZeroPM(SQLiteClient):
         results = self.cursor.fetchall()
 
         df = pd.DataFrame(results, columns=[
-            'inchi_id', 'inchi', 'inchikey',
-            'probability_of_not_p', 'probability_of_p_or_vp',
-            'probability_of_p', 'probability_of_vp',
-            'probability_of_not_m', 'probability_of_m_or_vm',
-            'probability_of_m', 'probability_of_vm', 'n'
+            'inchi_id', 'inchi', 'inchikey', *PM_PROBABILITY_COLUMNS
         ])
 
         # Add CAS if available

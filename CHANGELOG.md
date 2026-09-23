@@ -604,6 +604,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- **ZeroPM's mobility probabilities came back under each other's names.** In
+  `zeropm-v0-0-4.sqlite`, the table `pm_probabilities` stores
+  `probability_of_m` in the column named `m_or_vm`, `vm` in the one named `m`,
+  and `m_or_vm` in the one named `vm`. Upstream's `recreate_tables.sql`
+  copies the table with a positional `INSERT ... SELECT *` from a CSV that
+  orders those columns `m, vm, m_or_vm`. `get_pm_probabilities`,
+  `batch_get_pm_probabilities` and `get_all_zeropm_chemicals` passed the
+  columns through, so TFA read "mobile, not very mobile" (`m` 0.995, `vm`
+  0.005) instead of very mobile (`vm` 0.995), and atrazine's
+  `probability_of_vm` was its probability of M or vM (0.986). All three now
+  read each value under its true name. The fix is checked three ways. The
+  identities `not_m + m_or_vm = 1` and `m + vm = m_or_vm` hold in 99.9% of
+  rows, against 4% as stored. The 95,334 rows that match upstream's CSV by
+  value match it column for column. And TFA, acesulfame and 1,4-dioxane
+  read very mobile. The persistence columns were stored correctly. A test
+  fails when a ZeroPM release corrects the file. `PM_PROBABILITY_COLUMNS`
+  names the fields.
 - **`OPSIN.get_id("")` sent the request.** The URL then ended in `ws/.json`,
   and OPSIN answered about the name "ws". A blank or whitespace-only name is
   now a `FAILURE` with `message` "empty name", and no request is made.

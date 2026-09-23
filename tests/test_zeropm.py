@@ -1786,10 +1786,11 @@ class TestZeroPMv004Features:
         """
         zeropm_id, inchi_id = self._pm_sample(zpm)[0]
         zpm.cursor.execute(
-            "SELECT probability_of_p, probability_of_m, n FROM pm_probabilities "
-            "WHERE inchi_id = ?",
+            "SELECT probability_of_p, probability_of_m_or_vm, n "
+            "FROM pm_probabilities WHERE inchi_id = ?",
             (inchi_id,),
         )
+        # The stored m_or_vm column holds m; see test_mobility_columns_*.
         expected_p, expected_m, expected_n = zpm.cursor.fetchone()
 
         probs = zpm.get_pm_probabilities(zeropm_id=zeropm_id)
@@ -1797,6 +1798,60 @@ class TestZeroPMv004Features:
         assert probs['probability_of_p'] == expected_p
         assert probs['probability_of_m'] == expected_m
         assert probs['n'] == expected_n
+
+    # zeropm-v0-0-4.sqlite stores three mobility columns under each other's
+    # names (upstream loaded a CSV positionally into a table that orders them
+    # differently), and every reader relabels them. These tests hold the
+    # readers to the probability identities over the whole table, and to
+    # substances whose mobility is not in doubt. If a release fixes the file,
+    # the relabelling breaks them, and _PM_PROBABILITY_SELECT must go.
+
+    @staticmethod
+    def _share_obeying(df, whole, parts):
+        """Share of rows where the probabilities in ``parts`` sum to ``whole``."""
+        rows = df.dropna(subset=['probability_of_not_m'])
+        total = sum(rows[f'probability_of_{part}'] for part in parts)
+        target = 1.0 if whole == 'one' else rows[f'probability_of_{whole}']
+        return ((total - target).abs() < 1e-6).mean()
+
+    def test_mobility_columns_obey_the_probability_identities(self, zpm):
+        df = zpm.get_all_zeropm_chemicals(include_pm_probs=True)
+        assert self._share_obeying(df, 'one', ['not_m', 'm_or_vm']) > 0.99
+        assert self._share_obeying(df, 'm_or_vm', ['m', 'vm']) > 0.99
+        # The persistence columns, stored correctly, set the bar.
+        assert self._share_obeying(df, 'one', ['not_p', 'p_or_vp']) > 0.99
+        assert self._share_obeying(df, 'p_or_vp', ['p', 'vp']) > 0.99
+
+    def test_the_stored_mobility_columns_are_still_misnamed(self, zpm):
+        """Fails once a ZeroPM release stores the columns under their names."""
+        zpm.cursor.execute("""
+            SELECT AVG(ABS(probability_of_not_m + probability_of_m_or_vm - 1) < 1e-6)
+            FROM pm_probabilities WHERE probability_of_not_m IS NOT NULL
+        """)
+        assert zpm.cursor.fetchone()[0] < 0.1
+
+    @pytest.mark.parametrize("cas", ["76-05-1", "33665-90-6", "123-91-1"])
+    def test_very_mobile_substances_read_very_mobile(self, zpm, cas):
+        """TFA, acesulfame and 1,4-dioxane: the textbook vM substances."""
+        probs = zpm.get_pm_probabilities(cas=cas)
+        assert probs['probability_of_vm'] > 0.95
+        assert probs['probability_of_m'] < 0.05
+
+    def test_a_boundary_substance_reads_mobile_not_very_mobile(self, zpm):
+        """Naphthalene, log Koc ~3, sits on the M line, far from vM."""
+        probs = zpm.get_pm_probabilities(cas="91-20-3")
+        assert probs['probability_of_m'] == pytest.approx(0.5, abs=0.05)
+        assert probs['probability_of_vm'] < 0.05
+
+    def test_readers_agree_on_the_mobility_columns(self, zpm):
+        cas = "1912-24-9"  # atrazine
+        single = zpm.get_pm_probabilities(cas=cas)
+        batch = zpm.batch_get_pm_probabilities(cas_list=[cas]).iloc[0]
+        every = zpm.get_all_zeropm_chemicals(include_pm_probs=True)
+        every = every[every['inchi_id'] == batch['inchi_id']].iloc[0]
+        for key in self.PM_KEYS:
+            assert batch[key] == single[key]
+            assert every[key] == single[key]
 
     def test_get_pm_probabilities_both_id_routes_agree(self, zpm):
         """Looking up by zeropm_id and by inchi_id gives the same answer."""

@@ -78,7 +78,7 @@ def test_strict_differs_from_balanced_only_in_source_support():
 
 def test_recall_widens_every_way():
     s = Search("name", preset="recall")
-    assert s.fuzzy and s.inchikey_skeleton and s.use_zeropm
+    assert s.fuzzy and s.inchikey_skeleton
     assert s.similarity_threshold == 0.7
     assert s.n_hits == "all"
     assert "zeropm" in s._SOURCE_KEYS
@@ -100,9 +100,9 @@ def test_explicit_argument_overrides_the_preset():
 
 def test_explicit_argument_equal_to_the_balanced_default_still_overrides():
     # The case a plain keyword default could not tell apart from "not passed".
-    s = Search("name", preset="recall", fuzzy=False, use_zeropm=False)
+    s = Search("name", preset="recall", fuzzy=False,
+               sources=["chebi", "comptox", "pubchem", "chembl"])
     assert s.fuzzy is False
-    assert s.use_zeropm is False
     assert "zeropm" not in s._SOURCE_KEYS
     assert s.inchikey_skeleton is True
 

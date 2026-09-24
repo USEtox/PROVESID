@@ -1,7 +1,7 @@
 # ZeroPM
 
 Offline: the ZeroPM global chemical inventory. `Search` leaves it out
-unless `use_zeropm=True`. See the
+unless its `sources` names `"zeropm"`. See the
 [ZeroPM tutorial](../examples/zeropm/zeropm-example.ipynb).
 
 ::: provesid.zeropm

@@ -671,7 +671,7 @@ DATASETS: Dict[str, Dataset] = {
     "zeropm": Dataset(
         name="zeropm",
         title="ZeroPM inventory",
-        role="regulatory inventories; off unless Search(use_zeropm=True)",
+        role="regulatory inventories; off unless Search(sources=...) names it",
         patterns=("zeropm-*.sqlite",),
         extras=("zeropm-*.sqlite.part", "zeropm-*.sqlite.part.source"),
         download_bytes=459968512,
@@ -694,7 +694,8 @@ to check anything.
 """
 
 DEFAULT_DATASETS: Tuple[str, ...] = ("pubchem", "comptox", "chebi", "chembl")
-"""Datasets [`Search`][provesid.search.Search] queries unless ``use_zeropm=True``."""
+"""Datasets [`Search`][provesid.search.Search] queries by default: its ``sources``
+in the ``"balanced"`` preset."""
 
 
 class MissingDatasetError(ServiceError):

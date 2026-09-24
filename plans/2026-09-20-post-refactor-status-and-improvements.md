@@ -4613,4 +4613,61 @@ and `sources`: 16 passed.
 A caller still has no direct way to say "only these sources". An empty
 `data_dir` leaves out everything not passed, and keeping all but one needs
 a directory without that one dataset. A `sources=` argument would say it
-plainly. It is not part of this fix.
+plainly. It is not part of this fix. *Done, §38.*
+
+## 38. Landed on 2026-09-24 — `Search(sources=...)`, replacing `use_zeropm` (§37)
+
+The user chose to change the public API, since the package has no users
+yet. `use_zeropm` was already a sources setting, with only two values:
+the four defaults, or those plus ZeroPM. Keeping it next to `sources`
+would have allowed contradictions such as `sources=["zeropm"]` with
+`use_zeropm=False`, so `sources` replaces it.
+
+- `sources` is a preset key. `"balanced"` and `"strict"` hold
+  `("chebi", "comptox", "pubchem", "chembl")`, and `"recall"` holds all five.
+  `Search.sources` is a tuple, so `settings` and `df.attrs["settings"]`
+  record it and a preset stays immutable.
+- `_normalise_sources` accepts `"all"`, one key or a sequence of keys. A
+  string counts as one key, not as a sequence of letters. It drops
+  duplicates and returns the keys in `SOURCE_KEYS` order, because pooling
+  follows that order and ties are broken by it. Unknown names and an empty
+  list raise `ValueError`. An online-only search would have been possible
+  with an empty list, but it would run paths no test covers.
+- The old ZeroPM-only check, a client passed for a source that is not
+  queried, now covers all five. The client is dropped with a warning naming
+  the source and `sources`.
+- `_SOURCE_KEYS` is `list(self.sources)`. Everything downstream already
+  read it: `_datasets_needed`, `_ensure_clients`, `_collect` and the
+  availability report. `_ALL_SOURCE_KEYS` and `_DEFAULT_SOURCE_KEYS` are
+  removed, and `datasets.DEFAULT_DATASETS` is still checked against
+  `PRESETS["balanced"]["sources"]`.
+- The online services are not in `sources`. `online_fallback` still
+  governs them.
+
+### 38.1 The tests say what they mean now
+
+§37's stub helpers used an empty `PROVESID_DATA_DIR` to keep unpassed sources
+out. Now they name their sources: `test_sources._search` passes
+`sources=list(clients)`, the multi-hit and online-fallback helpers pass
+`sources="pubchem"`, and the precision test passes `sources="comptox"`. The
+fixture remains for `TestSourceAvailability`, which is about sources that
+are queried but not installed. The §37 plugin, run over the affected
+modules, again finds only the one test that means to mix passed and built
+clients.
+
+New tests: in `test_search.py`, `sources` limits what is built and queried
+(patched factories), and the order is normalised. With only passed clients
+nothing is opened and `source_details` has just those two. It accepts a key,
+`"all"` and a sequence, and rejects an unknown key, a wrong-case key and an
+empty list. A client for a left-out source is ignored with a warning, and
+`sources` overrides `"recall"`. In `test_dataset_manager.py`,
+`datasets="required"` demands only the named sources. Each `use_zeropm` in
+the tests, docs, README and examples is replaced.
+
+`examples/search/search_tutorial.ipynb` prints `found.attrs["settings"]`.
+That output depends only on the constructor, so it was regenerated with
+IPython's pretty printer from `Search("name").settings` rather than by
+re-running a notebook that calls online services. The generator reproduced
+the old output exactly, except for the changed key, before it was written.
+The diff is that one line. `mkdocs build --strict` is clean. Whole suite:
+1,587 passed, 37 skipped. Doctests of `search`: 11 passed.

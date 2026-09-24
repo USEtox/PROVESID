@@ -613,8 +613,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   search, under the `datasets` policy, whether or not others were passed.
   A client that is passed is still used as given and left open by
   `close()`. A caller who passed `chebi=None` and so on to leave sources
-  out now gets them. To leave a source out, point `data_dir` at a
-  directory without its dataset.
+  out now gets them. To leave a source out, leave it out of `sources`
+  (below).
 - **`Search` passed on CompTox's and ZeroPM's non-standard InChIKeys.**
   CompTox stores a key computed from a non-standard InChI (flag `N`, as in
   `PGRHXDWITVMQBC-UHFFFAOYNA-N`) for 131,885 of its 1.15 million keys, and
@@ -861,6 +861,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PubChemAPI.get_cache_info`.
 
 ### Changed
+- **`Search(sources=...)` chooses the offline databases, and replaces
+  `use_zeropm`.** It takes a list of keys from `provesid.sources.SOURCE_KEYS`,
+  one key, or `"all"`. The sources are queried in `SOURCE_KEYS` order
+  whatever order they are given in, so the answer does not depend on it. A
+  source left out is never opened, `datasets="required"` does not demand its
+  dataset, and a client passed for it is ignored with a warning. Unknown
+  names, or none, raise `ValueError`. It is a preset setting like the one it
+  replaces: `"balanced"` and `"strict"` query ChEBI, CompTox, PubChemID and
+  ChEMBL, and `"recall"` adds ZeroPM. `use_zeropm=True` is now
+  `sources="all"`, and `df.attrs["settings"]` records `sources` instead.
+  Before, the only way to query fewer sources was to pass clients and rely
+  on the bug fixed above. `Search._ALL_SOURCE_KEYS` and
+  `Search._DEFAULT_SOURCE_KEYS` are gone. Use `SOURCE_KEYS` and
+  `Search.PRESETS["balanced"]["sources"]` instead.
 - **CompTox SMILES, DTXCID and formula lookups use indexes too, each built
   on first use.** `get_by_smiles`, `get_by_dtxcid` and `search_by_formula`
   scanned 1.2 million rows, 0.14 to 0.16 s for each lookup that missed, and

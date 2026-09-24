@@ -23,10 +23,6 @@ from provesid.search import (
 )
 from provesid.tools import make_candidate
 
-# Each Search here is handed stubs for some sources; the rest must be absent,
-# not built from the real databases.
-pytestmark = pytest.mark.usefixtures("no_installed_datasets")
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers / stubs
@@ -82,11 +78,8 @@ def _name_search(rows, **kwargs):
     return Search(
         "name",
         show_progress=False,
+        sources="pubchem",
         pubchem=_PubChemNameStub(rows),
-        chebi=None,
-        comptox=None,
-        zeropm=None,
-        chembl=None,
         **kwargs,
     )
 

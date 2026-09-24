@@ -237,7 +237,7 @@ def all_sources():
     """Skip unless every offline source Search targets by default is present.
 
     ZeroPM is deliberately not among them — see :class:`~provesid.Search` and
-    its ``use_zeropm`` flag.
+    its ``sources`` argument.
     """
     s = Search("cas", show_progress=False)
     s._ensure_clients()

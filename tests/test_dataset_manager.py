@@ -23,6 +23,7 @@ import pytest
 from provesid import datasets
 from provesid.datasets import DATASETS, MissingDatasetError
 from provesid.search import Search
+from provesid.sources import SOURCE_KEYS
 
 
 def touch(directory, name, size=0):
@@ -40,13 +41,13 @@ class TestRegistry:
     def test_names_match_the_sources_search_queries(self):
         """The two tables are written separately and must not drift apart.
 
-        ``Search`` names its sources in ``_ALL_SOURCE_KEYS`` and the registry
+        ``Search`` names its sources in ``SOURCE_KEYS`` and the registry
         names the datasets they read.  A dataset added to one and not the other
         would go unreported by ``status`` or unreachable by ``fetch``, with
         nothing to say so.
         """
-        assert set(DATASETS) == set(Search._ALL_SOURCE_KEYS)
-        assert set(datasets.DEFAULT_DATASETS) == set(Search._DEFAULT_SOURCE_KEYS)
+        assert set(DATASETS) == set(SOURCE_KEYS)
+        assert set(datasets.DEFAULT_DATASETS) == set(Search.PRESETS["balanced"]["sources"])
 
     def test_every_entry_is_described_and_sized(self):
         for name, dataset in DATASETS.items():
@@ -438,17 +439,17 @@ class TestSearchDatasetPolicy:
 
         assert os.listdir(tmp_path) == []
         assert search.sources_available == []
-        assert search.sources_unavailable == list(Search._DEFAULT_SOURCE_KEYS)
+        assert search.sources_unavailable == list(Search.PRESETS["balanced"]["sources"])
         assert len(frame) == 1 and frame.iloc[0]["CASRN"] == "50-00-0"
 
         reported = "\n".join(caplog.messages)
-        for name in Search._DEFAULT_SOURCE_KEYS:
+        for name in Search.PRESETS["balanced"]["sources"]:
             assert f"provesid.datasets.fetch('{name}')" in reported
 
     def test_present_uses_the_sources_that_are_installed(self, tmp_path, recording_clients):
         """Missing is per dataset, not all-or-nothing."""
         Search("cas", data_dir=tmp_path)._ensure_clients()
-        assert len(recording_clients.calls) == len(Search._DEFAULT_SOURCE_KEYS)
+        assert len(recording_clients.calls) == len(Search.PRESETS["balanced"]["sources"])
         assert all(call["auto_download"] is False for call in recording_clients.calls)
 
     def test_auto_restores_the_old_behaviour(self, tmp_path, recording_clients):
@@ -482,7 +483,15 @@ class TestSearchDatasetPolicy:
         Search("cas", datasets="required", data_dir=tmp_path)      # no ZeroPM
 
         with pytest.raises(MissingDatasetError, match="zeropm"):
-            Search("cas", datasets="required", data_dir=tmp_path, use_zeropm=True)
+            Search("cas", datasets="required", data_dir=tmp_path, sources="all")
+
+    def test_required_demands_only_the_named_sources(self, tmp_path):
+        touch(tmp_path, "chebi.sdf", 10)
+        Search("cas", datasets="required", data_dir=tmp_path, sources="chebi")
+
+        with pytest.raises(MissingDatasetError, match="comptox"):
+            Search("cas", datasets="required", data_dir=tmp_path,
+                   sources=["chebi", "comptox"])
 
     def test_an_unknown_policy_is_rejected(self):
         with pytest.raises(ValueError, match="datasets must be one of"):

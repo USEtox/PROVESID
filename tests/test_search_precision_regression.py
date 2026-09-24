@@ -135,7 +135,7 @@ def synonym_sample(comptox):
 
 @pytest.mark.integration
 @pytest.mark.slow
-def test_name_resolution_has_zero_wrong_hits(comptox, synonym_sample, tmp_path):
+def test_name_resolution_has_zero_wrong_hits(comptox, synonym_sample):
     """The resolver must never return a structurally different compound.
 
     Resolves each sampled synonym through a CompTox-only, precision-first
@@ -147,8 +147,7 @@ def test_name_resolution_has_zero_wrong_hits(comptox, synonym_sample, tmp_path):
         "name",
         show_progress=False,
         comptox=comptox,
-        # An empty directory, so the other sources are absent, not built.
-        data_dir=tmp_path,
+        sources="comptox",
     )
 
     queries = [syn for syn, _ in synonym_sample]
@@ -231,7 +230,7 @@ def all_sources_available():
 @pytest.fixture(scope="module")
 def zeropm_available():
     """Skip unless ZeroPM — the opt-in fifth source — is also present."""
-    return _require_sources(use_zeropm=True)
+    return _require_sources(sources="all")
 
 
 @pytest.mark.integration
@@ -242,12 +241,12 @@ def test_misspelled_name_resolves_to_the_right_compound(
 ):
     """A misspelled name must resolve to the intended compound, or to nothing.
 
-    Runs with ``use_zeropm=True``: ZeroPM is the only source that does true
+    Runs with ``sources="all"``: ZeroPM is the only source that does true
     fuzzy *retrieval*, so it is the one that reaches a typo like "caffiene"
     that shares no usable substring with the real name.
     """
     row = (
-        Search("name", fuzzy=True, show_progress=False, use_zeropm=True)
+        Search("name", fuzzy=True, show_progress=False, sources="all")
         .search(query)
         .iloc[0]
     )
@@ -291,7 +290,7 @@ def test_misspelling_is_not_labelled_an_exact_match(
 ):
     """A typo that resolves must never be reported as ``exact_name``."""
     row = (
-        Search("name", fuzzy=True, show_progress=False, use_zeropm=True)
+        Search("name", fuzzy=True, show_progress=False, sources="all")
         .search(query)
         .iloc[0]
     )

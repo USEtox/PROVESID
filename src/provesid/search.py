@@ -27,8 +27,8 @@ are harvested from regulatory inventories rather than curated compound-by-compou
 so its name→structure mappings are noisier than the other four sources and, being
 counted as an independent vote, they used to push wrong structures up the
 corroboration ranking.  The ZeroPM client itself is untouched and remains available
-as [`ZeroPM`][provesid.zeropm.ZeroPM]; pass ``use_zeropm=True`` to let
-[`Search`][provesid.search.Search] query it again.
+as [`ZeroPM`][provesid.zeropm.ZeroPM]; pass ``sources="all"`` (or a list
+naming ``"zeropm"``) to let [`Search`][provesid.search.Search] query it again.
 
 Supported identifier types:
 
@@ -72,7 +72,7 @@ import logging
 import re
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Type, Union
 
 import pandas as pd
 from tqdm import tqdm
@@ -230,6 +230,40 @@ Hits = Dict[str, List[Dict[str, Any]]]
 """Source key -> that source's candidates, best first (``Search._collect``)."""
 
 
+def _normalise_sources(sources: Union[str, Sequence[str]]) -> Tuple[str, ...]:
+    """The offline sources a [`Search`][provesid.search.Search] is to query.
+
+    Args:
+        sources: ``"all"``, one key of
+            [`SOURCE_KEYS`][provesid.sources.SOURCE_KEYS], or a sequence of
+            them.  A string is one key, not a sequence of letters.
+
+    Returns:
+        The named sources, each once, in ``SOURCE_KEYS`` order.
+
+    Raises:
+        ValueError: If a name is not a key of ``SOURCE_KEYS``, or none is
+            given.
+
+    Examples:
+        >>> _normalise_sources(["chembl", "chebi", "chebi"])
+        ('chebi', 'chembl')
+        >>> _normalise_sources("all")
+        ('chebi', 'comptox', 'pubchem', 'zeropm', 'chembl')
+    """
+    if sources == "all":
+        return tuple(SOURCE_KEYS)
+    named = [sources] if isinstance(sources, str) else list(sources)
+    unknown = [key for key in named if key not in SOURCE_KEYS]
+    if unknown:
+        raise ValueError(
+            f"sources must be 'all' or names from {SOURCE_KEYS}; got {unknown}"
+        )
+    if not named:
+        raise ValueError(f"sources must name at least one of {SOURCE_KEYS}")
+    return tuple(key for key in SOURCE_KEYS if key in named)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Module-level structure utility (used inside & outside the class)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -378,7 +412,7 @@ class Search:
     DTXSID, or molecular formula — and queries ChEBI, CompTox, PubChemID and
     ChEMBL to build a harmonised result.  ZeroPM is excluded by default because
     its inventory-derived records are less reliable than the other four sources;
-    ``use_zeropm=True`` opts back in.
+    ``sources="all"`` opts back in, and ``sources=[...]`` picks any subset.
 
     Features:
 
@@ -440,8 +474,9 @@ class Search:
         min_source_support (int): Minimum number of databases that must carry a
             structure for it to be returned (0 disables the filter).
         use_opsin (bool): Enable PYOPSIN IUPAC→structure anchoring (needs Java).
-        use_zeropm (bool): Include the ZeroPM inventory among the queried
-            sources (off by default).
+        sources (tuple): The offline sources queried, in
+            [`SOURCE_KEYS`][provesid.sources.SOURCE_KEYS] order (ZeroPM off by
+            default).
         top_k_per_source (int): Candidates pulled per source before pooling.
         cluster_by_skeleton (bool): Merge stereo/charge variants when clustering.
         fuzzy_score_cutoff (float): Fuzzy score cut-off in [0, 100].
@@ -511,17 +546,6 @@ class Search:
         ["cas", "name", "smiles", "inchi", "inchikey", "dtxsid", "formula"]
     )
 
-    _ALL_SOURCE_KEYS: List[str] = SOURCE_KEYS
-    """Every source the resolver knows how to query.  What each one can be
-    asked is the lookup table in [`provesid.sources`][provesid.sources].
-    """
-
-    _DEFAULT_SOURCE_KEYS: List[str] = ["chebi", "comptox", "pubchem", "chembl"]
-    """Sources queried unless ``use_zeropm=True`` re-adds ZeroPM.  ZeroPM is a
-    regulatory-inventory harvest rather than a curated compound database, so
-    its rows are kept out of the default corroboration vote.
-    """
-
     _SOURCE_DISPLAY: Dict[str, str] = SOURCE_DISPLAY
 
     # rapidfuzz scorer whitelist (name -> scorer callable resolved lazily).
@@ -537,7 +561,10 @@ class Search:
             "fuzzy_scorer": "ratio",
             "inchikey_skeleton": False,
             "similarity_threshold": 0.0,
-            "use_zeropm": False,
+            # ZeroPM is a regulatory-inventory harvest rather than a curated
+            # compound database, so its rows are kept out of the default
+            # corroboration vote.
+            "sources": ("chebi", "comptox", "pubchem", "chembl"),
             "top_k_per_source": 5,
             "cluster_by_skeleton": True,
             "consensus_compat_threshold": 0.35,
@@ -570,7 +597,7 @@ class Search:
         "fuzzy": True,
         "inchikey_skeleton": True,
         "similarity_threshold": 0.7,
-        "use_zeropm": True,
+        "sources": tuple(SOURCE_KEYS),
         "n_hits": "all",
     }
 
@@ -596,7 +623,7 @@ class Search:
         min_source_support: Optional[int] = None,
         use_opsin: bool = False,
         opsin_jar_fpath: str = "default",
-        use_zeropm: Optional[bool] = None,
+        sources: Optional[Union[str, Sequence[str]]] = None,
         top_k_per_source: Optional[int] = None,
         cluster_by_skeleton: Optional[bool] = None,
         fuzzy_score_cutoff: Optional[float] = None,
@@ -674,17 +701,22 @@ class Search:
                 to ``False``.
             opsin_jar_fpath: ``jar_fpath`` passed to
                 [`PYOPSIN`][provesid.opsin.PYOPSIN].
-            use_zeropm: *Preset.*  Include the ZeroPM inventory among the
-                queried sources.  Balanced and strict: ``False``; recall:
-                ``True``.  ZeroPM aggregates regulatory inventories
-                instead of curating compounds, so its name→structure rows are
-                noisier than ChEBI/CompTox/PubChem/ChEMBL yet carried the same
-                weight in the corroboration vote.  Set to ``True`` to restore
-                the old five-source behaviour — chiefly worthwhile for fuzzy
-                name queries, since ZeroPM is the only source that does true
-                fuzzy *retrieval* (see `_candidate_pool_from_name`).
-                While ``False``, a ``zeropm`` client passed to the constructor
-                is ignored.
+            sources: *Preset.*  The offline sources to query: any of
+                [`SOURCE_KEYS`][provesid.sources.SOURCE_KEYS] (``"chebi"``,
+                ``"comptox"``, ``"pubchem"``, ``"zeropm"``, ``"chembl"``), as
+                a list, one key, or ``"all"``.  They are queried in
+                ``SOURCE_KEYS`` order whatever order they are given in, so
+                the answer does not depend on it.  Balanced and strict: all
+                but ZeroPM; recall: ``"all"``.  ZeroPM aggregates regulatory
+                inventories instead of curating compounds, so its
+                name→structure rows are noisier than the other four's yet
+                carry the same weight in the corroboration vote.  It is
+                chiefly worth adding for fuzzy name queries, since it is the
+                only source that does true fuzzy *retrieval* (see
+                `_candidate_pool_from_name`).  A source left out is never
+                opened, and a client passed for it is ignored with a warning.
+                The online services are not listed here; see
+                ``online_fallback``.
             top_k_per_source: *Preset.*  Number of candidate rows pulled from
                 each source before pooling / clustering.  Balanced: ``5``.
             cluster_by_skeleton: *Preset.*  Merge stereo/charge/isotope
@@ -765,12 +797,12 @@ class Search:
                 whether or not others were passed; a client that is passed is used
                 as given and left open by
                 [`close`][provesid.search.Search.close].  To leave a source
-                out, point ``data_dir`` at a directory without its dataset.
+                out, leave it out of ``sources``.
             comptox: Pre-initialised [`CompToxID`][provesid.comptox.CompToxID] client.
             pubchem: Pre-initialised
                 [`PubChemID`][provesid.pubchem_id.PubChemID] client.
             zeropm: Pre-initialised [`ZeroPM`][provesid.zeropm.ZeroPM] client.  Only
-                used when ``use_zeropm=True``.
+                used when ``sources`` includes ``"zeropm"``.
             chembl: Pre-initialised [`CheMBL`][provesid.chembl.CheMBL] client.
 
         Raises:
@@ -780,7 +812,7 @@ class Search:
                 not one of
                 [`DATASET_POLICIES`][provesid.search.Search.DATASET_POLICIES],
                 or ``redownload=True`` was combined with a policy that does not
-                download.
+                download, or ``sources`` names no source or an unknown one.
             provesid.datasets.MissingDatasetError: If ``datasets="required"``
                 and a dataset a queried source needs is not on disk.
         """
@@ -802,7 +834,7 @@ class Search:
             "fuzzy_scorer": fuzzy_scorer,
             "inchikey_skeleton": inchikey_skeleton,
             "similarity_threshold": similarity_threshold,
-            "use_zeropm": use_zeropm,
+            "sources": sources,
             "top_k_per_source": top_k_per_source,
             "cluster_by_skeleton": cluster_by_skeleton,
             "consensus_compat_threshold": consensus_compat_threshold,
@@ -829,7 +861,7 @@ class Search:
         self.min_source_support = max(0, int(chosen["min_source_support"]))
         self.use_opsin = bool(use_opsin)
         self.opsin_jar_fpath = opsin_jar_fpath
-        self.use_zeropm = bool(chosen["use_zeropm"])
+        self.sources: Tuple[str, ...] = _normalise_sources(chosen["sources"])
         self.top_k_per_source = max(1, int(chosen["top_k_per_source"]))
         self.cluster_by_skeleton = bool(chosen["cluster_by_skeleton"])
         self.fuzzy_score_cutoff = float(chosen["fuzzy_score_cutoff"])
@@ -866,29 +898,28 @@ class Search:
         self._opsin: Optional[PYOPSIN] = None
         self._opsin_available: bool = use_opsin
 
-        # ZeroPM is off the target list unless explicitly re-enabled, so an
-        # instance that was handed a client still must not query it — otherwise
-        # "disabled" would depend on how the caller happened to construct us.
-        if zeropm is not None and not self.use_zeropm:
-            log.warning(
-                "A ZeroPM client was passed but use_zeropm=False; ZeroPM will not "
-                "be queried. Pass use_zeropm=True to include it."
-            )
-            zeropm = None
+        self._SOURCE_KEYS: List[str] = list(self.sources)
 
-        self._SOURCE_KEYS: List[str] = (
-            list(self._ALL_SOURCE_KEYS) if self.use_zeropm
-            else list(self._DEFAULT_SOURCE_KEYS)
-        )
+        # A source left out of `sources` is not queried even when its client
+        # is passed; otherwise which sources ran would depend on how the
+        # caller happened to construct us.
+        passed = {
+            "chebi": chebi, "comptox": comptox, "pubchem": pubchem,
+            "zeropm": zeropm, "chembl": chembl,
+        }
+        for key, client in passed.items():
+            if client is not None and key not in self.sources:
+                log.warning(
+                    "A %s client was passed but %r is not in sources=%r; it will "
+                    "not be queried.",
+                    self._SOURCE_DISPLAY[key], key, list(self.sources),
+                )
+                passed[key] = None
 
         # Source key -> client, or None until _ensure_clients() builds it (or
         # for good, when it cannot be built).
         self._clients: Dict[str, Any] = {
-            "chebi": chebi,
-            "comptox": comptox,
-            "pubchem": pubchem,
-            "zeropm": zeropm,
-            "chembl": chembl,
+            **passed,
             "pubchem_online": None,
             "cactus": None,
         }
@@ -978,8 +1009,8 @@ class Search:
     def _datasets_needed(self) -> List[str]:
         """Dataset names this instance would have to open on disk.
 
-        The queried sources (`_SOURCE_KEYS`, which excludes ZeroPM unless
-        ``use_zeropm=True``) minus any whose client the caller constructed and
+        The queried sources (`_SOURCE_KEYS`, from ``sources``) minus any
+        whose client the caller constructed and
         passed in --- that client has already found its data, wherever it put
         it, so demanding a copy in the shared data directory would be wrong.
 
@@ -998,8 +1029,8 @@ class Search:
         [`sources_unavailable`][provesid.search.Search] record which ones, so a
         three-source run stays distinguishable from a four-source one.
 
-        Only the sources in `_SOURCE_KEYS` are constructed, so ZeroPM's
-        (large) database is never even opened unless ``use_zeropm=True``.
+        Only the sources in `_SOURCE_KEYS` are constructed, so a source left
+        out of ``sources`` (ZeroPM, by default) is never even opened.
 
         Whether a missing dataset is downloaded here is the ``datasets``
         policy's decision, and by default it is not: the clients are
@@ -1105,7 +1136,7 @@ class Search:
         """Close the source clients this instance constructed.
 
         A [`Search`][provesid.search.Search] may hold four SQLite databases
-        open — CompTox, PubChemID, ChEMBL and, with ``use_zeropm=True``, ZeroPM
+        open — CompTox, PubChemID, ChEMBL and, when ``sources`` names it, ZeroPM
         — totalling several gigabytes of mapped file.  Until this method
         existed there was no way to hand them back short of dropping the
         ``Search`` and waiting for the collector, which on Windows meant the
@@ -1863,8 +1894,8 @@ class Search:
     def _resolve_cas(self, cas: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """Resolve a CAS Registry Number into a unified identifier record.
 
-        Queries ChEBI, CompTox and PubChemID (and ZeroPM when
-        ``use_zeropm=True``) by CAS number.  ChEMBL records no CAS numbers,
+        Queries ChEBI, CompTox and PubChemID (and ZeroPM when ``sources``
+        names it) by CAS number.  ChEMBL records no CAS numbers,
         so it is asked for the first SMILES the others found.
 
         Args:
@@ -1934,7 +1965,7 @@ class Search:
         Pulls up to ``self.top_k_per_source`` candidates from each source.
         When ``self.fuzzy`` is enabled and the exact pass yields no strong
         match, the search is widened with non-exact matching and — only when
-        ``use_zeropm=True`` — ZeroPM's fuzzy ``get_id_table_from_similar_name``.
+        ``sources`` names ZeroPM — its fuzzy ``get_id_table_from_similar_name``.
 
         Args:
             name: Chemical name to search.
@@ -1960,7 +1991,7 @@ class Search:
             # ZeroPM is the only source that does true fuzzy *retrieval*, and
             # reports the similarity it matched on; that score is kept rather
             # than re-derived from the name ZeroPM's candidate was given.  It
-            # is off unless use_zeropm=True, which is the cost of dropping it:
+            # is off unless sources names it, which is the cost of dropping it:
             # a typo that shares no substring with the real name stays
             # unresolved.
             def fuzzy_score(cand: Dict[str, Any]) -> float:

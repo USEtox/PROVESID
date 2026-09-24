@@ -269,7 +269,7 @@ def test_relative_stereo_is_still_out_of_reach(zeropm):
 
 @pytest.mark.integration
 def test_search_by_inchi_reaches_zeropm(installed, zeropm):
-    with Search("inchi", use_zeropm=True, show_progress=False) as s:
+    with Search("inchi", sources="all", show_progress=False) as s:
         row = s.search([DIOL_STANDARD_INCHI]).iloc[0]
     assert row["source_details"]["ZeroPM"]["found"]
     assert row["InChIKey"] == DIOL_STANDARD_KEY

@@ -11,7 +11,7 @@ none of them ships with the package and none is downloaded behind your back:
 | `comptox` | [`CompToxID`](../api/comptox.md) | DTXSID lookups, and curated CAS–name pairs | 817 MiB | 1.1 GiB |
 | `chebi` | [`ChebiSDF`](../api/chebi_sdf.md) | curated structures, synonyms and ChEBI IDs | 250 MiB | 954 MiB |
 | `chembl` | [`CheMBL`](../api/chembl.md) | enrichment: adds ChEMBL IDs to structures already found | 5.7 GiB | 2.4 GiB |
-| `zeropm` | [`ZeroPM`](../api/zeropm.md) | regulatory inventories; off unless `Search(use_zeropm=True)` | 439 MiB | 439 MiB |
+| `zeropm` | [`ZeroPM`](../api/zeropm.md) | regulatory inventories; off unless `Search(sources=...)` names it | 439 MiB | 439 MiB |
 
 The first four are what `Search` queries by default. All five together are
 about 21.5 GiB to download and 7.2 GiB to keep; see below for why the free

@@ -59,7 +59,7 @@ datasets.remove("chembl")                        # reclaim the space
 | `comptox` | `CompToxID` | DTXSID lookups, and curated CAS–name pairs | 817 MiB | 1.1 GiB |
 | `chebi` | `ChebiSDF` | curated structures, synonyms and ChEBI IDs | 250 MiB | 954 MiB |
 | `chembl` | `CheMBL` | adds ChEMBL IDs to structures already found | 5.7 GiB | 2.4 GiB |
-| `zeropm` | `ZeroPM` | regulatory inventories, persistence and mobility; off in `Search` unless `use_zeropm=True` | 439 MiB | 439 MiB |
+| `zeropm` | `ZeroPM` | regulatory inventories, persistence and mobility; off in `Search` unless `sources` names it | 439 MiB | 439 MiB |
 
 All five are about 21.5 GiB to download and 7.2 GiB to keep. While ChEMBL
 unpacks, the install needs up to about 38 GiB of free disk space.

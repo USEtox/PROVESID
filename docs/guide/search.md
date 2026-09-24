@@ -40,11 +40,19 @@ By default `Search` queries four databases: **PubChem** (`PubChemID`),
 It uses the ones that are installed, and logs once which are not; see
 [Installing the offline databases](datasets.md).
 
-**ZeroPM is left out** unless `use_zeropm=True`. It aggregates regulatory
+**ZeroPM is left out** unless `sources` names it. It aggregates regulatory
 inventories rather than curating compounds, so its name→structure rows are
 noisier than the others, and as a full vote in the corroboration count they
 used to push wrong structures up the ranking. It is also the one source that
 retrieves misspelled names, which is why the `"recall"` preset turns it on.
+
+`sources` chooses the databases: a list of keys, one key, or `"all"`.
+A database left out is never opened.
+
+```python
+Search("cas", sources="all")                      # the four, plus ZeroPM
+Search("cas", sources=["pubchem", "comptox"])     # these two and no others
+```
 
 What each source can be asked, and by which identifier, is one table,
 `provesid.sources.LOOKUPS`. A gap in it is a source with no index for that
@@ -60,7 +68,7 @@ three named settings, `Search.PRESETS`:
 |---|---|---|
 | `"balanced"` | nothing: the constructor's defaults | general use |
 | `"strict"` | `min_source_support=2` | tables where a wrong structure costs more than a missing one |
-| `"recall"` | `fuzzy`, `inchikey_skeleton`, `similarity_threshold=0.7`, `use_zeropm`, `n_hits="all"` | finding candidates to review by hand |
+| `"recall"` | `fuzzy`, `inchikey_skeleton`, `similarity_threshold=0.7`, `sources="all"`, `n_hits="all"` | finding candidates to review by hand |
 
 ```python
 Search.PRESETS["strict"]                          # a plain dict: inspect it
@@ -70,7 +78,8 @@ df.attrs["preset"], df.attrs["settings"]          # what produced this frame
 ```
 
 An argument passed explicitly overrides the preset, even when it equals the
-`balanced` value: `preset="recall", use_zeropm=False` leaves ZeroPM out.
+`balanced` value: `preset="recall", sources=["chebi", "comptox", "pubchem",
+"chembl"]` leaves ZeroPM out.
 
 ## Online fallback
 
@@ -194,5 +203,5 @@ db.get_by_cas("64-17-5")        # still open
 
 Passing one client does not stop `Search` from building the others: here
 ChEBI, CompTox and ChEMBL are opened as usual on the first search, and
-closed at the end of the `with` block. To leave a source out, pass a
-`data_dir` that does not hold its dataset.
+closed at the end of the `with` block. To query only the client you pass,
+add `sources="pubchem"`.

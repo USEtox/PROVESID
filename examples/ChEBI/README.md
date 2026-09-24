@@ -61,7 +61,7 @@ from provesid import ChEBI
 
 chebi = ChEBI()
 results = chebi.search_by_name("aspirin")
-water = chebi.get_complete_entity(15377)  # CHEBI:15377
+water = chebi.get_compound(15377)  # CHEBI:15377
 ```
 
 ### ChEBI SDF (Offline)

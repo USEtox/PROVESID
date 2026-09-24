@@ -539,3 +539,59 @@ def test_pyopsin_list_gives_each_name_its_own_status(monkeypatch):
     records = PYOPSIN().get_id_from_list(list(answers))
     assert [record["status"] for record in records] == ["SUCCESS", "FAILURE", "SUCCESS"]
     assert [record["smiles"] for record in records] == list(answers.values())
+
+
+def _opsin_cml_lines(names):
+    """The lines py2opsin returns for a list in CML: one document, one molecule per name."""
+    lines = [
+        "<?xml version='1.0' encoding='UTF-8'?>",
+        '<cml xmlns="http://www.xml-cml.org/schema">',
+    ]
+    for number, name in enumerate(names, start=1):
+        lines.append(f'  <molecule id="m{number}">')
+        lines.append(f"    <name>{name}</name>")
+        if name != "notachemical12345":
+            lines.append(f'    <atomArray><atom id="a1" elementType="{name[0].upper()}"/></atomArray>')
+        lines.append("  </molecule>")
+    lines.append("</cml>")
+    return lines
+
+
+@pytest.mark.unit
+def test_pyopsin_list_gives_each_name_its_own_cml(monkeypatch):
+    """
+    py2opsin returns a list's CML as the lines of one document; indexing them
+    gave ethanol "<?xml …", the failed name "<cml …" and benzene the first
+    molecule's opening tag. Each record now holds the document get_CML gives
+    for its name alone.
+    """
+    import provesid.opsin as opsin_module
+    from provesid.opsin import PYOPSIN
+
+    def fake_py2opsin(names, output_format, jar_fpath):
+        if output_format == "CML":
+            lines = _opsin_cml_lines([names] if isinstance(names, str) else names)
+            return "".join(lines) if isinstance(names, str) else lines
+        return names if isinstance(names, str) else list(names)
+
+    monkeypatch.setattr(opsin_module, "py2opsin", fake_py2opsin)
+    opsin = PYOPSIN()
+    names = ["ethanol", "notachemical12345", "benzene"]
+
+    records = opsin.get_id_from_list(names)
+    assert [record["cml"] for record in records] == [opsin.get_CML(name) for name in names]
+    assert '<atom id="a1" elementType="B"/>' in records[2]["cml"]
+    assert "<atomArray>" not in records[1]["cml"]
+
+
+@pytest.mark.unit
+def test_pyopsin_empty_list_starts_no_java(monkeypatch):
+    """OPSIN parses the blank line py2opsin sends for [], so it is never sent."""
+    import provesid.opsin as opsin_module
+    from provesid.opsin import PYOPSIN
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("py2opsin was called for an empty list")
+
+    monkeypatch.setattr(opsin_module, "py2opsin", refuse)
+    assert PYOPSIN().get_id_from_list([]) == []

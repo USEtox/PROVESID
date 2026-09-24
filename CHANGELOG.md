@@ -604,6 +604,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- **`PYOPSIN.get_id_from_list` gives each name its own CML.** py2opsin
+  returns a list's CML as the lines of one document, and each record's `cml`
+  held one of those lines: `"<?xml …"` for the first name, `"<cml …"` for the
+  second, and so on. The document holds one molecule per name, in order, so
+  it is now cut at the molecules. Each record's `cml` is the document
+  `get_CML(name)` gives for that name alone, including for a name OPSIN
+  cannot parse. An empty list returns `[]` without starting Java.
 - **The PUG-View parser reads a unit with digits in a value's label.** The
   International Chemical Safety Cards write water solubility as
   `"Solubility in water, g/100ml at 25 °C: 0.18"` (benzene). `parse_value`

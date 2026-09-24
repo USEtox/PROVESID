@@ -20,6 +20,7 @@ Examples:
 """
 
 import logging
+import re
 import time
 from typing import Any
 import requests
@@ -529,7 +530,10 @@ class PYOPSIN:
             iupac_name: A name, or a list of names.
 
         Returns:
-            The CML as an XML string, or a list of them; ``""`` on failure.
+            The CML as an XML string. For a list, the lines of one document
+            holding a ``<molecule>`` per name; ``get_id_from_list`` cuts it
+            into one document per name. A name OPSIN cannot parse still gets
+            a molecule, holding only its ``<name>``, not ``""``.
 
         Examples:
             >>> PYOPSIN().get_CML("ethanol")[:38]                  # doctest: +SKIP
@@ -586,15 +590,19 @@ class PYOPSIN:
 
         Returns:
             (list): One [`get_id`][provesid.opsin.PYOPSIN.get_id] dict per name,
-                in order, each with its own
-            ``status``.
+                in order, each with its own ``status`` and its own ``cml``
+                document, the one ``get_id`` gives for that name alone. An
+                empty list gives ``[]`` without starting Java.
 
         Examples:
             >>> records = PYOPSIN().get_id_from_list(["ethanol", "notachemical12345"])  # doctest: +SKIP
             >>> [(r["iupac_name"], r["smiles"], r["status"]) for r in records]           # doctest: +SKIP
             [('ethanol', 'C(C)O', 'SUCCESS'), ('notachemical12345', '', 'FAILURE')]
         """
+        if not iupac_names:
+            return []
         res = self.get_id(iupac_names)
+        cml_per_name = self._split_cml(res["cml"], len(iupac_names))
         # convert to list of dicts
         results = []
         for i, name in enumerate(iupac_names):
@@ -605,12 +613,57 @@ class PYOPSIN:
             single_res["inchi"] = res["inchi"][i]
             single_res["stdinchi"] = res["stdinchi"][i]
             single_res["stdinchikey"] = res["stdinchikey"][i]
-            single_res["cml"] = res["cml"][i]
+            single_res["cml"] = cml_per_name[i]
             # get_id gives one status for the whole list; indexing it gave
             # each name a letter of "SUCCESS".
             single_res["status"] = "SUCCESS" if single_res["smiles"] else "FAILURE"
             results.append(single_res)
         return results
+
+    @staticmethod
+    def _split_cml(cml_lines: list, n_names: int) -> list:
+        """
+        Cut the CML document OPSIN writes for a list into one per name.
+
+        For a list, the other formats give one line per name. CML gives a
+        single document, which py2opsin splits at its newlines, so indexing
+        it gave each name one line of XML. The document holds one top-level
+        ``<molecule id="mN">`` per name, in input order. A name OPSIN cannot
+        parse keeps its molecule, holding only its ``<name>``. A salt is one
+        molecule, too.
+
+        Each piece is the XML declaration and ``<cml>`` root, the name's own
+        molecule renumbered ``m1``, and ``</cml>``, joined without newlines.
+        That is the string ``get_CML(name)`` returns for the name alone.
+
+        Args:
+            cml_lines: What ``get_CML`` returned for the list.
+            n_names: How many names were parsed.
+
+        Returns:
+            (list): One CML string per name, in order. If the document does
+                not hold ``n_names`` molecules, every string is ``""`` and a
+                warning is logged, because the pieces could not be matched
+                to the names.
+        """
+        molecule_starts = [
+            i for i, line in enumerate(cml_lines) if line.startswith("  <molecule ")
+        ]
+        if len(molecule_starts) != n_names:
+            logging.getLogger(__name__).warning(
+                "OPSIN's CML holds %d molecules for %d names; cml left empty.",
+                len(molecule_starts), n_names,
+            )
+            return [""] * n_names
+
+        root = "".join(cml_lines[:molecule_starts[0]])
+        molecule_ends = molecule_starts[1:] + [cml_lines.index("</cml>")]
+        pieces = []
+        for start, end in zip(molecule_starts, molecule_ends):
+            first_line = re.sub(r'id="m\d+"', 'id="m1"', cml_lines[start], count=1)
+            molecule = first_line + "".join(cml_lines[start + 1:end])
+            pieces.append(root + molecule + "</cml>")
+        return pieces
 
     @staticmethod
     def _empty_res():

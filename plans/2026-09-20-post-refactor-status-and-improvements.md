@@ -4127,6 +4127,7 @@ Items 1 and 2 are fixed (§31.6). Writing the notebooks turned up five more:
    of a list as one multi-line document. Each record's `cml` holds one line
    of it (`"<?xml …"`, `"<cml …"`, `"    <atomArray>"`), not its own
    molecule. The other fields line up. The OPSIN tutorial leaves CML out.
+   *Fixed, §40.*
 7. **The PUG-View parser misses `"Solubility in water, g/100ml at 25 °C:
    0.18"`** (benzene). It parses neither the value nor the unit. *Fixed,
    §39: by then it read the value, and only the unit was missing.*
@@ -4139,7 +4140,7 @@ Items 1 and 2 are fixed (§31.6). Writing the notebooks turned up five more:
 - ~~**The CAS Common Chemistry notebook is not executed.**~~ Executed on
   2026-09-23 with a real key (§31.8).
 - §31.3 items 3 and 5 to 8. Items 4 and 9 are fixed (§31.7, §31.9). *Item 5
-  is fixed (§33), and item 7 (§39).*
+  is fixed (§33), item 7 (§39) and item 6 (§40).*
 - `examples/notebooks/` still tracks `curated-solubility-dataset.csv` and
   `unique_cas_list.csv`, which nothing uses. The ESOL file moved to
   `examples/search/`.
@@ -4707,3 +4708,35 @@ all. Adding them is not a one-line change. `none` and `good` are ordinary
 English and turn up in other headings, so they would need to be matched
 only in the ICSC shape (`Solubility in water: <term>`), not anywhere in the
 string.
+
+## 40. Landed on 2026-09-24 — `PYOPSIN.get_id_from_list`'s CML (§31.3 item 6)
+
+For a list, every format but CML comes back from OPSIN as one line per name.
+CML comes back as one document, and py2opsin splits it at its newlines, so
+`get_id_from_list` gave each record one line of XML. Probed with OPSIN 2.8.0
+(the jar py2opsin 1.x ships): the document holds one top-level
+`<molecule id="mN">`, two spaces in, per input line and in input order. A
+name OPSIN cannot parse keeps its molecule with only a `<name>` (the error
+goes to stderr), and a salt such as `sodium chloride` is one molecule, not
+two.
+
+`PYOPSIN._split_cml` cuts the document at those molecules. Each piece is the
+XML declaration and `<cml>` root, the molecule renumbered `m1`, and
+`</cml>`, joined without newlines. That is what `get_CML(name)` returns for
+the name alone, so a record from the list and one from `get_id(name)` now
+agree. If the molecule count is not the name count, every `cml` is `""` and
+a WARNING is logged. The pieces are not guessed at.
+
+`get_id_from_list([])` used to start Java six times: py2opsin sends a blank
+line for `[]`, and OPSIN answers it with an empty molecule. It now returns
+`[]` at once.
+
+Tests: `test_pyopsin_list_gives_each_name_its_own_cml` and
+`test_pyopsin_empty_list_starts_no_java`, both unit tests with py2opsin
+faked. Both failed before the fix. Against the real jar, `ethanol`,
+`notachemical12345`, `sodium chloride` and `benzene` each gave a `cml` equal
+to `get_CML(name)` that parses as XML. `test_opsin.py` and
+`test_search_multihit.py`: 54 passed.
+
+`get_CML`'s docstring said a failure gives `""`. It is corrected: a name
+OPSIN cannot parse gives a molecule holding only its name.

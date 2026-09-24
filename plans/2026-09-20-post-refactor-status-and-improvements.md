@@ -385,7 +385,7 @@ replace it.
   is already the right place.
 - ~~**34 public objects still have no docstring**~~ **Done, §28.** Concentrated in `pubchem.py`
   (10), `opsin.py` (7), `search.py` (6) and `cache.py` (2).
-- **Stray files in `src/provesid/data/`**: `build_pubchem_id_db.py` (a duplicate
+- ~~**Stray files in `src/provesid/data/`**~~ **Done, §41.** `build_pubchem_id_db.py` (a duplicate
   of `scripts/build_pubchem_id_db.py`), `examining_pubchem.py`,
   `recreate_tables.sql`, `schema_documentation.txt`. A package data directory
   should hold data.
@@ -4141,9 +4141,9 @@ Items 1 and 2 are fixed (§31.6). Writing the notebooks turned up five more:
   2026-09-23 with a real key (§31.8).
 - §31.3 items 3 and 5 to 8. Items 4 and 9 are fixed (§31.7, §31.9). *Item 5
   is fixed (§33), item 7 (§39) and item 6 (§40).*
-- `examples/notebooks/` still tracks `curated-solubility-dataset.csv` and
+- ~~`examples/notebooks/` still tracks `curated-solubility-dataset.csv` and
   `unique_cas_list.csv`, which nothing uses. The ESOL file moved to
-  `examples/search/`.
+  `examples/search/`.~~ Done, §41.
 - The README (step 20) still describes the old tutorials.
 
 ### 31.5 Decisions taken, 2026-09-23
@@ -4740,3 +4740,38 @@ to `get_CML(name)` that parses as XML. `test_opsin.py` and
 
 `get_CML`'s docstring said a failure gives `""`. It is corrected: a name
 OPSIN cannot parse gives a molecule holding only its name.
+
+## 41. Landed on 2026-09-24 — stray files (§4.12, §31.4)
+
+Removed from git:
+
+- `src/provesid/data/examining_pubchem.py`: a scratch script that printed
+  one row of `PubChem_CAS_202601.csv`, a file not in the directory.
+- `src/provesid/data/schema_documentation.txt`: ChEMBL's schema text for
+  release 36. `CheMBL` installs the latest release (`CheMBL().release`), so
+  a pinned copy goes stale. `chembl.py`'s module docstring and
+  `examples/chembl/README.md` now give ChEMBL's per-release page,
+  `…/ChEMBLdb/releases/chembl_<N>/schema_documentation.html`. The pages for
+  36 and 37 both answered 200 on 2026-09-24.
+- `examples/notebooks/curated-solubility-dataset.csv` and
+  `unique_cas_list.csv`: nothing references either.
+
+Deleted from disk, untracked and gitignored: the three `:Zone.Identifier`
+files in `examples/notebooks/`, which held only `ZoneId=3`. The directory is
+gone.
+
+`build_pubchem_id_db.py` had already left `src/provesid/data/`. Kept:
+`recreate_tables.sql`. It is ZeroPM's script and is gitignored, and
+hatchling leaves gitignored files out of the sdist and wheel. The comment
+in `zeropm.py` on the rotated mobility columns cites it.
+
+`chembl.py` doctests: 19 passed, 5 skipped.
+
+### 41.1 Found on the way, not done
+
+- `MANIFEST.in` is setuptools configuration. The build backend is
+  hatchling, which does not read it. Its `recursive-include
+  src/provesid/data *` would take in the multi-GB databases if a setuptools
+  build ever used it.
+- `src/provesid/data/zeropm-v0-0-3.sqlite` (460 MB, ignored) sits beside
+  v0-0-4 on this machine. It is a local file, not the repository's.

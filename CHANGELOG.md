@@ -1155,6 +1155,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that instance targets; the full catalogue lives in `Search._ALL_SOURCE_KEYS`
   and the default set in `Search._DEFAULT_SOURCE_KEYS`.
 
+### Removed
+- **`schema_documentation.txt` is no longer shipped in `provesid/data/`.** It
+  was ChEMBL's schema for release 36, and the release `CheMBL` installs is
+  whichever is latest. `chembl.py` and `examples/chembl/README.md` now point
+  at ChEMBL's page for each release,
+  `https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/releases/chembl_<N>/schema_documentation.html`.
+  `provesid/data/examining_pubchem.py`, a scratch script that read a CSV
+  that isn't there, is gone too.
+- `examples/notebooks/` is gone. Its two CSVs (4 MB) had been unused since
+  their notebook was deleted.
+
 ## [0.7.0] - 2026-08-17
 
 ### Fixed

@@ -131,7 +131,9 @@ The ChEMBL class queries the following main tables:
 - **molecule_synonyms**: Alternative compound names
 - **chembl_id_lookup**: ID mapping table
 
-For detailed schema documentation, see: `src/provesid/data/schema_documentation.txt`
+ChEMBL documents every table of release N at
+`https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/releases/chembl_<N>/schema_documentation.html`,
+where N is `CheMBL().release`.
 
 ## References
 

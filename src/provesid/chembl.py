@@ -31,7 +31,9 @@ stream, so the 27.7 GiB release is never written and ~4.5 GiB of free disk is
 enough.  ``CheMBL(source="full")`` keeps the whole release, for anyone who
 wants the other 66 tables.
 
-For detailed table schema information, see src/provesid/data/schema_documentation.txt
+ChEMBL documents every table of release N at
+https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/releases/chembl_<N>/schema_documentation.html,
+where N is ``CheMBL().release``.
 """
 
 import os

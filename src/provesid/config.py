@@ -21,6 +21,8 @@ import logging
 from pathlib import Path
 from typing import Optional, Dict, Any
 
+logger = logging.getLogger(__name__)
+
 
 class ConfigManager:
     """
@@ -242,12 +244,18 @@ def get_config_manager() -> ConfigManager:
     return _config_manager
 
 
-def set_cas_api_key(api_key: str):
+def set_cas_api_key(api_key: str) -> Path:
     """
     Set CAS Common Chemistry API key for persistent storage
 
+    [`CASCommonChem`][provesid.cascommonchem.CASCommonChem] uses the stored
+    key from then on. The file's path is logged at INFO.
+
     Args:
         api_key: Your CAS API key
+
+    Returns:
+        (Path): The config file the key was written to.
 
     Note:
         This replaces any key already stored, without asking.
@@ -255,13 +263,12 @@ def set_cas_api_key(api_key: str):
     Examples:
         >>> from provesid.config import set_cas_api_key
         >>> set_cas_api_key("your-cas-api-key-here")    # doctest: +SKIP
-        ✅ CAS API key saved to: /home/me/.config/provesid/config.json
-        ℹ️  CASCommonChem() will now automatically use this key
+        PosixPath('/home/me/.config/provesid/config.json')
     """
     config_mgr = get_config_manager()
     config_mgr.set_api_key('cas', api_key)
-    print(f"✅ CAS API key saved to: {config_mgr.config_file}")
-    print("ℹ️  CASCommonChem() will now automatically use this key")
+    logger.info("CAS API key saved to %s; CASCommonChem() will use it", config_mgr.config_file)
+    return config_mgr.config_file
 
 
 def get_cas_api_key() -> Optional[str]:
@@ -283,38 +290,41 @@ def get_cas_api_key() -> Optional[str]:
     return get_config_manager().get_api_key('cas')
 
 
-def remove_cas_api_key():
+def remove_cas_api_key() -> bool:
     """
-    Remove the stored CAS API key, and say whether there was one.
+    Remove the stored CAS API key.
+
+    Returns:
+        True if a key was stored and is now gone, False if none was stored.
 
     Examples:
         >>> remove_cas_api_key()                          # doctest: +SKIP
-        ✅ CAS API key removed
+        True
     """
-    config_mgr = get_config_manager()
-    if config_mgr.remove_api_key('cas'):
-        print("✅ CAS API key removed")
+    removed = get_config_manager().remove_api_key('cas')
+    if removed:
+        logger.info("CAS API key removed")
     else:
-        print("ℹ️  No CAS API key was configured")
+        logger.info("No CAS API key was configured")
+    return removed
 
 
-def show_config():
+def show_config() -> Dict[str, Any]:
     """
-    Print the configuration's location and which services have keys.
+    The configuration's location and which services have keys.
+
+    The same as ``get_config_manager().get_config_info()``. The keys
+    themselves are not included.
+
+    Returns:
+        (dict): ``config_directory``, ``config_file``, ``config_exists`` and
+        ``configured_services``.
 
     Examples:
         >>> show_config()                                 # doctest: +SKIP
-        PROVESID Configuration:
-          Config directory: /home/me/.config/provesid
-          Config file: /home/me/.config/provesid/config.json
-          Config exists: True
-          Configured services: cas
+        {'config_directory': '/home/me/.config/provesid',
+         'config_file': '/home/me/.config/provesid/config.json',
+         'config_exists': True,
+         'configured_services': ['cas']}
     """
-    config_mgr = get_config_manager()
-    info = config_mgr.get_config_info()
-
-    print("PROVESID Configuration:")
-    print(f"  Config directory: {info['config_directory']}")
-    print(f"  Config file: {info['config_file']}")
-    print(f"  Config exists: {info['config_exists']}")
-    print(f"  Configured services: {', '.join(info['configured_services']) if info['configured_services'] else 'None'}")
+    return get_config_manager().get_config_info()

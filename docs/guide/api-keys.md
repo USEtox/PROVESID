@@ -42,9 +42,9 @@ constructor raises an error listing these four options.
 ```python
 from provesid import show_config, get_cas_api_key, remove_cas_api_key
 
-show_config()           # prints the config directory, file, and which services have keys
+show_config()           # dict: the config directory, file, and which services have keys
 get_cas_api_key()       # the stored key, or None
-remove_cas_api_key()
+remove_cas_api_key()    # True if a key was stored
 ```
 
 The key is stored in plain text in `config.json`, in

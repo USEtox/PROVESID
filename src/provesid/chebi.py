@@ -359,14 +359,20 @@ class ChEBI:
             chebi_ids: List of ChEBI IDs.
 
         Returns:
-            API response, a dict keyed by ``CHEBI:<id>`` holding each compound's
-            record, or *None* on error.
+            API response, or *None* on error: a dict keyed by ``CHEBI:<id>``,
+            one entry per ID asked for. Each holds ``exists``,
+            ``primary_chebi_id`` (the ID a secondary one maps to),
+            ``id_type``, ``standardized_chebi_id`` and ``data``, which is the
+            [`get_compound`][provesid.chebi.ChEBI.get_compound] record, or
+            None when the ID does not exist.
 
         Examples:
             >>> chebi = ChEBI()
             >>> results = chebi.get_compounds(["CHEBI:15377", "CHEBI:15365"])  # doctest: +SKIP
-            >>> {key: record["name"] for key, record in results.items()}      # doctest: +SKIP
+            >>> {key: entry["data"]["name"] for key, entry in results.items()}  # doctest: +SKIP
             {'CHEBI:15377': 'water', 'CHEBI:15365': 'acetylsalicylic acid'}
+            >>> chebi.get_compounds([999999999])["CHEBI:999999999"]["exists"]  # doctest: +SKIP
+            False
         """
         ids_formatted = [self._format_chebi_id(cid) for cid in chebi_ids]
         try:

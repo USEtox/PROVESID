@@ -1495,7 +1495,7 @@ class PubChemAPI:
             >>> api.get_cids_by_name("caffeine", name_type="word")[:4]  # doctest: +SKIP
             [9871508, 56841593, 3081207, 2519]
             >>> api.get_cids_by_name("50-78-2", domain=Domain.SUBSTANCE)  # doctest: +SKIP
-            [12280114, 2244, 67252, 3434975]
+            [67252, 2244, 12280114, 3434975]
         """
         # Choose appropriate namespace based on domain
         if domain == Domain.COMPOUND:
@@ -2106,12 +2106,11 @@ class PubChemAPI:
             >>> formatted["CID"], formatted["MolecularFormula"]           # doctest: +SKIP
             (712, 'CH2O')
 
-            >>> # Multiple results (e.g., common name)
+            >>> # A name PubChem maps to one compound gives one dict too;
+            >>> # a list comes back only when search_compound's data is a list
             >>> res = pch.search_compound("aspirin")                      # doctest: +SKIP
-            >>> first = pch.format_search_compound_result(res, index=0)   # doctest: +SKIP
-            >>> every = pch.format_search_compound_result(res)            # doctest: +SKIP
-            >>> len(every)                                                # doctest: +SKIP
-            142
+            >>> pch.format_search_compound_result(res)["CID"]             # doctest: +SKIP
+            2244
 
             >>> # A failed search stays a failure, with its reason
             >>> pch.format_search_compound_result(

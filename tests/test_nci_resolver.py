@@ -501,30 +501,92 @@ class TestMolecularDataIsParsed:
 
     @pytest.fixture
     def resolver(self, monkeypatch):
-        resolver = NCIChemicalIdentifierResolver(pause_time=0)
+        resolver = NCIChemicalIdentifierResolver(pause_time=0, use_cache=False)
         monkeypatch.setattr(
             resolver, "_make_request",
             lambda url: self.ANSWERS.get(url.rsplit("/", 1)[1], "x"),
         )
         return resolver
 
+    @pytest.fixture
+    def ethanol(self):
+        """
+        Unique per run. use_cache=False still writes, so asking for "ethanol"
+        would store these made-up answers where a live test reads them.
+        """
+        import uuid
+        return f"ethanol-{uuid.uuid4().hex}"
+
     @pytest.mark.unit
-    def test_cas_is_a_list_in_cactus_order(self, resolver):
-        data = resolver.get_molecular_data("ethanol", use_cache=False)
+    def test_cas_is_a_list_in_cactus_order(self, resolver, ethanol):
+        data = resolver.get_molecular_data(ethanol)
 
         assert data["cas"] == self.ANSWERS["cas"].split("\n")
         assert data["available_data"]["cas"] == data["cas"]
 
     @pytest.mark.unit
-    def test_stdinchikey_is_bare(self, resolver):
-        data = resolver.get_molecular_data("ethanol", use_cache=False)
+    def test_stdinchikey_is_bare(self, resolver, ethanol):
+        data = resolver.get_molecular_data(ethanol)
 
         assert data["stdinchikey"] == "LFQSCWFLJHTTHZ-UHFFFAOYSA-N"
 
     @pytest.mark.unit
-    def test_resolve_stays_raw(self, resolver):
+    def test_resolve_stays_raw(self, resolver, ethanol):
         """Dev-principle 3: the raw call keeps CACTUS's format."""
-        assert resolver.resolve("ethanol", "stdinchikey", use_cache=False).startswith("InChIKey=")
+        assert resolver.resolve(ethanol, "stdinchikey", use_cache=False).startswith("InChIKey=")
+
+
+class TestFailedRequestsAreNotCached:
+    """
+    get_molecular_data, resolve_multiple, batch_resolve and the other helpers
+    turn a failed request into None and were cached themselves, so one timeout
+    became that representation's answer for good. Only resolve is cached now,
+    and it raises on a failure.
+    """
+
+    @pytest.fixture
+    def outage(self, monkeypatch):
+        """A resolver whose first formula request times out; the rest answer."""
+        from provesid.resolver import NCIResolverTimeoutError
+
+        resolver = NCIChemicalIdentifierResolver(pause_time=0)
+        state = {"down": True}
+
+        def make_request(url):
+            if url.endswith("/formula") and state["down"]:
+                state["down"] = False
+                raise NCIResolverTimeoutError(f"Timed out: {url}")
+            return "C2H6O"
+
+        monkeypatch.setattr(resolver, "_make_request", make_request)
+        return resolver
+
+    @pytest.fixture
+    def identifier(self):
+        """Unique per run, so no earlier run's cache entry answers."""
+        import uuid
+        return f"not-a-real-chemical-{uuid.uuid4().hex}"
+
+    @pytest.mark.unit
+    def test_get_molecular_data(self, outage, identifier):
+        assert outage.get_molecular_data(identifier)["formula"] is None
+        assert outage.get_molecular_data(identifier)["formula"] == "C2H6O"
+
+    @pytest.mark.unit
+    def test_resolve_multiple(self, outage, identifier):
+        assert outage.resolve_multiple(identifier, ["formula"]) == {"formula": None}
+        assert outage.resolve_multiple(identifier, ["formula"]) == {"formula": "C2H6O"}
+
+    @pytest.mark.unit
+    def test_batch_resolve(self, outage, identifier):
+        assert outage.batch_resolve([identifier], "formula") == {identifier: None}
+        assert outage.batch_resolve([identifier], "formula") == {identifier: "C2H6O"}
+
+    @pytest.mark.unit
+    def test_a_found_answer_is_still_cached(self, outage, identifier, monkeypatch):
+        outage.resolve(identifier, "smiles")
+        monkeypatch.setattr(outage, "_make_request", lambda url: pytest.fail("not cached"))
+        assert outage.resolve(identifier, "smiles") == "C2H6O"
 
 if __name__ == "__main__":
     # Run tests if executed directly

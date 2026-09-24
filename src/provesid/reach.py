@@ -30,6 +30,21 @@ class REACHDossierID:
     The class reads `reach_study_results-dossier_info_23-05-2023.xlsx` from the
     package data directory by default and exposes methods to search and convert
     identifiers across key columns in the dataset.
+
+    The sheet holds one row per registration dossier (26 862 of them), so a
+    substance registered more than once has several rows, and the ``cas_to_*``
+    style conversions return lists. Loading takes about two seconds; build one
+    instance and reuse it. Everything is offline.
+
+    Records are dicts keyed by the sheet's own column names, available as the
+    ``COL_*`` attributes.
+
+    Examples:
+        >>> reach = REACHDossierID()
+        >>> reach.cas_to_inventory_number("50-00-0")
+        ['200-001-8']
+        >>> reach.cas_to_dossier_uuid("50-00-0")
+        ['6504c871-0c9e-49f0-9e3b-62bdf078283a', '7d2fc287-88f7-49b3-87a2-258c60a3d6ca']
     """
 
     DEFAULT_FILE_NAME = "reach_study_results-dossier_info_23-05-2023.xlsx"
@@ -65,6 +80,11 @@ class REACHDossierID:
         Raises:
             FileNotFoundError: If the Excel file does not exist.
             RuntimeError: If the workbook cannot be parsed or required columns are missing.
+
+        Examples:
+            >>> reach = REACHDossierID()
+            >>> os.path.basename(reach.excel_path), len(reach.df)
+            ('reach_study_results-dossier_info_23-05-2023.xlsx', 26862)
         """
         if excel_path is None:
             excel_path = os.path.join(data_path(), self.DEFAULT_FILE_NAME)
@@ -110,7 +130,7 @@ class REACHDossierID:
             sheet_name (str): Worksheet name.
 
         Returns:
-            pd.DataFrame: Loaded data.
+            (pd.DataFrame): Loaded data.
 
         Raises:
             RuntimeError: If the file cannot be parsed.
@@ -143,7 +163,7 @@ class REACHDossierID:
             sheet_name (str): Target worksheet name.
 
         Returns:
-            pd.DataFrame: Parsed worksheet data.
+            (pd.DataFrame): Parsed worksheet data.
 
         Raises:
             RuntimeError: If parsing fails or sheet is not found.
@@ -287,7 +307,15 @@ class REACHDossierID:
         Get summary statistics for the loaded REACH dataset.
 
         Returns:
-            dict: Summary fields including row count and non-empty ID counts.
+            (dict): Summary fields including row count and non-empty ID counts:
+            ``total_rows`` and ``rows_with_`` each of ``dossier_uuid``,
+            ``cas``, ``inventory_number``, ``substance_name`` and
+            ``iupac_name``.
+
+        Examples:
+            >>> stats = REACHDossierID().get_stats()
+            >>> stats["total_rows"], stats["rows_with_cas"]
+            (26862, 21211)
         """
         return {
             "total_rows": int(len(self.df)),
@@ -307,6 +335,10 @@ class REACHDossierID:
 
         Returns:
             dict | None: Matching record or None if not found.
+
+        Examples:
+            >>> REACHDossierID().get_by_dossier_uuid("6504c871-0c9e-49f0-9e3b-62bdf078283a")
+            {'DOSSIER UUID': '6504c871-0c9e-49f0-9e3b-62bdf078283a', 'NAME_SUBSTANCE': 'Formaldehyde', 'CAS_NUMBER_ref_sub': '50-00-0', 'NUMBER_IN_INVENTORY_ref_sub': '200-001-8', 'IUPAC_NAME_ref_sub': 'formaldehyde'}
         """
         key = self._normalize_text(dossier_uuid)
         if not key:
@@ -323,7 +355,12 @@ class REACHDossierID:
             cas_number (str): CAS Registry Number.
 
         Returns:
-            list[dict]: Matching records.
+            (list[dict]): Matching records, one per dossier.
+
+        Examples:
+            >>> rows = REACHDossierID().get_by_cas("50-00-0")
+            >>> len(rows), rows[0]["NAME_SUBSTANCE"]
+            (2, 'Formaldehyde')
         """
         key = self._normalize_text(cas_number)
         if not key:
@@ -339,7 +376,11 @@ class REACHDossierID:
             inventory_number (str): EC inventory number.
 
         Returns:
-            list[dict]: Matching records.
+            (list[dict]): Matching records, one per dossier.
+
+        Examples:
+            >>> [row["CAS_NUMBER_ref_sub"] for row in REACHDossierID().get_by_inventory_number("200-001-8")]
+            ['50-00-0', '50-00-0']
         """
         key = self._normalize_text(inventory_number)
         if not key:
@@ -363,7 +404,15 @@ class REACHDossierID:
             limit (int, optional): Maximum number of results.
 
         Returns:
-            list[dict]: Matching records.
+            (list[dict]): Matching records, in sheet order. Whitespace runs are
+            collapsed before matching.
+
+        Examples:
+            >>> reach = REACHDossierID()
+            >>> [row["NAME_SUBSTANCE"] for row in reach.get_by_name("FORMALDEHYDE", exact=True)]
+            ['Formaldehyde', 'Formaldehyde']
+            >>> reach.get_by_name("formaldehyde", limit=1)[0]["NAME_SUBSTANCE"]
+            '1-Naphthol, reaction products with formaldehyde'
         """
         key = self._normalize_name(name)
         if not key:
@@ -395,7 +444,12 @@ class REACHDossierID:
             limit (int, optional): Maximum number of results.
 
         Returns:
-            list[dict]: Matching records.
+            (list[dict]): Matching records, in sheet order.
+
+        Examples:
+            >>> rows = REACHDossierID().get_by_iupac_name("formaldehyde", exact=True)
+            >>> [row["CAS_NUMBER_ref_sub"] for row in rows]
+            ['50-00-0', '50-00-0']
         """
         key = self._normalize_name(iupac_name)
         if not key:
@@ -420,6 +474,10 @@ class REACHDossierID:
 
         Returns:
             str | None: CAS number if found and non-empty.
+
+        Examples:
+            >>> REACHDossierID().dossier_uuid_to_cas("6504c871-0c9e-49f0-9e3b-62bdf078283a")
+            '50-00-0'
         """
         row = self.get_by_dossier_uuid(dossier_uuid)
         if not row:
@@ -436,6 +494,10 @@ class REACHDossierID:
 
         Returns:
             str | None: Inventory number if found and non-empty.
+
+        Examples:
+            >>> REACHDossierID().dossier_uuid_to_inventory_number("6504c871-0c9e-49f0-9e3b-62bdf078283a")
+            '200-001-8'
         """
         row = self.get_by_dossier_uuid(dossier_uuid)
         if not row:
@@ -452,6 +514,10 @@ class REACHDossierID:
 
         Returns:
             str | None: Substance name if found and non-empty.
+
+        Examples:
+            >>> REACHDossierID().dossier_uuid_to_name("6504c871-0c9e-49f0-9e3b-62bdf078283a")
+            'Formaldehyde'
         """
         row = self.get_by_dossier_uuid(dossier_uuid)
         if not row:
@@ -467,7 +533,12 @@ class REACHDossierID:
             cas_number (str): CAS number.
 
         Returns:
-            list[str]: Dossier UUID values.
+            (list[str]): Dossier UUID values. Distinct and non-empty, in sheet
+            order; empty when nothing matches.
+
+        Examples:
+            >>> REACHDossierID().cas_to_dossier_uuid("50-00-0")
+            ['6504c871-0c9e-49f0-9e3b-62bdf078283a', '7d2fc287-88f7-49b3-87a2-258c60a3d6ca']
         """
         rows = self.get_by_cas(cas_number)
         return self._unique_nonempty([row.get(self.COL_DOSSIER_UUID, "") for row in rows])
@@ -480,7 +551,12 @@ class REACHDossierID:
             cas_number (str): CAS number.
 
         Returns:
-            list[str]: Inventory number values.
+            (list[str]): Inventory number values. Distinct and non-empty, in
+            sheet order; empty when nothing matches.
+
+        Examples:
+            >>> REACHDossierID().cas_to_inventory_number("50-00-0")
+            ['200-001-8']
         """
         rows = self.get_by_cas(cas_number)
         return self._unique_nonempty([row.get(self.COL_EC, "") for row in rows])
@@ -493,7 +569,12 @@ class REACHDossierID:
             cas_number (str): CAS number.
 
         Returns:
-            list[str]: Substance names.
+            (list[str]): Substance names. Distinct and non-empty, in sheet order; empty
+            when nothing matches.
+
+        Examples:
+            >>> REACHDossierID().cas_to_name("50-00-0")
+            ['Formaldehyde']
         """
         rows = self.get_by_cas(cas_number)
         return self._unique_nonempty([row.get(self.COL_NAME_SUBSTANCE, "") for row in rows])
@@ -506,7 +587,12 @@ class REACHDossierID:
             inventory_number (str): EC inventory number.
 
         Returns:
-            list[str]: CAS values.
+            (list[str]): CAS values. Distinct and non-empty, in sheet order; empty
+            when nothing matches.
+
+        Examples:
+            >>> REACHDossierID().inventory_number_to_cas("200-001-8")
+            ['50-00-0']
         """
         rows = self.get_by_inventory_number(inventory_number)
         return self._unique_nonempty([row.get(self.COL_CAS, "") for row in rows])
@@ -519,7 +605,12 @@ class REACHDossierID:
             inventory_number (str): EC inventory number.
 
         Returns:
-            list[str]: Dossier UUID values.
+            (list[str]): Dossier UUID values. Distinct and non-empty, in sheet
+            order; empty when nothing matches.
+
+        Examples:
+            >>> REACHDossierID().inventory_number_to_dossier_uuid("200-001-8")
+            ['6504c871-0c9e-49f0-9e3b-62bdf078283a', '7d2fc287-88f7-49b3-87a2-258c60a3d6ca']
         """
         rows = self.get_by_inventory_number(inventory_number)
         return self._unique_nonempty([row.get(self.COL_DOSSIER_UUID, "") for row in rows])
@@ -534,7 +625,12 @@ class REACHDossierID:
             limit (int, optional): Maximum records to inspect.
 
         Returns:
-            list[str]: CAS values.
+            (list[str]): CAS values, distinct, from the first ``limit`` matching
+            records.
+
+        Examples:
+            >>> REACHDossierID().name_to_cas("formaldehyde", exact=True)
+            ['50-00-0']
         """
         rows = self.get_by_name(name=name, exact=exact, limit=limit)
         return self._unique_nonempty([row.get(self.COL_CAS, "") for row in rows])
@@ -554,7 +650,12 @@ class REACHDossierID:
             limit (int, optional): Maximum records to inspect.
 
         Returns:
-            list[str]: Dossier UUID values.
+            (list[str]): Dossier UUID values, distinct, from the first ``limit``
+            matching records.
+
+        Examples:
+            >>> REACHDossierID().name_to_dossier_uuid("formaldehyde", exact=True)
+            ['6504c871-0c9e-49f0-9e3b-62bdf078283a', '7d2fc287-88f7-49b3-87a2-258c60a3d6ca']
         """
         rows = self.get_by_name(name=name, exact=exact, limit=limit)
         return self._unique_nonempty([row.get(self.COL_DOSSIER_UUID, "") for row in rows])

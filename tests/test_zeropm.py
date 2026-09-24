@@ -57,23 +57,36 @@ class TestZeroPMInitialization:
             zpm.download_database()
     
     def test_download_database_force_parameter(self):
-        """Test download_database with force=True parameter"""
+        """force=True gets past the exists check and starts the download.
+
+        The downloader is patched out: what is under test is that
+        FileExistsError is not raised and that the right destination is
+        requested, not that 100 MB arrives.
+        """
         zpm = ZeroPM()
-        # Create a mock for requests.get to avoid actual download
-        with patch('provesid.zeropm.requests.get') as mock_get:
-            # Mock response
-            mock_response = MagicMock()
-            mock_response.headers = {'content-length': '1000'}
-            mock_response.iter_content = lambda chunk_size: [b'test_data']
-            mock_get.return_value = mock_response
-            
-            # Should not raise error with force=True
-            try:
-                zpm.download_database(force=True)
-            except Exception:
-                # It's ok if this fails due to mocking, we just want to verify
-                # that FileExistsError is not raised with force=True
-                pass
+        with patch('provesid.zeropm.download_file') as mock_download:
+            assert zpm.download_database(force=True) == zpm.db_path
+
+        mock_download.assert_called_once()
+        url, dest = mock_download.call_args.args
+        assert url == zpm.db_url
+        assert dest == zpm.db_path
+
+    def test_download_database_rejects_a_file_that_is_not_a_database(self, tmp_path):
+        """The verify callback handed to download_file is a real check.
+
+        It runs on the .part file, before anything is moved into place, so a
+        damaged download cannot replace a working database.
+        """
+        zpm = ZeroPM()
+        with patch('provesid.zeropm.download_file') as mock_download:
+            zpm.download_database(force=True)
+        verify = mock_download.call_args.kwargs["verify"]
+
+        not_a_database = tmp_path / "junk.db"
+        not_a_database.write_bytes(b"this is not SQLite")
+        with pytest.raises(RuntimeError, match="corrupted"):
+            verify(str(not_a_database))
 
 
 
@@ -754,6 +767,22 @@ class TestZeroPMAdvancedSearchMethods:
         else:
             pytest.skip("No chemical names found in database")
     
+    def test_query_name_regex_case_sensitive_distinguishes_case(self, zpm):
+        """``case_sensitive=True`` used to go through LIKE, which ignores case."""
+        insensitive = [name for _, name in
+                       zpm.query_name_regex("formaldehyde", limit=10)]
+        sensitive = [name for _, name in
+                     zpm.query_name_regex("formaldehyde", case_sensitive=True, limit=10)]
+        assert "Formaldehyde" in insensitive
+        assert sensitive == ["formaldehyde"]
+
+    def test_query_name_regex_case_sensitive_wildcards(self, zpm):
+        """``.*`` and ``.`` are wildcards in both modes."""
+        names = [name for _, name in
+                 zpm.query_name_regex("Formaldehyd..*", case_sensitive=True, limit=50)]
+        assert "Formaldehyde" in names
+        assert all(name.startswith("Formaldehyd") for name in names)
+
     def test_query_name_regex_no_match(self, zpm):
         """Test regex name search with no matches"""
         pattern = "%xyzabc123nonexistent%"
@@ -1757,10 +1786,11 @@ class TestZeroPMv004Features:
         """
         zeropm_id, inchi_id = self._pm_sample(zpm)[0]
         zpm.cursor.execute(
-            "SELECT probability_of_p, probability_of_m, n FROM pm_probabilities "
-            "WHERE inchi_id = ?",
+            "SELECT probability_of_p, probability_of_m_or_vm, n "
+            "FROM pm_probabilities WHERE inchi_id = ?",
             (inchi_id,),
         )
+        # The stored m_or_vm column holds m; see test_mobility_columns_*.
         expected_p, expected_m, expected_n = zpm.cursor.fetchone()
 
         probs = zpm.get_pm_probabilities(zeropm_id=zeropm_id)
@@ -1768,6 +1798,60 @@ class TestZeroPMv004Features:
         assert probs['probability_of_p'] == expected_p
         assert probs['probability_of_m'] == expected_m
         assert probs['n'] == expected_n
+
+    # zeropm-v0-0-4.sqlite stores three mobility columns under each other's
+    # names (upstream loaded a CSV positionally into a table that orders them
+    # differently), and every reader relabels them. These tests hold the
+    # readers to the probability identities over the whole table, and to
+    # substances whose mobility is not in doubt. If a release fixes the file,
+    # the relabelling breaks them, and _PM_PROBABILITY_SELECT must go.
+
+    @staticmethod
+    def _share_obeying(df, whole, parts):
+        """Share of rows where the probabilities in ``parts`` sum to ``whole``."""
+        rows = df.dropna(subset=['probability_of_not_m'])
+        total = sum(rows[f'probability_of_{part}'] for part in parts)
+        target = 1.0 if whole == 'one' else rows[f'probability_of_{whole}']
+        return ((total - target).abs() < 1e-6).mean()
+
+    def test_mobility_columns_obey_the_probability_identities(self, zpm):
+        df = zpm.get_all_zeropm_chemicals(include_pm_probs=True)
+        assert self._share_obeying(df, 'one', ['not_m', 'm_or_vm']) > 0.99
+        assert self._share_obeying(df, 'm_or_vm', ['m', 'vm']) > 0.99
+        # The persistence columns, stored correctly, set the bar.
+        assert self._share_obeying(df, 'one', ['not_p', 'p_or_vp']) > 0.99
+        assert self._share_obeying(df, 'p_or_vp', ['p', 'vp']) > 0.99
+
+    def test_the_stored_mobility_columns_are_still_misnamed(self, zpm):
+        """Fails once a ZeroPM release stores the columns under their names."""
+        zpm.cursor.execute("""
+            SELECT AVG(ABS(probability_of_not_m + probability_of_m_or_vm - 1) < 1e-6)
+            FROM pm_probabilities WHERE probability_of_not_m IS NOT NULL
+        """)
+        assert zpm.cursor.fetchone()[0] < 0.1
+
+    @pytest.mark.parametrize("cas", ["76-05-1", "33665-90-6", "123-91-1"])
+    def test_very_mobile_substances_read_very_mobile(self, zpm, cas):
+        """TFA, acesulfame and 1,4-dioxane: the textbook vM substances."""
+        probs = zpm.get_pm_probabilities(cas=cas)
+        assert probs['probability_of_vm'] > 0.95
+        assert probs['probability_of_m'] < 0.05
+
+    def test_a_boundary_substance_reads_mobile_not_very_mobile(self, zpm):
+        """Naphthalene, log Koc ~3, sits on the M line, far from vM."""
+        probs = zpm.get_pm_probabilities(cas="91-20-3")
+        assert probs['probability_of_m'] == pytest.approx(0.5, abs=0.05)
+        assert probs['probability_of_vm'] < 0.05
+
+    def test_readers_agree_on_the_mobility_columns(self, zpm):
+        cas = "1912-24-9"  # atrazine
+        single = zpm.get_pm_probabilities(cas=cas)
+        batch = zpm.batch_get_pm_probabilities(cas_list=[cas]).iloc[0]
+        every = zpm.get_all_zeropm_chemicals(include_pm_probs=True)
+        every = every[every['inchi_id'] == batch['inchi_id']].iloc[0]
+        for key in self.PM_KEYS:
+            assert batch[key] == single[key]
+            assert every[key] == single[key]
 
     def test_get_pm_probabilities_both_id_routes_agree(self, zpm):
         """Looking up by zeropm_id and by inchi_id gives the same answer."""
@@ -1793,6 +1877,12 @@ class TestZeroPMv004Features:
 
     def test_zeropm_id_to_inchi_id_unknown_id(self, zpm):
         assert zpm.zeropm_id_to_inchi_id(999999999) is None
+
+    def test_id_table_from_zeropm_id_has_no_repeated_rows(self, zpm):
+        """api_results repeats (query, structure, rank); the table must not."""
+        table = zpm.get_id_table_from_zeropm_id(3224)  # formaldehyde
+        assert not table.duplicated(["query_id", "rank"]).any()
+        assert set(table[table["rank"] == 1]["cas"]) == {"50-00-0", "30525-89-4"}
 
     def test_batch_get_pm_probabilities_with_cas(self, zpm):
         """Test batch getting P/M probabilities from CAS list"""

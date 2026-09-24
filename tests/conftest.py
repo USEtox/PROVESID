@@ -8,6 +8,7 @@ import time
 from unittest.mock import Mock, patch
 import os
 import sys
+import tempfile
 
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -19,6 +20,42 @@ os.environ.setdefault(
         os.path.join(os.path.dirname(__file__), '..', 'src', 'provesid', 'data')
     ),
 )
+
+# Keep the suite out of the developer's real cache. Several tests call
+# provesid.clear_cache(), which since the move off /tmp would otherwise delete
+# responses the developer paid network time for.
+os.environ.setdefault(
+    "PROVESID_CACHE_DIR",
+    os.path.join(tempfile.gettempdir(), "provesid_test_cache"),
+)
+
+
+@pytest.fixture
+def no_installed_datasets(tmp_path, monkeypatch):
+    """
+    Point ``PROVESID_DATA_DIR`` at an empty directory for one test.
+
+    ``Search`` builds every source client it was not handed, so a test that
+    passes stubs for some sources would otherwise open the real databases for
+    the rest.  With nothing installed, those sources are reported missing and
+    the search runs on the stubs alone.
+    """
+    monkeypatch.setenv("PROVESID_DATA_DIR", str(tmp_path))
+    return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _no_host_hold_leaks():
+    """
+    Forget every host's ``Retry-After`` hold after each test.
+
+    Holds live on process-wide limiters, and a stub that answers 503 with
+    ``Retry-After: 30`` under PubChem's real host would otherwise make every
+    later PubChem test fail at once without asking.
+    """
+    yield
+    from provesid.http import release_holds
+    release_holds()
 
 
 # Pytest markers for test categorization

@@ -1,6 +1,6 @@
 [project]
 name = "provesid"
-version = "0.7.0"
+version = "0.8.0"
 description = "A Python package for chemical identifier resolution and experimental property extraction"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -43,7 +43,7 @@ dependencies = [
 # The transformer + rule-based models work with just this extra; the graph (GNN)
 # models additionally need torch_scatter, which has no source install and must
 # come from the PyG wheel index — use `bash scripts/install_chebifier.sh`.
-# See docs/chebifier.md.
+# See docs/guide/chebifier.md.
 chebifier = [
     "chebifier[models]==1.2.2",
 ]
@@ -95,6 +95,7 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short --strict-markers --strict-config"
+doctest_optionflags = ["NORMALIZE_WHITESPACE", "ELLIPSIS"]
 markers = [
     "unit: Unit tests that don't require external resources",
     "integration: Integration tests that may require external APIs",
@@ -128,6 +129,10 @@ precision = 2
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# The sdist is every file git tracks; these are for working on the repository.
+[tool.hatch.build.targets.sdist]
+exclude = [".claude", ".github"]
 
 [dependency-groups]
 dev = [

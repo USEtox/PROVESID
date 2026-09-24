@@ -7,7 +7,396 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-24
+
 ### Added
+
+- **`Search(online_fallback=True)`: ask PubChem and CACTUS what no offline
+  database holds.** Off by default, so a run still opens no socket. When on,
+  a query that produced no candidate from any offline source, and only such
+  a query, is asked of PubChem's PUG-REST service and the NCI/CADD
+  resolver (CACTUS). Their answers are pooled, clustered and scored like
+  offline ones, and each service counts as one vote in `n_source_support`:
+
+  ```python
+  df = Search("cas", online_fallback=True).search(["50-78-2", "1912-24-9"])
+  df["source"]                  # "PubChemID", ..., "PubChem (online)" or "CACTUS"
+  df.attrs["online_fallbacks"]  # queries that went online
+  df.attrs["online_resolved"]   # ...and those the services answered
+  ```
+
+  The two services are two more columns in `provesid.sources.LOOKUPS`,
+  `pubchem_online` and `cactus` (`ONLINE_SOURCE_KEYS`), with rows for CAS,
+  name, SMILES, InChI, InChIKey and, on PubChem only, DTXSID. Formula queries are never
+  sent online. A service's "not found" is a miss. Any other failure is logged
+  at WARNING and costs only that service's vote. Each fallback is logged at
+  DEBUG. New helpers: `PubChemAPI.get_cids_by_inchi`, which POSTs because an
+  InChI cannot travel in a URL path, and `tools.candidate_from_pubchem_online`
+  and `tools.candidate_from_cactus`. See
+  `examples/search/online_fallback_demo.py`.
+
+- **ChEMBL from its MySQL dump: `CheMBL(source="mysql")`.** Builds the same
+  2.4 GiB extract as the default route from ChEMBL's 2.1 GB MySQL dump, read
+  as a stream, so the 27.7 GiB release never exists on disk:
+
+  ```python
+  CheMBL(source="mysql")                                  # 2.1 GB down, ~4.5 GiB free
+  CheMBL.build_from_mysql_dump("chembl_37_mysql.tar.gz")  # from a dump you already have
+  CheMBL.extract_digest(path)                             # {table: (rows, hash)}
+  ```
+
+  The new `provesid.mysqldump` module reads exactly what `mysqldump` writes
+  and raises `DumpFormatError` on anything else rather than guess a value.
+  Column types come from the dump's `CREATE TABLE` and map to the affinity
+  SQLite gives them, so values are stored the way the `sqlite` route stores
+  them: `decimal` 4.00 becomes the integer 4 in both. `extract_digest`
+  fingerprints each table with a row count and an order-independent content
+  hash that includes each value's type, and is how the routes were compared.
+  On the real ChEMBL 36, written out as a mysqldump, all eight tables
+  (14.6 M rows) digest identically to the `sqlite` route's extract. The build
+  took 6 min and 185 MB of memory. Provenance now records `source_format`.
+  The default stays `source="sqlite"` until the same comparison has been run on
+  EBI's own dump. `examples/chembl/download_source_demo.py` shows all three
+  routes.
+
+- **Computed descriptors on demand: `PubChemID.descriptors()`.** The database
+  no longer stores XLogP, TPSA or the atom and bond counts; this computes them
+  when asked, and names the model that answered:
+
+  ```python
+  db = PubChemID()
+  db.descriptors(2244)                                  # RDKit, from the stored SMILES
+  # {'CID': 2244, 'Source': 'rdkit', 'MolLogP': 1.3101, 'TPSA': 63.6, ...}
+  db.descriptors(2244, ["XLogP"], source="pubchem")     # PubChem's, over PUG-REST
+  db.descriptors_table(cids)                            # a row per CID
+  rdkit_descriptors("CCO")                              # any structure, no database
+  ```
+
+  `source="rdkit"` (default) needs no network for a compound the database holds
+  and costs about 0.5 ms per compound; for one it does not hold, only the SMILES
+  is fetched. Names are PubChem's where the quantity is the same, except the
+  logP: RDKit's is Crippen's, not XLogP3, so it is `MolLogP`, and asking RDKit
+  for `XLogP` or `Complexity` raises an error saying where to get it. The
+  values are RDKit's, not PubChem's Cactvs values. Against 20 000 compounds,
+  heavy atoms and charge agree for all, donors for 94%, rotatable bonds 74%,
+  TPSA 70% (counted with S and P, as PubChem does), acceptors 63%.
+  `examples/pubchem/descriptors_demo.py`.
+
+- **`pubchem_id.db` is built from PubChem's FTP site, and says where it came
+  from.** The new `provesid.pubchem_ftp` module builds the database
+  `PubChemID` reads from a dated monthly snapshot of `Compound/Extras/`, and
+  `PubChemID(source=...)` chooses between that and the Zenodo download:
+
+  ```python
+  from provesid import PubChemID
+  from provesid.pubchem_ftp import build_pubchem_id_db, list_releases
+
+  db = PubChemID()                    # source="ftp" (default): build if missing
+  db = PubChemID(source="zenodo")     # download the 2.2 GiB prebuilt copy
+  list_releases()                     # ['2026-09-01', ..., 'current']
+  build_pubchem_id_db(release="2026-09-01", keep_downloads=True)
+
+  db.provenance()["release"]          # '2026-09-01', and every file's MD5
+  db.xrefs(2244)                      # {'chebi': [...], 'dtxsid': [...], ...}
+  ```
+
+  *Which compounds.* Those PubChem's own identifier file maps to a CAS number,
+  each checked against the check digit: 1 430 379 in the 2026-09-01 snapshot,
+  with 123 CAS rows rejected. The Zenodo database found its CAS numbers by
+  running `\d{2,7}-\d{2}-\d` over free-text synonyms, and 17 379 of them
+  (1.25%) are not valid CAS numbers.
+
+  *How.* Eight files, each downloaded resumably, checked against the MD5
+  PubChem publishes beside it, streamed once to keep the compounds in scope and
+  deleted, so the free disk needed is the database plus the largest file
+  (7.4 GB), not the 15.4 GB total. The database is built beside its destination
+  and moved into place only when complete. `include_inchi=False` skips the
+  InChI file and computes InChI with RDKit; `include_synonyms=False` leaves out
+  the synonyms; `keep_downloads=True` keeps the files, and a later build reuses
+  any whose MD5 still matches.
+
+  *What it records.* A `provenance` table (release, snapshot timestamp, build
+  time, row counts, builder version) and a `provenance_files` table (URL, MD5,
+  bytes, lines read and kept, per file). `PubChemID.provenance()` returns both.
+
+  *What it adds.* `monoisotopicmass`, and an `xrefs` table of DSSTox, ChEBI,
+  ChEMBL, EC and UNII identifiers from the same file, which `PubChemID.xrefs()`
+  reads.
+
+  *Molecular weight* is in none of the FTP files, so it is computed from the
+  formula (`provesid.pubchem_ftp.molecular_weight`) with
+  `provesid.pubchem_ftp.ATOMIC_WEIGHTS` --- IUPAC 2005 with twelve elements
+  fitted to PubChem's own weights --- and from the SMILES for isotopically
+  labelled compounds, whose formula PubChem writes unlabelled. PubChem's
+  weights cannot be reproduced exactly: it rounds them to between zero and
+  three decimals by a rule no function of the formula fits. This agrees with
+  PubChem to the second decimal for most compounds and is the more precise
+  number where PubChem rounds harder.
+
+  `scripts/build_pubchem_id_db.py` is now a command-line wrapper over the
+  builder, for refreshing the Zenodo copy; the CSV-and-regex version it
+  replaces, and its duplicate in `src/provesid/data/`, are **removed**.
+  `examples/pubchem/ftp_build_demo.py` builds a miniature release served on
+  localhost.
+
+- **The cache is in a cache directory now, one per service, with a version in
+  every key.** Three changes to `provesid.cache`:
+
+  ```python
+  import provesid
+
+  provesid.get_cache_info(service="pubchem")["cache_directory"]
+  # '/home/you/.cache/provesid/pubchem'   (was /tmp/provesid_cache/pubchem)
+
+  provesid.clear_cache(service="pubchem")     # one service
+  provesid.clear_cache(all_services=True)     # all of them
+  provesid.get_all_cache_info()               # {'global': ..., 'pubchem': ...}
+  ```
+
+  *It persists.* The default was `tempfile.gettempdir()/provesid_cache` while
+  `docs/advanced_caching.md` promised the cache survived a restart. Most Linux
+  systems clear `/tmp` on boot, so it did not. It now uses
+  `platformdirs.user_cache_dir` through the new `provesid.utils.user_cache_path`
+  — `~/.cache/provesid/` on Linux, `~/Library/Caches/provesid/` on macOS,
+  `%LOCALAPPDATA%\USEtox\provesid\Cache\` on Windows — overridable with
+  `PROVESID_CACHE_DIR`, and separate from `PROVESID_DATA_DIR` because cached
+  responses are disposable and 2.4 GiB datasets are not. Entries written under
+  the old default are not migrated; they were never reliably there to migrate.
+
+  *The service list is data.* Fourteen near-identical module-level functions
+  (`clear_pubchem_cache`, `clear_cas_cache`, … and seven `get_<svc>_cache_info`
+  twins) plus `export_service_cache` and `import_service_cache` are **removed**.
+  Every cache function — `clear_cache`, `get_cache_info`, `get_cache_size`,
+  `export_cache`, `import_cache`, `set_cache_warning_threshold`,
+  `enable_cache_warnings` — now takes `service=`, with the names in
+  `provesid.CACHE_SERVICES`; `get_all_cache_info()` and
+  `clear_cache(all_services=True)` cover the lot. An unknown service raises
+  `ValueError` instead of silently writing to the global cache, where the
+  matching `clear_cache` would never look. `get_service_cache()` returns the
+  underlying `CacheManager`, and builds it on first use, so importing
+  `provesid` no longer creates eight cache directories.
+
+  *Keys carry a version.* Pickle stores an instance's `__dict__`, so an entry
+  written before a cached dataclass gained a field comes back as an object
+  missing that attribute, and every caller that reads it raises on a machine
+  where only the package version changed. There are now three versions folded
+  into the key, and you bump the narrowest one that covers the change:
+  `@cached(version=N)` for one function, a client's `CACHE_SCHEMA_VERSION` for
+  one client, `provesid.cache.CACHE_KEY_VERSION` for everything. Retired
+  entries are unreachable, not deleted; `clear_cache` reclaims the space.
+
+  Also fixed: `export_cache` dropped any entry whose cached value was `None`
+  (`is not None` where it meant `is not _MISS`), so a legitimately cached
+  `None` did not survive an export/import round trip.
+
+- **The four SQLite clients can be closed, used in a `with` block, and queried
+  from several threads.** `PubChemID`, `CompToxID`, `ZeroPM` and `CheMBL` each
+  opened a connection in `__init__` and closed it in `__del__`, and nowhere
+  else. All four now inherit `provesid.SQLiteClient`:
+
+  ```python
+  with PubChemID() as db:                 # released at the end of the block
+      inchi = db.cas_to_inchi("50-78-2")
+
+  db = CompToxID()
+  db.close()                              # or by hand; idempotent
+  db.closed                               # True
+
+  with PubChemID() as db:                 # a connection per thread
+      with ThreadPoolExecutor(8) as pool:
+          rows = list(pool.map(db.get_by_cas, cas_numbers))
+  ```
+
+  The threading case is the one users met first: a single connection is bound
+  to the thread that created it, so the obvious way to resolve ten thousand
+  CAS numbers against a local 2.2 GB database died on the first worker with
+  `sqlite3.ProgrammingError: SQLite objects created in a thread can only be
+  used in that same thread`. Each thread now gets its own connection and
+  cursor, opened on its first query; `close()` closes all of them, from
+  whichever thread calls it.
+
+  Per-thread connections rather than `check_same_thread=False`, which removes
+  the *check* and not the problem: every thread would still share one
+  `self.cursor`, and these clients `execute` in one statement and `fetchone`
+  in the next, so two threads interleaving those would read each other's rows.
+  A wrong answer is a worse failure than the exception it replaces.
+
+  Threads are now *possible*, which is not the same as faster: a tight loop of
+  nothing but local lookups is slower on a pool than in a plain loop (5 000
+  `get_by_cas` calls: 0.29 s serially, 14.65 s on eight threads), because each
+  query takes tens of microseconds and the GIL handoff around it costs more.
+  That is `sqlite3` under CPython, not this change — plain `sqlite3.connect`
+  per thread measures the same. A pool pays when each item also waits on
+  something: 400 lookups each followed by 20 ms of waiting took 8.52 s
+  serially and 1.17 s on eight threads.
+
+  `Search` is a context manager too, and closes the source clients it
+  constructed — but not one passed to its constructor, which belongs to the
+  caller. Querying a closed client or a closed `Search` raises
+  `DatabaseClosedError`, a `RuntimeError` subclass that names the client and
+  the file, rather than sqlite3's `Cannot operate on a closed database`.
+  `__del__` remains as a backstop, so code that never closes anything behaves
+  as it did.
+
+- **Installing ChEMBL now costs 2.4 GiB, not 27.7 GiB: `CheMBL(source=...)`.**
+  `CheMBL.compact()` could already shrink a release *already on disk*, which
+  left the worst case untouched — a machine that had never had ChEMBL still
+  installed 27.7 GiB and had to be told to shrink it afterwards.
+
+  The download now finishes by building the extract and deleting the release
+  it came from:
+
+  ```python
+  CheMBL()                  # 5.8 GB transferred, 2.4 GiB installed (default)
+  CheMBL(source="full")     # ...or keep all 74 tables, 27.7 GiB
+  ```
+
+  Both routes transfer the same archive: the choice is what stays on disk. The
+  extract is verified against the release — `quick_check`, a row count per
+  table, and 500 compounds compared column by column — *before* the release is
+  deleted, so the file that survives is the one that was checked.
+
+  `source` only describes a download. A release already on disk is opened as
+  it is: shrinking 27 GB is `compact()`'s job, not something a constructor
+  should do unasked. Opening a full release now logs the one line that says
+  the option exists.
+
+  A compaction that fails after a successful download is logged, not raised.
+  The release is in place by then and answers every query, so the failure
+  costs disk rather than function, and throwing away a 5.8 GB download over a
+  step that can be repeated with one call would be the worse trade.
+
+- **`datasets.plan()` now tells the truth about ChEMBL.** Its registry entry
+  said 27.7 GiB installed; it is 2.4 GiB, from a 5.8 GB download, with a peak
+  of 33.4 GiB while the archive and the full release both exist. That peak is
+  the number a laptop actually fails on, and it is now the one that is
+  reported: for the four default sources, 8.9 GiB downloaded, **6.3 GiB
+  installed** (down from 31.6 GiB), 37.3 GiB needed at the worst moment.
+
+- **A dataset manager, and `Search` no longer downloads 32 GB behind your
+  back.** On a clean machine `Search("cas").search("50-00-0")` constructed
+  four source clients that each default to `auto_download=True`, so one CAS
+  lookup fetched ChEBI, CompTox, PubChem and ChEMBL — about 32 GB, of which
+  ChEMBL is 87% and only *enriches* a structure the other sources already
+  found. Nothing announced the total, nothing asked, and nothing offered to
+  proceed with the sources already present. This package is for researchers on
+  laptops, where 32 GB is often the whole free disk.
+
+  `provesid.datasets` now describes the five datasets without opening them, so
+  the decision can be made before the first byte moves:
+
+  ```python
+  from provesid import datasets
+
+  datasets.status()                    # present? size on disk? release? path?
+  datasets.plan(["pubchem", "chebi"])  # what a download would transfer
+  datasets.fetch("pubchem")            # install by name; skips what is present
+  datasets.remove("chembl")            # reclaim the space, by name
+  ```
+
+  `status()` and `plan()` return DataFrames and read only filenames and
+  `stat`, so they are instant with 30 GB of ChEMBL in the directory. `plan()`
+  also reports the *peak* requirement, which for ChEMBL exceeds the installed
+  size by the 5.8 GB archive sitting beside the database it extracts into — a
+  laptop with 28 GB free and 27.7 GB of ChEMBL to install still fails.
+
+- **`Search(datasets=...)`, defaulting to `"present"`.**
+
+  | value | behaviour |
+  |---|---|
+  | `"present"` | use whatever is on disk; name each missing dataset, its size and the `fetch` call that installs it. **The new default.** |
+  | `"auto"` | the behaviour before this release — download whatever is missing |
+  | `"required"` | raise `MissingDatasetError` in the constructor, before any query, naming the missing datasets and the exact `fetch` call |
+
+  `Search` already degraded gracefully when a source was unavailable and
+  already warned that confidence is not comparable across runs, so `"present"`
+  needed no new machinery in the resolver — only that the clients stop
+  downloading behind the caller's back.
+
+- **One resumable, checksummed downloader for every bulk dataset:
+  `provesid.datasets.download_file`.** Five modules had each grown their own
+  copy of "stream the response into a temporary file with a progress bar", and
+  all five shared the same three defects — no retry, no resumption, no
+  checksum. An interrupted 5.8 GB ChEMBL download started again from zero, and
+  so did an interrupted 2.2 GB PubChem one.
+
+  Corruption was caught unevenly, too. The two gzipped downloads got truncation
+  detection for free from gzip's CRC and length trailer; the three plain SQLite
+  downloads had none. A file truncated in its interior opens cleanly and fails
+  much later, on the first query that touches a missing page — which a user
+  reads as a data problem, not a download problem.
+
+  `download_file` streams into a `.part` file beside the destination, resumes
+  it with an HTTP `Range` request, and applies four checks in order, each of
+  which leaves the destination untouched if it fails:
+
+  1. the byte count against the size the server declared;
+  2. an MD5, from `expected_md5` or fetched from `checksum_url` — PubChem's FTP
+     mirror publishes an `.md5` beside every file;
+  3. the caller's own `verify` callback, handed the finished file;
+  4. an atomic rename.
+
+  ```python
+  from provesid.datasets import download_file
+
+  download_file(url, "/data/CID-SMILES.gz", checksum_url=url + ".md5")
+  ```
+
+  A file rejected by its checksum or by `verify` is deleted rather than kept:
+  it is already complete, so resuming it would fail the same check again. A
+  transfer that merely stopped is kept, and the next call continues from it —
+  but only when it came from the same URL, recorded in a `.part.source` marker
+  beside it. A partial left by a different download is discarded instead of
+  being spliced onto this one, which a checksum would catch but only PubChem's
+  FTP mirror publishes one.
+
+  `PubChemID.download_database`, `CompToxID.download_database`,
+  `ZeroPM.download_database`, `CheMBL.download_database` and
+  `ChebiSDF.download_sdf` are now one call each into this.
+
+- **`CheMBL.compact()` — a ChEMBL release without the 27 GB you never read.**
+  A full ChEMBL release is ~30 GB across 74 tables. PROVESID opens eight of
+  them (`molecule_dictionary`, `compound_structures`, `compound_properties`,
+  `molecule_synonyms`, `molecule_hierarchy`, `chembl_id_lookup` and the two
+  pesticide tables) and reads no bioactivity data at all: `activities` alone is
+  24.3 M rows that nothing in this package has ever queried.
+
+  Worse, a quarter of the whole database is a single column. `molfile` — the
+  MOL block for every compound — totals 7.72 GB, and `get_compound` was the
+  only thing that selected it, for callers that never used it.
+
+  `CheMBL.compact()` copies the eight tables, drops `molfile`, keeps only the
+  `COMPOUND` rows of `chembl_id_lookup`, and rebuilds just the indexes this
+  package's queries need. Measured on ChEMBL 36: **29.74 GB → 2.60 GB, 91.3%
+  smaller**, in about a minute, with every public method returning the same
+  compounds — verified over 3 000 randomly chosen compounds.
+
+  ```python
+  from provesid import CheMBL
+
+  CheMBL.compact()                      # build chembl_37_provesid.db beside the original
+  CheMBL.compact(remove_source=True)    # …and delete the 30 GB once it verifies
+  CheMBL.compact(keep_inchi=False)      # ~1.55 GB; see the caveat below
+  ```
+
+  The source is opened read-only, the extract is written to a temporary file
+  and checked against its source — SQLite's `quick_check`, a row count per
+  table, and 500 compounds re-read from both databases — before it replaces
+  anything. `remove_source` deletes the original only after that passes.
+
+  A later `CheMBL()` opens the extract in preference to a full release of the
+  same number, so nothing else has to change. `CheMBL.is_compact` and
+  `CheMBL.provenance` report what was opened; an extract records the release it
+  came from, the source file and its size, the build time, the PROVESID version
+  and its row counts. It also records a schema version, so a future PROVESID
+  that needs a ninth table warns and names the rebuild command instead of
+  failing with `no such table`.
+
+  `keep_inchi=False` saves a further ~1.0 GB by dropping `standard_inchi` and
+  its indexes, but `search_by_inchi` then has no column to match and `Search`
+  loses the InChI it reads straight from ChEMBL. Leave it alone unless disk is
+  genuinely short.
+
 - **One shared HTTP transport, and `Retry-After` honoured for the first time.**
   Every web-API client used to carry its own copy of "pause, request, decide
   what the status code meant, maybe give up". The six copies had drifted
@@ -217,6 +606,242 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- **A failed ClassyFire request is no longer cached.** `submit_query`,
+  `query_status` and `get_query` return None or the error response on a
+  failure, and each was cached, so one HTTP 429 stayed the answer for good:
+  `query_status(1)` returned None after the server had recovered. Only a
+  response below 400 is cached now.
+- **Examples re-recorded against the live services (2026-09-24).**
+  `ChEBI.get_compounds` returns an entry per ID with `exists`, and the
+  record under `data`, not the bare record. `ClassyFireAPI.submit_query` is
+  answered HTTP 500. Query 1 holds 510 entities, not 655: the server's
+  pages hold fewer than `per_page` asks for, so `entities` can fall short
+  of `number_of_elements`. `PubChemAPI.format_search_compound_result`'s
+  "several results" example returned one, because PubChem maps "aspirin" to
+  one compound.
+- **A failed CACTUS request is no longer cached as "no data".**
+  `NCIChemicalIdentifierResolver.get_molecular_data`, `resolve_multiple`,
+  `batch_resolve`, `is_valid_identifier`, `search_by_partial_name` and the
+  `nci_*` functions turn a failed request into `None`, `[]` or `False`, and
+  were each cached, so one timeout or 503 stayed those answers for good.
+  Only `resolve` is cached now. It raises on a failure, and the others build
+  on it, so they still read its cache. The per-call `use_cache=` keyword is
+  gone from those methods. Pass `use_cache=False` to the constructor
+  instead.
+- **`Search` reports the current CAS number, not the smallest string.**
+  Aspirin came out as `11126-35-5` and atrazine as `11121-31-6`, both
+  retired, because every source's CAS numbers were sorted as text and the
+  first was taken. `extract_cas_values` and `make_candidate` now keep the
+  source's order, which puts CompTox's `CASRN` column first and follows
+  PubChem's synonym order. ChEBI, ChEMBL and CACTUS do not rank their
+  numbers, so their candidates list them lowest registry number first (the
+  new `tools.sort_cas_by_number`). For 82.6% of the 41,313 CompTox
+  substances with more than one CAS, the current number is the lowest, and
+  for 42.5% it is the smallest as a string. The new `tools.pick_casrn`
+  chooses a hit's number from all its candidates and asks an unranked
+  source that lists several numbers last. `apply_candidate_to_result` no
+  longer fills `CASRN`. ChEBI's CAS numbers are read from its `CAS Registry
+  Numbers` field only. Reading the whole row picked up fragments of the
+  InChI such as `14-10-6`. On the USEtox 3 substance list (10,748
+  InChIKeys), `CASRN` agrees with the list's own number for 9,051 rows,
+  up from 7,229, and 10 rows that agreed no longer do.
+- **A search by CAS reports the compound's number, not the query.** `CASRN`
+  was set to the number searched, so atrazine found by the retired
+  `39400-72-1` said `39400-72-1`. It now says `1912-24-9`, chosen as for any
+  other search, and `query` keeps the number searched. A miss leaves `CASRN`
+  empty. On the USEtox 3 list, 34 of 10,752 CAS searches report another
+  number: 14 were retired numbers, and 16 are current numbers whose hit is
+  a more specific structure, such as `93685-81-5` found as dodecane,
+  `112-40-3`.
+- **`ZeroPM.get_cas_from_inchi` and `get_cas_from_inchikey` return their
+  numbers in a fixed order,** the order ZeroPM stored its results in. The
+  query had no `ORDER BY`. On 20,000 structures the order is the same as
+  before.
+- **`NCIChemicalIdentifierResolver.get_molecular_data` parses `cas` and
+  `stdinchikey`.** It already split `names` into a list and read `mw` as a
+  float. `cas` came back as CACTUS's text, several numbers in one string,
+  and `stdinchikey` as `InChIKey=LFQSCW…`, which matches no bare key from any
+  other source. `cas` is now a list in CACTUS's order, which is not a ranking
+  (ethanol's starts with 121182-78-3, not 64-17-5), and `stdinchikey` is the
+  bare key. `nci_cas_to_mol` and `nci_id_to_mol` return the same. `resolve`
+  still returns CACTUS's text unchanged. Their cache entries were retired
+  (`version=2`).
+- **ClassyFire: a query too large for the server can be fetched in pages.**
+  `ClassyFireAPI.get_query(1)` returned `None`. The server stops sending
+  after about 108 KB while answering HTTP 200, so the query never arrived
+  whole, and `curl` fails on it too (exit 18). The client turned the error
+  into a bare `None`, and it had no timeout. The raw calls now have a
+  60-second timeout and log what failed at WARNING, and `get_query` takes
+  ClassyFire's `page` and `per_page`. The new
+  `ClassyFireAPI.get_classification(query_id)` fetches pages of 10, which
+  arrive complete, through the shared transport. It joins them into one
+  dict and raises `ClassyFireError` (exported from `provesid`) when a page
+  fails.
+- **The PUG-View parser reads the ICSC's solubility words.** The
+  International Chemical Safety Cards grade water solubility as `none`,
+  `very poor`, `poor`, `moderate`, `good` or `very good`.
+  `"Solubility in water: none"` parsed to nothing at all, and
+  `"…, g/100ml at 15 °C: 0.25 (poor)"` kept 0.25 but lost the word. The word
+  is now `qualitative`. Because `none`, `poor` and `good` are ordinary
+  English, they count only when they are the whole ICSC value, or follow its
+  number in parentheses. The list is `pubchemview_parse.ICSC_SOLUBILITY_TERMS`.
+- **`PYOPSIN.get_id_from_list` gives each name its own CML.** py2opsin
+  returns a list's CML as the lines of one document, and each record's `cml`
+  held one of those lines: `"<?xml …"` for the first name, `"<cml …"` for the
+  second, and so on. The document holds one molecule per name, in order, so
+  it is now cut at the molecules. Each record's `cml` is the document
+  `get_CML(name)` gives for that name alone, including for a name OPSIN
+  cannot parse. An empty list returns `[]` without starting Java.
+- **The PUG-View parser reads a unit with digits in a value's label.** The
+  International Chemical Safety Cards write water solubility as
+  `"Solubility in water, g/100ml at 25 °C: 0.18"` (benzene). `parse_value`
+  found 0.18 and the 25 °C, but looked for the unit in the label with a
+  pattern that allowed no digits, so `g/100ml` split into `g/` and `ml` and
+  the unit was `None`, with no SI value. It now reads `g/100mL`, or 1.8
+  kg/m³, and `mg/100ml` the same way. A formula in the label, such as
+  `C6H6`, is not taken for a unit.
+- **Passing one source client to `Search` no longer turns off the others.**
+  One flag recorded whether the clients had been set up, and passing any
+  client set it. `Search("cas", chembl=CheMBL(db_path=...))` therefore
+  never built ChEBI, CompTox or PubChemID. It ran on ChEMBL alone and gave
+  empty rows with confidence 0.0, which only a WARNING in the log
+  explained. Each source client left `None` is now built on the first
+  search, under the `datasets` policy, whether or not others were passed.
+  A client that is passed is still used as given and left open by
+  `close()`. A caller who passed `chebi=None` and so on to leave sources
+  out now gets them. To leave a source out, leave it out of `sources`
+  (below).
+- **`Search` passed on CompTox's and ZeroPM's non-standard InChIKeys.**
+  CompTox stores a key computed from a non-standard InChI (flag `N`, as in
+  `PGRHXDWITVMQBC-UHFFFAOYNA-N`) for 131,885 of its 1.15 million keys, and
+  ZeroPM a non-standard InChI and key for 18,710 of its 359,221 substances.
+  Such a key never equals the standard key another source publishes. Three
+  things went wrong. `InChIKey` came back non-standard whenever CompTox
+  filled it. A DTXSID query then looked up the other sources by that key and
+  found nothing: `DTXSID6020014` (dehydroacetic acid) and `DTXSID8020040`
+  (aldrin) had one source in support, and now have four and three. And a
+  standard-key query missed the CompTox row, so `DTXSID` stayed empty. Every
+  candidate now carries the standard InChI and key, recomputed from the
+  structure when the source's are not standard
+  (`provesid.tools.standardize_inchi_and_key`, called by `make_candidate`).
+  `CompToxID.get_by_inchikey` and `ZeroPM.get_id_table_from_inchikey` also
+  try the key with its other flag, which finds the 98% of CompTox's and 96%
+  of ZeroPM's non-standard rows where only the flag differs. New helpers:
+  `provesid.utils.is_standard_inchikey` and `inchikey_flag_variants`.
+- **ZeroPM's InChI lookups missed substances stored under a non-standard
+  InChI.** They compared the InChI as a string, so a standard InChI
+  (`InChI=1S/...`) could not match one stored only as `InChI=1/...`. When
+  the string misses, `get_id_table_from_inchi` and `get_cas_from_inchi`
+  (and so `get_cas_from_smiles`) now compute the InChIKey and look it up
+  with either flag. This finds 536 of the 816 substances no standard InChI
+  matched, such as trans-1,4-cyclohexanediol (6995-79-5). The other 280
+  have relative stereo (`/s2`), which a standard InChI cannot express.
+  `get_cas_from_inchikey`, `get_smiles_from_inchikey` and
+  `batch_get_cas_from_inchikey` now try both flags, like
+  `get_id_table_from_inchikey`. The `inchi` and `inchikey` columns of
+  `get_id_table_from_inchi` hold ZeroPM's stored values.
+- **`CASCommonChem.smiles_to_detail` rarely returned the substance asked
+  for.** It passed the SMILES to CAS's search, which matches a SMILES only as
+  the exact string CAS stores, and took the first hit. `CCO` found nothing,
+  and CAS's own `OCC` returned ethanol-d6. It now searches by the standard
+  InChI that RDKit writes and keeps only records with that InChI. It prefers
+  those whose formula matches, which drops the dimers and polymers CAS files
+  under their repeat unit's InChI, and then the one with the most synonyms
+  (sodium chloride, not rock salt). `CCO`, `OCC` and `C(O)C` all give
+  64-17-5. A SMILES RDKit cannot read is `status` `"Invalid SMILES"`, and no
+  request is made. Each hit costs one cached detail request, up to
+  `CAS_SMILES_MAX_HITS` (50). The result is cached like `name_to_detail`'s.
+- **ZeroPM's mobility probabilities came back under each other's names.** In
+  `zeropm-v0-0-4.sqlite`, the table `pm_probabilities` stores
+  `probability_of_m` in the column named `m_or_vm`, `vm` in the one named `m`,
+  and `m_or_vm` in the one named `vm`. Upstream's `recreate_tables.sql`
+  copies the table with a positional `INSERT ... SELECT *` from a CSV that
+  orders those columns `m, vm, m_or_vm`. `get_pm_probabilities`,
+  `batch_get_pm_probabilities` and `get_all_zeropm_chemicals` passed the
+  columns through, so TFA read "mobile, not very mobile" (`m` 0.995, `vm`
+  0.005) instead of very mobile (`vm` 0.995), and atrazine's
+  `probability_of_vm` was its probability of M or vM (0.986). All three now
+  read each value under its true name. The fix is checked three ways. The
+  identities `not_m + m_or_vm = 1` and `m + vm = m_or_vm` hold in 99.9% of
+  rows, against 4% as stored. The 95,334 rows that match upstream's CSV by
+  value match it column for column. And TFA, acesulfame and 1,4-dioxane
+  read very mobile. The persistence columns were stored correctly. A test
+  fails when a ZeroPM release corrects the file. `PM_PROBABILITY_COLUMNS`
+  names the fields.
+- **`OPSIN.get_id("")` sent the request.** The URL then ended in `ws/.json`,
+  and OPSIN answered about the name "ws". A blank or whitespace-only name is
+  now a `FAILURE` with `message` "empty name", and no request is made.
+- **`datasets.status()` and `remove("chembl")` could not see an interrupted
+  ChEMBL download.** The registry looked for `chembl_NN_sqlite.tar.gz`, but the
+  download is saved as `chembl_NN.db.tar.gz`. A half-finished 5.8 GB `.part`
+  was therefore neither counted nor removed. Both routes' real archive names
+  are now listed.
+
+- **`CheMBL.search_by_name` scanned all 2.9 M compounds on every call, and its
+  truncated results were not reproducible.** The method asked one question of
+  two tables:
+
+  ```sql
+  SELECT DISTINCT md.molregno FROM molecule_dictionary md
+  LEFT JOIN molecule_synonyms ms ON md.molregno = ms.molregno
+  WHERE LOWER(md.pref_name) = LOWER(?) OR LOWER(ms.synonyms) = LOWER(?)
+  LIMIT ?
+  ```
+
+  Neither arm can use an index in that shape — `LOWER(col) = ?` defeats an index
+  on `col`, and an `OR` whose arms live in different tables across a `LEFT JOIN`
+  defeats indexing altogether — so SQLite scanned `molecule_dictionary` in full
+  for every lookup. Adding expression indexes changes nothing on its own; the
+  query shape is the problem.
+
+  It is now a `UNION` of two independently indexable lookups, one per table.
+  Measured on ChEMBL 36, exact lookups:
+
+  | | per call |
+  |---|---:|
+  | full release, old query | 764 ms |
+  | full release, new query | 221 ms |
+  | `compact()` extract, old query | 560 ms |
+  | **`compact()` extract, new query** | **10 µs** |
+
+  The 10 µs comes from the `lower(pref_name)` and `lower(synonyms)` expression
+  indexes that `CheMBL.compact()` already builds into every extract; a full
+  release has no such indexes and still scans, but it scans two small queries
+  instead of a join. `exact=False` cannot be indexed either way — a
+  leading-wildcard `LIKE` is a scan by construction — and improves from 665 ms
+  to 275 ms on the extract for the same reason the join is gone.
+
+  The rewrite returns the same compounds: 0 differences over 200 real names and
+  25 substring fragments.
+
+- **`CheMBL.search_by_name` returned a different set of compounds run to run.**
+  `LIMIT` with no `ORDER BY` returns whatever the query plan happens to produce,
+  so a name matching more compounds than `limit` silently changed *which* ones
+  came back — after a `VACUUM`, an index change or a SQLite upgrade. Comparing
+  a `compact()` extract against its source found 25 of 60 names differing in
+  order, and none in content, which is what put the defect in view.
+
+  Results are now ordered by `molregno`, so a truncated result is the `limit`
+  lowest `molregno` values and is the same on every call and every copy of the
+  database.
+
+- **ChEMBL's archive extracted straight onto the database it was replacing.**
+  `download_database(force=True)` renamed the extracted file onto `db_path`
+  and validated afterwards, so an extraction or validation failure destroyed
+  the release already on disk — and then deleted what was left. The archive now
+  extracts to `<db_path>.incoming`, answers a query there, and is moved into
+  position only once it has.
+
+- **Three downloads renamed the file into place before checking it.**
+  `CompToxID.download_database` moved the downloaded file onto the destination
+  and only then looked for the `chemicals` table; a failed check therefore left
+  the broken file where the working database had been. `ZeroPM` had the same
+  shape and deleted the database on failure, leaving nothing at all.
+
+  Every download now validates the `.part` file *before* the rename, which is
+  what `PubChemID` alone already did. A failed download cannot replace or
+  remove a working database.
+
 - **OPSIN threw away the reason for every failure it reported.** OPSIN answers a
   name it cannot parse with HTTP 404 and a complete JSON body —
   `{"status": "FAILURE", "message": "notachemical12345 was uninterpretable due
@@ -332,6 +957,174 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PubChemAPI.get_cache_info`.
 
 ### Changed
+- **`extract_cas_values` checks the check digit.** A CAS-shaped string
+  whose check digit is wrong is no longer a CAS number, so PubChem's
+  malformed `001-02-2` (atrazine) and `001-02-7` (caffeine) and most
+  number-shaped InChI fragments are dropped from `Search` candidates. On
+  the USEtox 3 list by InChIKey (10,748 queries), 3 rows change, all from
+  PubChemID: two now report the list's number (`914434-22-1` →
+  `13601-19-9`, `13330-20-7` → `8027-00-7`), and one whose only "number"
+  was `001-01-1` reports none. By name (1,500) and SMILES (1,000), nothing
+  changes.
+- **The sdist leaves out `.claude/` and `.github/`.**
+- **`provesid.config` logs instead of printing.** `set_cas_api_key` returns
+  the config file's path, `remove_cas_api_key` returns whether a key was
+  stored, and `show_config` returns the `get_config_info()` dict. Each
+  logs at INFO what it used to print.
+- **`Search(sources=...)` chooses the offline databases, and replaces
+  `use_zeropm`.** It takes a list of keys from `provesid.sources.SOURCE_KEYS`,
+  one key, or `"all"`. The sources are queried in `SOURCE_KEYS` order
+  whatever order they are given in, so the answer does not depend on it. A
+  source left out is never opened, `datasets="required"` does not demand its
+  dataset, and a client passed for it is ignored with a warning. Unknown
+  names, or none, raise `ValueError`. It is a preset setting like the one it
+  replaces: `"balanced"` and `"strict"` query ChEBI, CompTox, PubChemID and
+  ChEMBL, and `"recall"` adds ZeroPM. `use_zeropm=True` is now
+  `sources="all"`, and `df.attrs["settings"]` records `sources` instead.
+  Before, the only way to query fewer sources was to pass clients and rely
+  on the bug fixed above. `Search._ALL_SOURCE_KEYS` and
+  `Search._DEFAULT_SOURCE_KEYS` are gone. Use `SOURCE_KEYS` and
+  `Search.PRESETS["balanced"]["sources"]` instead.
+- **CompTox SMILES, DTXCID and formula lookups use indexes too, each built
+  on first use.** `get_by_smiles`, `get_by_dtxcid` and `search_by_formula`
+  scanned 1.2 million rows, 0.14 to 0.16 s for each lookup that missed, and
+  `Search` paid this for each SMILES query. The first lookup by each column
+  now adds that column's index (0.6 to 1.1 s and 21 to 57 MiB each, logged
+  once), and `download_database` builds all four with the name index.
+  A lookup then takes under 0.1 ms. The answers are unchanged: where
+  several rows share a SMILES, the first is still returned. A read-only
+  database is scanned as before. `comptox.LOOKUP_INDEXES` replaces
+  `comptox.INCHIKEY_INDEX`.
+- **CompTox InChIKey lookups use an index, built on first use.** The
+  downloaded database indexes DTXSID, CASRN and the preferred name only, so
+  each `CompToxID.get_by_inchikey` scanned 1.2 million rows (0.2 s), and a
+  skeleton search that missed took 0.9 s. `Search` paid this for each
+  InChIKey and InChI query, and for each name query with `use_opsin=True`.
+  The first InChIKey lookup now adds `idx_inchikey` (about 1 s and 41 MiB,
+  logged once), and `download_database` builds it together with the name
+  index. A lookup then takes about 0.04 ms. A read-only database is scanned
+  as before. `sources.comptox_skeleton_search` matches with `GLOB` instead of
+  `LIKE`: `LIKE` ignores case and so cannot use the index. InChIKeys are
+  upper case, so it finds the same rows. A `CompToxID` built with
+  `object.__new__` and `_adopt_connection` now has its index state, so it no
+  longer raises on its first InChIKey lookup or exact name lookup.
+- **The README describes the package as it now is: offline first, with
+  `Search` in front.** It opens with a `Search` run and its real output, then
+  covers `datasets` and the five databases with their download and on-disk
+  sizes, the online clients, and links to the executed tutorials. The Python
+  badge says 3.12+, matching `requires-python`. ClassyFire is no longer
+  listed as an available service, and the README points to Chebifier instead.
+- **The tutorials are executed notebooks, rewritten against the current API.**
+  Each tutorial in `examples/` is now an `.ipynb` with the outputs of a run,
+  so the site shows what every call returns. The old `.md` tutorials had
+  broken silently: every ChEBI field printed `None`, PubChem View raised on
+  `PropertyData.source` and plotted °F melting points as °C, the CAS
+  tutorial ran on a stub that invented records, and the ZeroPM tutorial
+  wrote indexes and a view into the installed database. New:
+  `examples/search/search_tutorial.ipynb` resolves the 1,144 names of the ESOL
+  solubility set offline and checks every answer against the dataset's own
+  structures. The ClassyFire tutorial is now a short page saying the service
+  no longer classifies. `scripts/validate_docs_local.sh` checks that no
+  notebook holds an error output and that every link in one names a built
+  page.
+- **PubChem name searches match whole names by default.**
+  `PubChemAPI.get_cids_by_name`, `get_compounds_by_name` and
+  `find_cids_comprehensive` default to `name_type="complete"`, which is
+  PUG-REST's own default. With `"word"`, any name containing the word matched,
+  and PubChem's first CID was often another compound.
+  `get_cids_by_name("caffeine")` returned `[9871508, 56841593, 3081207, 2519,
+  ...]` and now returns `[2519]`; ibuprofen goes from 303 CIDs, the first of
+  them 24848049, to `[3672]`. CAS numbers and substance-domain queries give
+  the same answers either way. Pass `name_type="word"` for the old behaviour.
+  `Search` already asked for `"complete"` and is unaffected. The two cached
+  methods moved to cache version 2, so an answer cached under the old default
+  is not served for the new one.
+- **The documentation is rebuilt around the docstrings.** Every API page is
+  now a short lead and a `:::` directive: `docs/api/` goes from 4 045
+  hand-written lines, which had drifted from the code, to 207, and every
+  public module has a page, including the
+  offline half that had none (`PubChemID`, `CompToxID`, `ZeroPM`,
+  `REACHDossierID`, `datasets`, `taxonomy`, `cache`, `config`, `tools`).
+  What the docstrings do not say moved into eight guides under
+  `docs/guide/`: installing the offline databases (new), `Search`, using the
+  local databases directly, experimental properties from PubChem, network
+  behaviour, caching, API keys and Chebifier. The home page and the quick
+  start lead with `Search` and `datasets` rather than the online clients.
+  - `docs/examples/` (symlinks to `examples/`) is deleted; a MkDocs hook,
+    `scripts/mkdocs_hooks.py`, serves the tutorials straight from
+    `examples/` at the same URLs. The `.py` demos are no longer rendered as
+    notebook pages.
+  - `docs/plans/` moved to `plans/`, and the "Modernization" section left
+    the nav.
+  - Docstrings are parsed with `docstring_style: auto`: `chembl`, `comptox`,
+    `reach` and `zeropm` are NumPy-style and had been rendered as Google,
+    with their example outputs read as Markdown links. A Google `Returns:`
+    section is one value, where each wrapped line used to render as a
+    separate returned value.
+  - `mkdocs build --strict` now also fails on a link to a missing page or
+    heading.
+  - Docstrings cross-reference with Markdown, `` [`Search`][provesid.search.Search] ``,
+    in place of the Sphinx roles (`:class:`, `:meth:` …) that the site showed
+    literally; 591 of them are links now, and `--strict` fails on one whose
+    target is gone. Constants documented with `#:` comments, which
+    mkdocstrings does not read, carry attribute docstrings instead, so
+    `DATASETS`, `Search.PRESETS`, `LOOKUPS`, `OUTPUT_COLUMNS` and 74 others
+    now appear in the API reference. A typed return reads `(dict): …`, which
+    renders the type in the Type column, not as a name; bulleted lists inside
+    a section render as lists.
+- **`Search` asks its sources through one table, `provesid.sources.LOOKUPS`.**
+  The 47 hand-written `if client: try: ... except: log` blocks in nine
+  methods of `search.py` became one row per (lookup kind, source) and a single
+  driver, `Search._collect`. Adding a source is now one column in
+  `sources.py` rather than an edit to every resolver. Results are unchanged:
+  437 result rows over seven identifier types and seven configurations
+  (default, ZeroPM, fuzzy, fuzzy with ZeroPM, InChIKey skeleton, Tanimoto,
+  strict with salt stripping) were compared with the previous code on the real
+  databases, and all of them are identical. The dead `_candidates_from_name`,
+  `_fuzzy_name_candidates` and `_most_complete_row` were deleted, and
+  `search.py` shrank from 3 392 to 2 721 lines. Only the wording of the
+  warning logged when one source fails changed, to
+  `"<Source> <kind> lookup failed for <query>: <error>"`.
+- **Breaking: `PubChemID` and `ChebiSDF` have modules of their own.** The
+  offline database clients were split off from the online clients they shared
+  a file with: `PubChemID`, `rdkit_descriptors`, `RDKIT_DESCRIPTORS` and
+  `PUBCHEM_DESCRIPTORS` moved from `provesid.pubchem` to `provesid.pubchem_id`,
+  and `ChebiSDF` from `provesid.chebi` to `provesid.chebi_sdf`. The code
+  moved unchanged. `from provesid import PubChemID, ChebiSDF` works as before,
+  while `from provesid.pubchem import PubChemID` must become
+  `from provesid.pubchem_id import PubChemID`. A side effect is that
+  `import provesid.chebi` no longer imports RDKit.
+- **Breaking: `PubChemID()` builds a missing database from PubChem's FTP site
+  instead of downloading it from Zenodo.** That is 15.4 GB transferred and
+  about 12 minutes of processing, against 2.2 GiB; pass `source="zenodo"` for the
+  download. A database already on disk is opened as before, whichever way it
+  was made, and `datasets.plan("pubchem")` now reports the FTP route's cost.
+- **Breaking: `PubChemID.properties()` no longer serves the eight computed
+  descriptors from disk.** `XLogP`, `TPSA`, `Complexity`, `Charge`,
+  `HBondDonorCount`, `HBondAcceptorCount`, `RotatableBondCount` and
+  `HeavyAtomCount` are PubChem's model outputs, not data about a compound; they
+  now always come from PUG-REST, labelled `Source='online'`, even from a Zenodo
+  copy that still stores them. Before, the same property came from a months-old
+  snapshot for local compounds and from live PubChem for the rest, with no way
+  to tell which. `MonoisotopicMass` moves the other way, and is served from
+  disk by a database built from FTP. Which properties an open database can
+  answer is `db.offline_properties`, and is also the default property list.
+- **`PubChemID.get_by_cas_batch()` and `get_by_smiles_batch()` return the
+  database's own columns** rather than a fixed list that named the descriptor
+  columns, so a database built from FTP yields `monoisotopicmass` and no
+  columns of `None`.
+- **Breaking: `Search` no longer downloads missing datasets by default.** Pass
+  `datasets="auto"` for the old behaviour. `redownload=True` now requires
+  `datasets="auto"` and raises otherwise, rather than being silently ignored
+  and handing back a stale copy.
+- **`CheMBL.get_compound()` no longer returns `molfile`.** It is a quarter of a
+  full ChEMBL database, nothing in PROVESID consumed it, and it is absent from
+  the extract above. Build a MOL block from `canonical_smiles` with RDKit when
+  you need one — RDKit is already a hard dependency.
+- **`CheMBL` prefers a compacted extract.** With `chembl_37.db` and
+  `chembl_37_provesid.db` side by side, `CheMBL()` opens the extract. Release
+  number still wins first: an older extract does not beat a newer full release.
+
 - **`OPSIN.base_url` is `https://www.ebi.ac.uk/opsin/ws/`.** The Cambridge
   address it used to name, `opsin.ch.cam.ac.uk`, answers every request with a
   301 to it (verified live, 2026-09-19), so the old URL worked and cost a
@@ -456,6 +1249,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Search._SOURCE_KEYS` is now a per-instance attribute reflecting the sources
   that instance targets; the full catalogue lives in `Search._ALL_SOURCE_KEYS`
   and the default set in `Search._DEFAULT_SOURCE_KEYS`.
+
+### Removed
+- **`ChEBI.get_complete_entity` and `ChEBI.batch_get_entities`.** They were
+  compatibility aliases. Use `get_compound`, and `batch_get_compounds`, which
+  returns the same `{CHEBI:<id>: record}` dict (its pause defaults to 0.1 s,
+  not 0). `get_compounds` asks for several IDs in one request, but returns
+  ChEBI's response as it is: each ID maps to an entry with `exists`, and the
+  record is under `data`.
+- **`MANIFEST.in`.** The build backend is hatchling, which never read it.
+- **`schema_documentation.txt` is no longer shipped in `provesid/data/`.** It
+  was ChEMBL's schema for release 36, and the release `CheMBL` installs is
+  whichever is latest. `chembl.py` and `examples/chembl/README.md` now point
+  at ChEMBL's page for each release,
+  `https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/releases/chembl_<N>/schema_documentation.html`.
+  `provesid/data/examining_pubchem.py`, a scratch script that read a CSV
+  that isn't there, is gone too.
+- `examples/notebooks/` is gone. Its two CSVs (4 MB) had been unused since
+  their notebook was deleted.
 
 ## [0.7.0] - 2026-08-17
 

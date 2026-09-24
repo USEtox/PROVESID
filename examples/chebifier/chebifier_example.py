@@ -4,7 +4,7 @@ This is an optional, heavy backend. Install it first (Linux/CPU) with::
 
     bash scripts/install_chebifier.sh
 
-See ``docs/chebifier.md`` for the full installation story, the model-storage
+See ``docs/guide/chebifier.md`` for the full installation story, the model-storage
 behaviour, and known issues.
 
 Run::

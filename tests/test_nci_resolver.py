@@ -153,16 +153,24 @@ class TestNCIChemicalIdentifierResolver:
             assert isinstance(inchi, str)
             assert inchi.startswith('InChI=')
             
-            # Try to convert back to SMILES - this may fail for some InChI formats
-            try:
-                smiles = resolver.resolve(inchi, 'smiles')
-                assert isinstance(smiles, str)
-                assert 'C' in smiles and 'O' in smiles
-            except (NCIResolverNotFoundError, NCIResolverError):
-                # Some InChI formats might not be convertible back
-                pytest.skip("InChI to SMILES conversion not supported for this format")
-        except (NCIResolverNotFoundError, NCIResolverError):
-            pytest.skip("NCI resolver not available or InChI conversion not supported")
+            # And back. This used to be skipped as "not supported for this
+            # format"; it was the client percent-encoding the InChI's slashes.
+            smiles = resolver.resolve(inchi, 'smiles')
+            assert smiles == 'CCO'
+        except NCIResolverNotFoundError:
+            raise
+        except NCIResolverError:
+            pytest.skip("NCI resolver not available")
+
+    def test_slashes_stay_path_separators(self, resolver):
+        """
+        CACTUS's server answers 404 to a path holding ``%2F``, so an InChI or
+        a SMILES with stereo bonds has to keep its slashes as they are.
+        """
+        url = resolver._build_url('InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3', 'smiles')
+        assert url.endswith('/InChI%3D1S/C2H6O/c1-2-3/h3H%2C2H2%2C1H3/smiles')
+        assert '/C/C%3DC/C/' in resolver._build_url('C/C=C/C', 'stdinchikey')
+        assert '%23' in resolver._build_url('C#C', 'smiles')
 
 
 class TestConvenienceFunctions:
@@ -474,6 +482,111 @@ class TestNCIClassification:
         assert issubclass(NCIResolverNotFoundError, NCIResolverError)
         assert issubclass(NCIResolverNotFoundError, NotFoundError)
 
+
+
+class TestMolecularDataIsParsed:
+    """
+    get_molecular_data parsed names and mw but passed cas and stdinchikey
+    through as CACTUS writes them: seven CAS numbers in one string, and a key
+    that equals no bare key from any other source.
+    """
+
+    # CACTUS's answers for ethanol, 2026-09-24.
+    ANSWERS = {
+        "cas": "121182-78-3\n64-17-5\n8024-45-1\n8000-16-6\n68475-56-9\n71076-86-3\n71329-38-9",
+        "stdinchikey": "InChIKey=LFQSCWFLJHTTHZ-UHFFFAOYSA-N",
+        "names": "ethanol\n64-17-5\nethyl alcohol",
+        "mw": "46.0688",
+    }
+
+    @pytest.fixture
+    def resolver(self, monkeypatch):
+        resolver = NCIChemicalIdentifierResolver(pause_time=0, use_cache=False)
+        monkeypatch.setattr(
+            resolver, "_make_request",
+            lambda url: self.ANSWERS.get(url.rsplit("/", 1)[1], "x"),
+        )
+        return resolver
+
+    @pytest.fixture
+    def ethanol(self):
+        """
+        Unique per run. use_cache=False still writes, so asking for "ethanol"
+        would store these made-up answers where a live test reads them.
+        """
+        import uuid
+        return f"ethanol-{uuid.uuid4().hex}"
+
+    @pytest.mark.unit
+    def test_cas_is_a_list_in_cactus_order(self, resolver, ethanol):
+        data = resolver.get_molecular_data(ethanol)
+
+        assert data["cas"] == self.ANSWERS["cas"].split("\n")
+        assert data["available_data"]["cas"] == data["cas"]
+
+    @pytest.mark.unit
+    def test_stdinchikey_is_bare(self, resolver, ethanol):
+        data = resolver.get_molecular_data(ethanol)
+
+        assert data["stdinchikey"] == "LFQSCWFLJHTTHZ-UHFFFAOYSA-N"
+
+    @pytest.mark.unit
+    def test_resolve_stays_raw(self, resolver, ethanol):
+        """Dev-principle 3: the raw call keeps CACTUS's format."""
+        assert resolver.resolve(ethanol, "stdinchikey", use_cache=False).startswith("InChIKey=")
+
+
+class TestFailedRequestsAreNotCached:
+    """
+    get_molecular_data, resolve_multiple, batch_resolve and the other helpers
+    turn a failed request into None and were cached themselves, so one timeout
+    became that representation's answer for good. Only resolve is cached now,
+    and it raises on a failure.
+    """
+
+    @pytest.fixture
+    def outage(self, monkeypatch):
+        """A resolver whose first formula request times out; the rest answer."""
+        from provesid.resolver import NCIResolverTimeoutError
+
+        resolver = NCIChemicalIdentifierResolver(pause_time=0)
+        state = {"down": True}
+
+        def make_request(url):
+            if url.endswith("/formula") and state["down"]:
+                state["down"] = False
+                raise NCIResolverTimeoutError(f"Timed out: {url}")
+            return "C2H6O"
+
+        monkeypatch.setattr(resolver, "_make_request", make_request)
+        return resolver
+
+    @pytest.fixture
+    def identifier(self):
+        """Unique per run, so no earlier run's cache entry answers."""
+        import uuid
+        return f"not-a-real-chemical-{uuid.uuid4().hex}"
+
+    @pytest.mark.unit
+    def test_get_molecular_data(self, outage, identifier):
+        assert outage.get_molecular_data(identifier)["formula"] is None
+        assert outage.get_molecular_data(identifier)["formula"] == "C2H6O"
+
+    @pytest.mark.unit
+    def test_resolve_multiple(self, outage, identifier):
+        assert outage.resolve_multiple(identifier, ["formula"]) == {"formula": None}
+        assert outage.resolve_multiple(identifier, ["formula"]) == {"formula": "C2H6O"}
+
+    @pytest.mark.unit
+    def test_batch_resolve(self, outage, identifier):
+        assert outage.batch_resolve([identifier], "formula") == {identifier: None}
+        assert outage.batch_resolve([identifier], "formula") == {identifier: "C2H6O"}
+
+    @pytest.mark.unit
+    def test_a_found_answer_is_still_cached(self, outage, identifier, monkeypatch):
+        outage.resolve(identifier, "smiles")
+        monkeypatch.setattr(outage, "_make_request", lambda url: pytest.fail("not cached"))
+        assert outage.resolve(identifier, "smiles") == "C2H6O"
 
 if __name__ == "__main__":
     # Run tests if executed directly

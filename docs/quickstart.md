@@ -11,125 +11,110 @@ kernelspec:
   name: python3
 ---
 
-# Quick Start
+# Quick start
 
-This page is written as a MyST notebook so code snippets can be executed and re-validated.
+A tour of the package, offline first. This page is a MyST notebook: run
+`./scripts/validate_docs_local.sh --execute` to execute it.
 
-For local validation, run:
+## 1. Which databases are installed
 
-```bash
-./scripts/validate_docs_local.sh
-./scripts/validate_docs_local.sh --execute
-```
-
-## 1. Imports
+The offline sources read five bulk datasets. None is downloaded on your
+behalf: `Search` uses whatever is on disk and reports the rest.
 
 ```{code-cell} ipython3
-from provesid import (
-    PubChemAPI,
-    PubChemView,
-    NCIChemicalIdentifierResolver,
-    CASCommonChem,
-    CheMBL,
-    ZeroPM,
-)
-from provesid.pubchem import CompoundProperties
+from provesid import datasets
 
-print("PROVESID imports succeeded")
+status = datasets.status()
+print(status[["dataset", "present", "size", "release"]].to_string(index=False))
+print("in", status.attrs["data_dir"])
 ```
 
-## 2. Online lookup with PubChem
+`datasets.plan()` says what a download would transfer before it starts, and
+`datasets.fetch()` installs by name:
 
 ```{code-cell} ipython3
-pc = PubChemAPI()
+todo = datasets.plan(["pubchem", "chebi"])
+print(todo[["dataset", "action", "download", "installed"]].to_string(index=False))
+print("transfer:", datasets.human_bytes(todo.attrs["total_download_bytes"]))
 
-cids = pc.get_cids_by_name("aspirin")
-print("Top aspirin CID candidates:", cids[:5])
-
-aspirin_cid = cids[0]
-basic = pc.get_basic_compound_info(aspirin_cid)
-print("CID:", aspirin_cid)
-print("Title:", basic.get("Title"))
-print("MolecularFormula:", basic.get("MolecularFormula"))
+# datasets.fetch(["pubchem", "chebi"])   # resumable, verified, skips what is present
+# datasets.remove("chembl")              # reclaim the space, by name
 ```
 
-## 3. Targeted properties from PubChem
+See [Installing the offline databases](guide/datasets.md) for what each one
+holds and the different ways of building PubChem and ChEMBL.
+
+## 2. Resolve identifiers with `Search`
 
 ```{code-cell} ipython3
-props = pc.get_compound_properties(
-    aspirin_cid,
-    [
-        CompoundProperties.MOLECULAR_WEIGHT,
-        CompoundProperties.MOLECULAR_FORMULA,
-        CompoundProperties.INCHIKEY,
-    ],
-    include_synonyms=False,
-)
+from provesid import Search
 
-print("MolecularWeight:", props.get("MolecularWeight"))
-print("MolecularFormula:", props.get("MolecularFormula"))
-print("InChIKey:", props.get("InChIKey"))
+with Search("cas", show_progress=False) as s:
+    df = s.search(["50-00-0", "64-17-5", "1912-24-9"])
+
+print(df[["query", "name", "canonical_smiles", "n_source_support", "confidence"]].to_string())
+print("sources used:", df.attrs["sources_available"])
 ```
 
-Those are one request per compound. For many compounds at once use
-`pc.get_compound_properties_batch(cids, properties)`, which asks PubChem about
-200 CIDs per request, and for most properties you can skip the network
-altogether: `PubChemID().properties(cid, properties)` reads the local database
-first and only falls back online for what it cannot answer. See
-[the PubChem API page](api/pubchem.md#properties-without-the-network).
-
-## 4. Experimental property table with PubChemView
+The same class resolves names, SMILES, InChIs, InChIKeys, DTXSIDs and
+formulas. Presets trade precision for recall:
 
 ```{code-cell} ipython3
-pv = PubChemView()
-boiling_table = pv.get_property_table(aspirin_cid, "Boiling Point")
-
-print("Rows:", len(boiling_table))
-print(boiling_table.head(3))
+with Search("name", preset="recall", n_hits=1, show_progress=False) as s:
+    print(s.search(["asprin", "caffiene"])[["query", "name", "confidence"]].to_string())
 ```
 
-## 5. Identifier conversion with NCI resolver
+With `online_fallback=True`, a query no installed database answers is asked of
+PubChem and the NCI resolver. See
+[Resolving identifiers with Search](guide/search.md).
+
+## 3. Use a database directly
+
+Each database has its own client. They are context managers, and each thread
+that queries one gets its own connection:
 
 ```{code-cell} ipython3
-resolver = NCIChemicalIdentifierResolver()
+from provesid import PubChemID
 
-smiles = resolver.resolve("aspirin", "smiles")
-inchi = resolver.resolve(smiles, "stdinchi")
-
-print("SMILES:", smiles)
-print("InChI prefix:", inchi[:20])
-```
-
-## 6. CAS Common Chemistry lookup
-
-```{code-cell} ipython3
 try:
-    ccc = CASCommonChem()
-    water = ccc.cas_to_detail("7732-18-5")
-    print("Name:", water.get("name"))
-    print("Formula:", water.get("molecularFormula"))
-    print("CAS:", water.get("rn"))
-except Exception as exc:
-    print("CAS Common Chemistry example skipped:", exc)
+    with PubChemID(auto_download=False) as db:
+        print(db.cas_to_inchi("50-78-2"))
+        print(db.properties(2244, ["MolecularFormula", "InChIKey"],
+                            use_online_fallback=False))
+        print(db.descriptors(2244, ["TPSA", "MolLogP"]))
+except FileNotFoundError:
+    print("pubchem_id.db is not installed")
 ```
 
-## 7. Offline-first classes (local database interfaces)
+`auto_download=False` matters here: a client constructed directly downloads
+its database if it is missing. See
+[Using the local databases directly](guide/local-databases.md).
+
+## 4. Online services
+
+The online clients share one transport that paces and retries requests, and
+cache their answers on disk.
 
 ```{code-cell} ipython3
-# These classes are local/offline interfaces that can auto-download datasets.
-# auto_download=False lets this quickstart remain lightweight when datasets
-# are not yet present on disk.
+from provesid import PubChemAPI, PubChemView, NCIChemicalIdentifierResolver
 
-for cls in (CheMBL, ZeroPM):
-    try:
-        _ = cls(auto_download=False)
-        print(f"{cls.__name__}: local dataset is available")
-    except Exception as exc:
-        print(f"{cls.__name__}: dataset not yet available ({exc.__class__.__name__})")
+pc = PubChemAPI()
+cid = pc.get_cids_by_name("aspirin")[0]
+print("CID:", cid, pc.get_basic_compound_info(cid).get("MolecularFormula"))
+
+melting = PubChemView().get_property_table(cid, "Melting Point")
+print(melting[["StringWithMarkup", "ValueSI", "UnitSI"]].head(3))
+
+resolver = NCIChemicalIdentifierResolver()
+print("SMILES:", resolver.resolve("aspirin", "smiles"))
 ```
+
+`CASCommonChem` needs an API key; see [API keys](guide/api-keys.md).
 
 ## Next
 
-- [Online and Offline Data Methods](data_methods.md)
-- [PubChem Tutorial](examples/pubchem/pubchem_tutorial.md)
-- [API Overview](api/index.md)
+- [Installing the offline databases](guide/datasets.md)
+- [Resolving identifiers with Search](guide/search.md)
+- [Resolving a real dataset with Search](examples/search/search_tutorial.ipynb), a tutorial
+- [PubChem tutorial](examples/pubchem/pubchem_tutorial.ipynb)
+- [API reference](api/index.md)

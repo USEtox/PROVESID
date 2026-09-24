@@ -78,11 +78,8 @@ def _name_search(rows, **kwargs):
     return Search(
         "name",
         show_progress=False,
+        sources="pubchem",
         pubchem=_PubChemNameStub(rows),
-        chebi=None,
-        comptox=None,
-        zeropm=None,
-        chembl=None,
         **kwargs,
     )
 

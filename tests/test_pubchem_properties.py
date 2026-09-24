@@ -17,10 +17,10 @@ from provesid.pubchem import (
     PROPERTY_CHUNK_SIZE,
     URL_IDENTIFIER_LIMIT,
     PubChemAPI,
-    PubChemID,
     PubChemNotFoundError,
     PubChemServerError,
 )
+from provesid.pubchem_id import PubChemID
 
 
 # --------------------------------------------------------------------------
@@ -278,14 +278,33 @@ def test_null_column_is_reported_as_absent_not_as_none(db, recorder):
     """
     PubChem omits a property it has no value for, and so does this.
 
-    CID 233 has no logP in PubChem either, so the key is missing rather than
+    CID 233 has no InChIKey in this database, so the key is missing rather than
     present-and-None — and missing must not trigger a pointless online request.
     """
-    result = db.properties(233, ["MolecularFormula", "XLogP"])
+    result = db.properties(233, ["MolecularFormula", "InChIKey"])
 
     assert result["MolecularFormula"] == "AsHO4-2"
-    assert "XLogP" not in result
+    assert "InChIKey" not in result
     assert recorder == []
+
+
+@pytest.mark.unit
+def test_descriptors_go_online_even_when_the_database_has_the_column(db, recorder):
+    """
+    XLogP is PubChem's model output, not data about the compound.
+
+    This database carries an ``xlogp`` column, as every Zenodo copy does, and
+    the lookup still asks PubChem: a descriptor is served from one place, so
+    the answer never depends on which CIDs happen to be local.
+    """
+    def transport(url, method="GET", data=None, timeout=30, headers=None):
+        recorder.append((url, method, data))
+        return _FakeResponse(_property_table([{"CID": 2244, "XLogP": 1.2}]))
+
+    db.api._make_request = transport
+    assert "XLogP" not in db.offline_properties
+    assert db.properties(2244, ["XLogP"]) == {"CID": 2244, "Source": "online", "XLogP": 1.2}
+    assert len(recorder) == 1
 
 
 @pytest.mark.unit
@@ -303,8 +322,8 @@ def test_property_absent_offline_falls_back_online(db, recorder):
     """
     A property with no local column sends the request online.
 
-    ``MonoisotopicMass`` is not in the CAS export the database is built from, so
-    even a CID held locally has to be asked about online.
+    This database predates the ``monoisotopicmass`` column, so even a CID held
+    locally has to be asked about online.
     """
     monkeypatched = {"CID": 2244, "MonoisotopicMass": "180.04225873"}
 
@@ -359,8 +378,11 @@ def test_defaults_to_every_locally_available_property(db, recorder):
 
     assert recorder == []
     assert result["Title"] == "Aspirin"
-    assert result["Charge"] == 0
-    assert set(result) <= set(PubChemID.DEFAULT_PROPERTIES) | {"CID", "Source"}
+    assert result["MolecularWeight"] == 180.16
+    # This database predates ``monoisotopicmass``, so the default leaves it out
+    # rather than sending every default lookup online for it.
+    assert "MonoisotopicMass" not in db.offline_properties
+    assert set(result) <= set(db.offline_properties) | {"CID", "Source"}
 
 
 @pytest.mark.unit
@@ -377,12 +399,12 @@ def test_values_have_the_same_type_from_either_source(db, recorder):
             [{"CID": 5793, "MolecularWeight": "180.16", "HeavyAtomCount": "12"}]))
 
     db.api._make_request = transport
-    rows = db.properties_for_cids([702, 5793], ["MolecularWeight", "HeavyAtomCount"])
-
-    offline, online = rows
+    offline, online = db.properties_for_cids([702, 5793], ["MolecularWeight"])
     assert isinstance(offline["MolecularWeight"], float)
     assert isinstance(online["MolecularWeight"], float)
-    assert isinstance(online["HeavyAtomCount"], int)
+
+    counted = db.properties(5793, ["HeavyAtomCount"])
+    assert isinstance(counted["HeavyAtomCount"], int)
 
 
 @pytest.mark.unit

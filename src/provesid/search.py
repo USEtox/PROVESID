@@ -1,17 +1,34 @@
 """PROVESID Search module — unified chemical identifier resolver.
 
-Provides the :class:`Search` class for resolving chemical identifiers across multiple
-offline databases (ChEBI, CompTox, PubChemID, ChEMBL) with structure-aware
-matching, confidence scoring, fuzzy name search, Tanimoto similarity search,
-InChIKey-skeleton matching, and salt/solvent stripping.
+Provides the [`Search`][provesid.search.Search] class for resolving chemical
+identifiers across multiple offline databases (ChEBI, CompTox, PubChemID,
+ChEMBL) with structure-aware matching, confidence scoring, fuzzy name search,
+Tanimoto similarity search, InChIKey-skeleton matching, and salt/solvent
+stripping.
+
+The datasets these sources read are large --- ~21 GiB to download and ~6.7 GiB
+installed, PubChem's being built from 14.3 GiB of FTP files that are deleted as
+they are read, and ChEMBL being compacted from 27.7 GiB to 2.4 GiB as it
+arrives --- and none of them is downloaded on the caller's behalf.
+[`Search`][provesid.search.Search] queries whatever is installed and reports
+what is missing; [`provesid.datasets`][provesid.datasets] installs them by
+name.  Pass ``datasets="auto"`` to download what is missing, or
+``datasets="required"`` to refuse to run on a partial set.
+
+No socket is opened unless ``online_fallback=True``.  With it, a query that no
+offline source answers is asked of PubChem's PUG-REST service and the NCI/CADD
+resolver (CACTUS), and only such a query: offline first is a performance and
+traffic decision, and it should not cost the answer.  Rows the network
+supplied say so in ``source`` and ``source_details``, and
+``df.attrs["online_fallbacks"]`` counts how many queries went online.
 
 ZeroPM is **not** among the databases the resolver targets by default.  Its records
 are harvested from regulatory inventories rather than curated compound-by-compound,
 so its name→structure mappings are noisier than the other four sources and, being
 counted as an independent vote, they used to push wrong structures up the
 corroboration ranking.  The ZeroPM client itself is untouched and remains available
-as :class:`~provesid.ZeroPM`; pass ``use_zeropm=True`` to let :class:`Search` query
-it again.
+as [`ZeroPM`][provesid.zeropm.ZeroPM]; pass ``sources="all"`` (or a list
+naming ``"zeropm"``) to let [`Search`][provesid.search.Search] query it again.
 
 Supported identifier types:
 
@@ -23,25 +40,30 @@ Supported identifier types:
 - ``"dtxsid"``  — CompTox DTXSID
 - ``"formula"`` — Molecular formula
 
-Example usage::
+Examples:
+    >>> from provesid import Search
+    >>> df = Search("cas", show_progress=False).search(["50-00-0", "64-17-5"])
+    >>> df[["query", "name", "canonical_smiles", "confidence"]]
+         query          name canonical_smiles  confidence
+    0  50-00-0  formaldehyde              C=O      0.9000
+    1  64-17-5       ethanol              CCO      0.8906
 
-    from provesid import Search
+    Typos: fuzzy names are retrieved mainly through ZeroPM, so the
+    ``"recall"`` preset, which turns both on, is what rescues most of them.
 
-    # Resolve a list of CAS numbers
-    s = Search("cas")
-    df = s.search(["50-00-0", "64-17-5"])
+    >>> df = Search("name", preset="recall", n_hits=1,
+    ...             show_progress=False).search(["asprin", "caffiene"])
+    >>> df["name"].tolist()
+    ['Aspirin', 'caffeine']
 
-    # Fuzzy name search (handles typos)
-    s_name = Search("name", fuzzy=True)
-    df = s_name.search(["asprin", "caffiene"])
+    Salts, and InChIKeys that differ only in stereochemistry:
 
-    # SMILES with salt stripping and structure similarity
-    s_smiles = Search("smiles", strip_salts=True, similarity_threshold=0.8)
-    df = s_smiles.search("CC(=O)Oc1ccccc1C(=O)O")
-
-    # InChIKey skeleton matching (same connectivity, any stereochemistry)
-    s_ik = Search("inchikey", inchikey_skeleton=True)
-    df = s_ik.search("BSYNRYMUTXBXSQ-UHFFFAOYSA-N")
+    >>> Search("smiles", strip_salts=True, show_progress=False).search(
+    ...     "CC(=O)[O-].[Na+]")[["parent_smiles", "name"]].values.tolist()
+    [['CC(=O)[O-]', 'sodium acetate']]
+    >>> Search("inchikey", inchikey_skeleton=True, show_progress=False).search(
+    ...     "BSYNRYMUTXBXSQ-UHFFFAOYSA-N")["CASRN"].tolist()
+    ['50-78-2']
 """
 
 from __future__ import annotations
@@ -49,38 +71,35 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from types import TracebackType
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Type, Union
 
 import pandas as pd
 from tqdm import tqdm
 
-from .chebi import ChebiSDF
+from .chebi_sdf import ChebiSDF
 from .chembl import CheMBL
 from .comptox import CompToxID
+from .datasets import DATASETS, fetch_command, human_bytes, require
 from .opsin import PYOPSIN
-from .pubchem import PubChemID
+from .pubchem import PubChemAPI
+from .pubchem_id import PubChemID
+from .resolver import NCIChemicalIdentifierResolver
+from .sources import LOOKUPS, ONLINE_SOURCE_KEYS, SOURCE_DISPLAY, SOURCE_KEYS, Query
+from .sqlite_client import DatabaseClosedError
 from .zeropm import ZeroPM
 from .tools import (
     apply_candidate_to_result,
     candidate_compatible_with_consensus,
-    candidate_from_chebi_row,
     candidate_from_chembl_row,
-    candidate_from_comptox_row,
     candidate_from_pubchem_row,
-    candidate_from_zeropm_name_table,
-    candidate_from_zeropm_smiles,
     compute_consensus,
-    extract_cas_values,
-    first_cas,
-    inchi_to_smiles,
     inchikey_from_smiles,
     is_missing,
     make_candidate,
-    normalize_synonyms,
+    pick_casrn,
     pick_first,
-    smiles_to_canonical_and_mass,
     text_similarity,
-    to_float,
 )
 
 # ── Optional RDKit ─────────────────────────────────────────────────────────────
@@ -101,12 +120,10 @@ except ImportError:  # pragma: no cover
 # ── Optional rapidfuzz ─────────────────────────────────────────────────────────
 try:
     from rapidfuzz import fuzz as _fuzz
-    from rapidfuzz import process as _rfprocess
 
     RAPIDFUZZ_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _fuzz = None  # type: ignore[assignment]
-    _rfprocess = None  # type: ignore[assignment]
     RAPIDFUZZ_AVAILABLE = False
 
 # ── Patterns & constants ───────────────────────────────────────────────────────
@@ -148,7 +165,6 @@ _SUPPORT_FACTOR: Dict[int, float] = {
 }
 _SUPPORT_FACTOR_MAX = 1.00  # three or more databases agree
 
-# Canonical column order for the output DataFrame.
 OUTPUT_COLUMNS: List[str] = [
     "query",
     "CASRN",
@@ -177,6 +193,11 @@ OUTPUT_COLUMNS: List[str] = [
     "n_source_support",
     "opsin_smiles",
 ]
+"""The columns of the DataFrame ``Search.search`` returns, in this order.
+
+``return_alternatives=True`` adds an ``alternatives`` column after them. A
+column no candidate filled is still there, holding None.
+"""
 
 # Name-normalization: prefixes to strip before fuzzy matching.
 _NAME_PREFIXES = re.compile(
@@ -206,6 +227,43 @@ _ABBREVIATIONS: Dict[str, str] = {
 
 log = logging.getLogger(__name__)
 
+Hits = Dict[str, List[Dict[str, Any]]]
+"""Source key -> that source's candidates, best first (``Search._collect``)."""
+
+
+def _normalise_sources(sources: Union[str, Sequence[str]]) -> Tuple[str, ...]:
+    """The offline sources a [`Search`][provesid.search.Search] is to query.
+
+    Args:
+        sources: ``"all"``, one key of
+            [`SOURCE_KEYS`][provesid.sources.SOURCE_KEYS], or a sequence of
+            them.  A string is one key, not a sequence of letters.
+
+    Returns:
+        The named sources, each once, in ``SOURCE_KEYS`` order.
+
+    Raises:
+        ValueError: If a name is not a key of ``SOURCE_KEYS``, or none is
+            given.
+
+    Examples:
+        >>> _normalise_sources(["chembl", "chebi", "chebi"])
+        ('chebi', 'chembl')
+        >>> _normalise_sources("all")
+        ('chebi', 'comptox', 'pubchem', 'zeropm', 'chembl')
+    """
+    if sources == "all":
+        return tuple(SOURCE_KEYS)
+    named = [sources] if isinstance(sources, str) else list(sources)
+    unknown = [key for key in named if key not in SOURCE_KEYS]
+    if unknown:
+        raise ValueError(
+            f"sources must be 'all' or names from {SOURCE_KEYS}; got {unknown}"
+        )
+    if not named:
+        raise ValueError(f"sources must name at least one of {SOURCE_KEYS}")
+    return tuple(key for key in SOURCE_KEYS if key in named)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Module-level structure utility (used inside & outside the class)
@@ -226,11 +284,14 @@ def normalize_structure(smiles: Optional[str]) -> Dict[str, Any]:
         ``canonical_smiles``, ``kekulized_smiles``, ``inchi``, ``inchikey``,
         ``mol_weight``, and ``mol`` (the RDKit Mol object; not serialized).
 
-    Example::
-
-        rec = normalize_structure("c1ccccc1")
-        rec["canonical_smiles"]  # "c1ccccc1"
-        rec["kekulized_smiles"]  # "C1=CC=CC=C1"
+    Examples:
+        >>> rec = normalize_structure("c1ccccc1")
+        >>> rec["canonical_smiles"], rec["kekulized_smiles"], rec["inchikey"]
+        ('c1ccccc1', 'C1=CC=CC=C1', 'UHOVQNZJYSORNB-UHFFFAOYSA-N')
+        >>> round(rec["mol_weight"], 3)
+        78.114
+        >>> normalize_structure("not a smiles")["inchikey"] is None
+        True
     """
     empty: Dict[str, Any] = {
         "canonical_smiles": None,
@@ -298,9 +359,11 @@ def strip_salts(
         unavailable or the input is invalid.  Returns the original SMILES
         unchanged when no fragments are removed.
 
-    Example::
-
-        strip_salts("[Na+].[Cl-].CC(=O)O")  # "CC(=O)O"
+    Examples:
+        >>> strip_salts("[Na+].[Cl-].CC(=O)O")
+        'CC(=O)O'
+        >>> strip_salts("CC(=O)[O-].[Na+]")    # the anion keeps its charge
+        'CC(=O)[O-]'
     """
     if is_missing(smiles) or not RDKIT_AVAILABLE or Chem is None or _SaltRemover is None:
         return smiles  # type: ignore[return-value]
@@ -350,7 +413,7 @@ class Search:
     DTXSID, or molecular formula — and queries ChEBI, CompTox, PubChemID and
     ChEMBL to build a harmonised result.  ZeroPM is excluded by default because
     its inventory-derived records are less reliable than the other four sources;
-    ``use_zeropm=True`` opts back in.
+    ``sources="all"`` opts back in, and ``sources=[...]`` picks any subset.
 
     Features:
 
@@ -382,9 +445,23 @@ class Search:
       requires a Java runtime.
     - **Traceability**: ``source_details`` field records which sources were
       queried, whether they matched, and which output fields they contributed.
+    - **No surprise downloads**: the offline datasets are ~21 GiB to fetch and
+      ~6.7 GiB installed, and none of them is fetched on your behalf.  ``Search`` uses what is installed and
+      reports the rest (``datasets="present"``, the default); install them
+      deliberately with [`provesid.datasets.fetch`][provesid.datasets.fetch].
+    - **Presets**: ``preset="balanced"`` (the default), ``"strict"`` or
+      ``"recall"`` name a whole matching policy in one word; see
+      [`PRESETS`][provesid.search.Search.PRESETS].
+    - **Online fallback** (opt-in, ``online_fallback=True``): a query no
+      offline source answers is retried against PubChem PUG-REST and CACTUS.
 
     Attributes:
         identifier_type (str): Input identifier type used for all queries.
+        preset (str): The [`PRESETS`][provesid.search.Search.PRESETS] entry the
+            instance started from.
+        settings (dict): The matching and output settings in force, keyed as
+            [`PRESETS`][provesid.search.Search.PRESETS]; explicit constructor
+            arguments applied.
         strip_salts (bool): Strip salts/solvents and report parent molecule.
         fuzzy (bool): Enable fuzzy name matching via rapidfuzz.
         similarity_threshold (float): Minimum Tanimoto similarity for
@@ -398,8 +475,9 @@ class Search:
         min_source_support (int): Minimum number of databases that must carry a
             structure for it to be returned (0 disables the filter).
         use_opsin (bool): Enable PYOPSIN IUPAC→structure anchoring (needs Java).
-        use_zeropm (bool): Include the ZeroPM inventory among the queried
-            sources (off by default).
+        sources (tuple): The offline sources queried, in
+            [`SOURCE_KEYS`][provesid.sources.SOURCE_KEYS] order (ZeroPM off by
+            default).
         top_k_per_source (int): Candidates pulled per source before pooling.
         cluster_by_skeleton (bool): Merge stereo/charge variants when clustering.
         fuzzy_score_cutoff (float): Fuzzy score cut-off in [0, 100].
@@ -407,51 +485,69 @@ class Search:
         consensus_compat_threshold (float): Min similarity to merge with anchor.
         query_weight (float): Weight of query agreement in the confidence score.
         return_alternatives (bool): Attach runner-up summaries when ``n_hits=1``.
+        datasets (str): Dataset policy in force --- ``"present"`` (the default),
+            ``"auto"`` or ``"required"``.  See the constructor.
         sources_available (list[str]): Source keys that initialised successfully,
-            filled in on the first :meth:`search` call.  Since corroboration
-            drives confidence, a run missing a source scores lower than a
-            full-source run; check this (or ``df.attrs["sources_available"]``)
-            before comparing results across runs.
+            filled in on the first [`search`][provesid.search.Search.search]
+            call.  Since corroboration drives confidence, a run missing a
+            source scores lower than a full-source run; check this (or
+            ``df.attrs["sources_available"]``) before comparing results across
+            runs.
         sources_unavailable (list[str]): Source keys that failed to initialise.
+        online_fallback (bool): Whether queries no offline source answers are
+            retried online.  [`sources_available`][provesid.search.Search]
+            lists offline sources only; the online ones are reported per row
+            and in ``df.attrs``.
 
-    Example::
+    Examples:
+        >>> from provesid import Search
+        >>> s = Search("cas", show_progress=False)
+        >>> df = s.search(["50-00-0", "64-17-5"])
+        >>> df[["CASRN", "name", "canonical_smiles", "confidence"]]
+             CASRN          name canonical_smiles  confidence
+        0  50-00-0  formaldehyde              C=O      0.9000
+        1  64-17-5       ethanol              CCO      0.8906
+        >>> df.attrs["sources_available"]
+        ['chebi', 'comptox', 'pubchem', 'chembl']
 
-        from provesid import Search
+        Named settings: ``"strict"`` returns only what two databases agree
+        on, ``"recall"`` widens every way it can. Explicit arguments still
+        win.
 
-        s = Search("cas")
-        df = s.search(["50-00-0", "64-17-5"])
-        print(df[["CASRN", "name", "canonical_smiles", "confidence"]])
+        >>> Search.PRESETS["strict"]["min_source_support"]
+        2
+        >>> Search("name", preset="strict", show_progress=False).search(
+        ...     "atrazine")[["name", "CASRN"]].values.tolist()
+        [['atrazine', '1912-24-9']]
 
-        s_fuzzy = Search("name", fuzzy=True)
-        df = s_fuzzy.search(["asprin", "paracetamol"])
+        Every plausible reading of an ambiguous name:
 
-        # Inspect every plausible interpretation of an ambiguous name
-        df = Search("name").search("xylene", n_hits="all")
-        print(df[["hit_rank", "name", "InChIKey", "confidence"]])
+        >>> df = Search("name", show_progress=False).search("xylene", n_hits="all")
+        >>> df[["hit_rank", "name", "InChIKey"]]
+           hit_rank      name                     InChIKey
+        0         0  o-Xylene  CTQNGGLPUBDAKN-UHFFFAOYSA-N
+        1         1  m-Xylene  IVSZLXZYQVIEFR-UHFFFAOYSA-N
+        2         2  p-Xylene  URLKBWYHVLBVBO-UHFFFAOYSA-N
 
-        # Anchor IUPAC names to a real structure via OPSIN (needs Java)
-        df = Search("name", use_opsin=True).search("2-(acetyloxy)benzoic acid")
+        Needing Java, or the network:
+
+        >>> df = Search("name", use_opsin=True).search("2-(acetyloxy)benzoic acid")  # doctest: +SKIP
+        >>> df = Search("cas", online_fallback=True).search(["50-78-2", "1912-24-9"])  # doctest: +SKIP
+        >>> df.attrs["online_fallbacks"]    # queries that went online     # doctest: +SKIP
+        0
+
+        Hand the databases back when the run is over:
+
+        >>> with Search("cas", show_progress=False) as s:
+        ...     s.search("50-78-2")["CASRN"].tolist()
+        ['50-78-2']
     """
 
     SUPPORTED_TYPES: frozenset = frozenset(
         ["cas", "name", "smiles", "inchi", "inchikey", "dtxsid", "formula"]
     )
 
-    #: Every source the resolver knows how to query.
-    _ALL_SOURCE_KEYS: List[str] = ["chebi", "comptox", "pubchem", "zeropm", "chembl"]
-
-    #: Sources queried unless ``use_zeropm=True`` re-adds ZeroPM.  ZeroPM is a
-    #: regulatory-inventory harvest rather than a curated compound database, so
-    #: its rows are kept out of the default corroboration vote.
-    _DEFAULT_SOURCE_KEYS: List[str] = ["chebi", "comptox", "pubchem", "chembl"]
-
-    _SOURCE_DISPLAY: Dict[str, str] = {
-        "chebi": "ChEBI",
-        "comptox": "CompTox",
-        "pubchem": "PubChemID",
-        "zeropm": "ZeroPM",
-        "chembl": "ChEMBL",
-    }
+    _SOURCE_DISPLAY: Dict[str, str] = SOURCE_DISPLAY
 
     # rapidfuzz scorer whitelist (name -> scorer callable resolved lazily).
     _FUZZY_SCORERS: frozenset = frozenset(
@@ -459,29 +555,85 @@ class Search:
          "token_set_ratio", "QRatio"]
     )
 
+    PRESETS: Dict[str, Dict[str, Any]] = {
+        "balanced": {
+            "fuzzy": False,
+            "fuzzy_score_cutoff": 80.0,
+            "fuzzy_scorer": "ratio",
+            "inchikey_skeleton": False,
+            "similarity_threshold": 0.0,
+            # ZeroPM is a regulatory-inventory harvest rather than a curated
+            # compound database, so its rows are kept out of the default
+            # corroboration vote.
+            "sources": ("chebi", "comptox", "pubchem", "chembl"),
+            "top_k_per_source": 5,
+            "cluster_by_skeleton": True,
+            "consensus_compat_threshold": 0.35,
+            "query_weight": 0.5,
+            "n_hits": 1,
+            "min_confidence": 0.0,
+            "min_source_support": 0,
+        },
+    }
+    """Named settings for the arguments that decide what counts as a match
+    and what is returned.  ``Search(..., preset=name)`` starts from one of
+    these, and any of its keys passed explicitly overrides the preset's
+    value.  ``"balanced"`` is the default and holds the constructor's
+    defaults, so it is also the one place those defaults are written down.
+    A preset is a name to cite: "resolved with ``Search('cas',
+    preset='strict')``" says everything
+    [`settings`][provesid.search.Search.settings] would.
+    """
+    # Precision first: only exact matches, and only structures two
+    # independent databases agree on.
+    PRESETS["strict"] = {
+        **PRESETS["balanced"],
+        "min_source_support": 2,
+    }
+    # Recall first: every widening the resolver has, every plausible
+    # compound returned, and ZeroPM back in the pool because it is the only
+    # source that retrieves by fuzzy name (see _candidate_pool_from_name).
+    PRESETS["recall"] = {
+        **PRESETS["balanced"],
+        "fuzzy": True,
+        "inchikey_skeleton": True,
+        "similarity_threshold": 0.7,
+        "sources": tuple(SOURCE_KEYS),
+        "n_hits": "all",
+    }
+
+    DATASET_POLICIES: frozenset = frozenset(["present", "auto", "required"])
+    """What to do about offline datasets that are not on disk.  ``"present"``
+    is the default: a laptop should not spend ~32 GB on a first CAS lookup
+    because a source client happens to default to ``auto_download=True``.
+    """
+
     def __init__(
         self,
         identifier_type: str = "cas",
         *,
+        preset: str = "balanced",
         strip_salts: bool = False,
-        fuzzy: bool = False,
-        similarity_threshold: float = 0.0,
-        inchikey_skeleton: bool = False,
+        fuzzy: Optional[bool] = None,
+        similarity_threshold: Optional[float] = None,
+        inchikey_skeleton: Optional[bool] = None,
         show_progress: bool = True,
         salt_smarts: Optional[List[str]] = None,
-        n_hits: Union[int, str] = 1,
-        min_confidence: float = 0.0,
-        min_source_support: int = 0,
+        n_hits: Optional[Union[int, str]] = None,
+        min_confidence: Optional[float] = None,
+        min_source_support: Optional[int] = None,
         use_opsin: bool = False,
         opsin_jar_fpath: str = "default",
-        use_zeropm: bool = False,
-        top_k_per_source: int = 5,
-        cluster_by_skeleton: bool = True,
-        fuzzy_score_cutoff: float = 80.0,
-        fuzzy_scorer: str = "ratio",
-        consensus_compat_threshold: float = 0.35,
-        query_weight: float = 0.5,
+        sources: Optional[Union[str, Sequence[str]]] = None,
+        top_k_per_source: Optional[int] = None,
+        cluster_by_skeleton: Optional[bool] = None,
+        fuzzy_score_cutoff: Optional[float] = None,
+        fuzzy_scorer: Optional[str] = None,
+        consensus_compat_threshold: Optional[float] = None,
+        query_weight: Optional[float] = None,
         return_alternatives: bool = False,
+        online_fallback: bool = False,
+        datasets: str = "present",
         data_dir: Optional[Union[str, Path]] = None,
         redownload: bool = False,
         chebi: Optional[ChebiSDF] = None,
@@ -496,82 +648,174 @@ class Search:
             identifier_type: Type of identifier to resolve.  One of ``"cas"``,
                 ``"name"``, ``"smiles"``, ``"inchi"``, ``"inchikey"``,
                 ``"dtxsid"``, ``"formula"``.  Defaults to ``"cas"``.
+            preset: Named starting point for the matching and output
+                settings, one of [`PRESETS`][provesid.search.Search.PRESETS]:
+
+                ``"balanced"``
+                    **The default.**  Exact matching only, uncorroborated hits
+                    accepted, one row per query.
+                ``"strict"``
+                    As ``"balanced"``, but a structure is returned only when
+                    at least two independent databases carry it
+                    (``min_source_support=2``).  Fewer answers, fewer wrong
+                    ones.
+                ``"recall"``
+                    Fuzzy names, InChIKey-skeleton and Tanimoto (0.7)
+                    widening, ZeroPM queried, and every plausible compound
+                    returned (``n_hits="all"``).  Read ``confidence`` and
+                    ``n_source_support`` before trusting a row.
+
+                The arguments marked *preset* below default to ``None``, which
+                takes the preset's value; passing one overrides the preset
+                for that argument alone, so ``Search("name",
+                preset="strict", n_hits=3)`` is strict with three hits.  The
+                values in force are [`settings`][provesid.search.Search.settings].
             strip_salts: Strip salt/solvent fragments and populate
                 ``parent_smiles`` / ``parent_inchikey`` columns.
-            fuzzy: Enable fuzzy name matching when an exact name match fails.
-                Requires rapidfuzz.
-            similarity_threshold: Tanimoto similarity threshold in [0, 1].
-                When > 0 a Morgan-fingerprint similarity search is run as a
-                fallback for SMILES queries with no exact match.  0.0 disables
-                the search entirely.
-            inchikey_skeleton: When True, fall back to 14-character InChIKey
-                prefix matching when an exact InChIKey match fails.
+            fuzzy: *Preset.*  Enable fuzzy name matching when an exact name
+                match fails.  Requires rapidfuzz.  Balanced: ``False``.
+            similarity_threshold: *Preset.*  Tanimoto similarity threshold in
+                [0, 1].  When > 0 a Morgan-fingerprint similarity search is run
+                as a fallback for SMILES queries with no exact match.  0.0
+                disables the search entirely.  Balanced: ``0.0``.
+            inchikey_skeleton: *Preset.*  When True, fall back to 14-character
+                InChIKey prefix matching when an exact InChIKey match fails.
+                Balanced: ``False``.
             show_progress: Display a tqdm progress bar during batch queries.
             salt_smarts: Additional SMARTS patterns passed to
-                :func:`strip_salts` when ``strip_salts=True``.
-            n_hits: Default number of ranked hits to return per query.  Either a
-                positive integer or the literal ``"all"``.  Defaults to ``1``
-                (one row per query).  Can be overridden per-call in
-                :meth:`search`.
-            min_confidence: Drop hits whose confidence is below this value
-                before truncating to ``n_hits``.  Defaults to ``0.0``.
-            min_source_support: Minimum number of independent databases that
-                must carry a structure for it to be returned.  ``0`` (the
-                default) accepts uncorroborated hits; ``2`` requires at least
-                two databases to agree, trading recall for precision.  OPSIN-only
-                clusters have no database support and are dropped by any value
-                above ``0``.
+                [`strip_salts`][provesid.search.strip_salts] when ``strip_salts=True``.
+            n_hits: *Preset.*  Default number of ranked hits to return per
+                query.  Either a positive integer or the literal ``"all"``.
+                Balanced: ``1`` (one row per query).  Can be overridden
+                per-call in [`search`][provesid.search.Search.search].
+            min_confidence: *Preset.*  Drop hits whose confidence is below
+                this value before truncating to ``n_hits``.  Balanced: ``0.0``.
+            min_source_support: *Preset.*  Minimum number of independent
+                databases that must carry a structure for it to be returned.
+                ``0`` (balanced) accepts uncorroborated hits; ``2`` (strict)
+                requires at least two databases to agree, trading recall for
+                precision.  OPSIN-only clusters have no database support and
+                are dropped by any value above ``0``.
             use_opsin: Enable PYOPSIN IUPAC-name → structure anchoring for name
                 queries.  Requires a Java runtime; falls back to plain name
                 matching (with a one-time warning) when unavailable.  Defaults
                 to ``False``.
-            opsin_jar_fpath: ``jar_fpath`` passed to :class:`~provesid.PYOPSIN`.
-            use_zeropm: Include the ZeroPM inventory among the queried sources.
-                Defaults to ``False``: ZeroPM aggregates regulatory inventories
-                instead of curating compounds, so its name→structure rows are
-                noisier than ChEBI/CompTox/PubChem/ChEMBL yet carried the same
-                weight in the corroboration vote.  Set to ``True`` to restore
-                the old five-source behaviour — chiefly worthwhile for fuzzy
-                name queries, since ZeroPM is the only source that does true
-                fuzzy *retrieval* (see :meth:`_candidate_pool_from_name`).
-                While ``False``, a ``zeropm`` client passed to the constructor
-                is ignored.
-            top_k_per_source: Number of candidate rows pulled from each source
-                before pooling / clustering.  Defaults to ``5``.
-            cluster_by_skeleton: Merge stereo/charge/isotope variants when
-                clustering candidates by structure (14-char InChIKey skeleton).
-                Defaults to ``True``.
-            fuzzy_score_cutoff: rapidfuzz / ZeroPM fuzzy score cut-off in
-                [0, 100].  Defaults to ``80.0``.
-            fuzzy_scorer: rapidfuzz scorer name; one of ``WRatio``, ``ratio``,
-                ``partial_ratio``, ``token_sort_ratio``, ``token_set_ratio``,
-                ``QRatio``.  Defaults to ``"ratio"``.  Avoid ``WRatio`` and
+            opsin_jar_fpath: ``jar_fpath`` passed to
+                [`PYOPSIN`][provesid.opsin.PYOPSIN].
+            sources: *Preset.*  The offline sources to query: any of
+                [`SOURCE_KEYS`][provesid.sources.SOURCE_KEYS] (``"chebi"``,
+                ``"comptox"``, ``"pubchem"``, ``"zeropm"``, ``"chembl"``), as
+                a list, one key, or ``"all"``.  They are queried in
+                ``SOURCE_KEYS`` order whatever order they are given in, so
+                the answer does not depend on it.  Balanced and strict: all
+                but ZeroPM; recall: ``"all"``.  ZeroPM aggregates regulatory
+                inventories instead of curating compounds, so its
+                name→structure rows are noisier than the other four's yet
+                carry the same weight in the corroboration vote.  It is
+                chiefly worth adding for fuzzy name queries, since it is the
+                only source that does true fuzzy *retrieval* (see
+                `_candidate_pool_from_name`).  A source left out is never
+                opened, and a client passed for it is ignored with a warning.
+                The online services are not listed here; see
+                ``online_fallback``.
+            top_k_per_source: *Preset.*  Number of candidate rows pulled from
+                each source before pooling / clustering.  Balanced: ``5``.
+            cluster_by_skeleton: *Preset.*  Merge stereo/charge/isotope
+                variants when clustering candidates by structure (14-char
+                InChIKey skeleton).  Balanced: ``True``.
+            fuzzy_score_cutoff: *Preset.*  rapidfuzz / ZeroPM fuzzy score
+                cut-off in [0, 100].  Balanced: ``80.0``.
+            fuzzy_scorer: *Preset.*  rapidfuzz scorer name; one of ``WRatio``,
+                ``ratio``, ``partial_ratio``, ``token_sort_ratio``,
+                ``token_set_ratio``, ``QRatio``.  Balanced: ``"ratio"``.  Avoid ``WRatio`` and
                 ``partial_ratio``: their partial-ratio term scores a short
                 name highly whenever it appears anywhere inside the query, so
                 ``fuzzy_score_cutoff`` stops discriminating (see
-                :meth:`_name_score`).
-            consensus_compat_threshold: Minimum candidate similarity for a
-                candidate to be merged with the consensus anchor.  Defaults to
-                ``0.35``.
-            query_weight: Weight (in [0, 1]) of the query-agreement term versus
-                the method base in the confidence formula.  Defaults to ``0.5``.
+                `_name_score`).
+            consensus_compat_threshold: *Preset.*  Minimum candidate
+                similarity for a candidate to be merged with the consensus
+                anchor.  Balanced: ``0.35``.
+            query_weight: *Preset.*  Weight (in [0, 1]) of the query-agreement
+                term versus the method base in the confidence formula.
+                Balanced: ``0.5``.
             return_alternatives: When ``n_hits == 1``, attach compact runner-up
                 summaries in an ``alternatives`` column.  Defaults to ``False``.
+            online_fallback: When True, a query that produced no candidate
+                from any offline source --- and only such a query --- is asked
+                of PubChem's PUG-REST service and of CACTUS, the NCI/CADD
+                Chemical Identifier Resolver.  Their answers are pooled,
+                clustered and scored exactly like offline ones, and each
+                service is one more independent vote in ``n_source_support``.
+                A row they supplied names them in ``source`` and
+                ``source_details`` (``"PubChem (online)"``, ``"CACTUS"``), and
+                ``df.attrs["online_fallbacks"]`` / ``["online_resolved"]``
+                count the queries that went online and those it answered.
+
+                Defaults to ``False``, so that a run opens no socket and a
+                batch gives the same answer tomorrow as today.  Formula
+                queries are never retried: a formula names thousands of
+                PubChem compounds.  A query costs up to three PubChem
+                requests (up to ``top_k_per_source + 2`` for a name) and two
+                CACTUS requests, paced by the shared per-host limiter; results
+                are cached as those clients cache them.  Each fallback is
+                logged at DEBUG, and a service that fails is logged at WARNING
+                and left out, as a failing database is.
+            datasets: What to do about the offline datasets the sources read,
+                when they are not on disk.  One of:
+
+                ``"present"``
+                    Use whatever is installed and say, once, which sources are
+                    missing and what installing them would cost.  **The
+                    default.**  Nothing is downloaded.
+                ``"auto"``
+                    Download whatever is missing, which on a clean machine is
+                    ~21 GiB transferred and ~6.7 GiB installed for the four
+                    default sources --- but up to ~37 GiB of free disk at the
+                    worst moment, while ChEMBL's release is unpacked and
+                    compacted.  This was the behaviour before the dataset
+                    manager landed, and it happened without asking.
+                ``"required"``
+                    Raise
+                    [`MissingDatasetError`][provesid.datasets.MissingDatasetError]
+                    in the constructor, naming every missing dataset and the
+                    exact ``provesid.datasets.fetch`` call that installs it.
+                    Use this when a run on fewer sources would be worse than no
+                    run at all --- confidence scores are not comparable across
+                    different source sets.
+
+                Install datasets deliberately with
+                [`provesid.datasets.fetch`][provesid.datasets.fetch], and see
+                what a download would cost with
+                [`provesid.datasets.plan`][provesid.datasets.plan].
             data_dir: Optional shared data root used when lazily initialising
                 source clients.
             redownload: If True, lazily initialised source clients force a
-                fresh dataset download.
-            chebi: Pre-initialised :class:`~provesid.ChebiSDF` client.  When
-                ``None`` the client is created lazily on first use.
-            comptox: Pre-initialised :class:`~provesid.CompToxID` client.
-            pubchem: Pre-initialised :class:`~provesid.PubChemID` client.
-            zeropm: Pre-initialised :class:`~provesid.ZeroPM` client.  Only
-                used when ``use_zeropm=True``.
-            chembl: Pre-initialised :class:`~provesid.CheMBL` client.
+                fresh dataset download.  Requires ``datasets="auto"``, since
+                the other two policies do not download at all.
+            chebi: Pre-initialised [`ChebiSDF`][provesid.chebi_sdf.ChebiSDF]
+                client.  Each queried source whose client is left ``None``
+                is built on the first search, under the ``datasets`` policy,
+                whether or not others were passed; a client that is passed is used
+                as given and left open by
+                [`close`][provesid.search.Search.close].  To leave a source
+                out, leave it out of ``sources``.
+            comptox: Pre-initialised [`CompToxID`][provesid.comptox.CompToxID] client.
+            pubchem: Pre-initialised
+                [`PubChemID`][provesid.pubchem_id.PubChemID] client.
+            zeropm: Pre-initialised [`ZeroPM`][provesid.zeropm.ZeroPM] client.  Only
+                used when ``sources`` includes ``"zeropm"``.
+            chembl: Pre-initialised [`CheMBL`][provesid.chembl.CheMBL] client.
 
         Raises:
             ValueError: If ``identifier_type`` is not one of the supported
-                values.
+                values, ``preset`` is not a key of
+                [`PRESETS`][provesid.search.Search.PRESETS], or ``datasets`` is
+                not one of
+                [`DATASET_POLICIES`][provesid.search.Search.DATASET_POLICIES],
+                or ``redownload=True`` was combined with a policy that does not
+                download, or ``sources`` names no source or an unknown one.
+            provesid.datasets.MissingDatasetError: If ``datasets="required"``
+                and a dataset a queried source needs is not on disk.
         """
         if identifier_type not in self.SUPPORTED_TYPES:
             raise ValueError(
@@ -579,33 +823,74 @@ class Search:
                 f"got {identifier_type!r}"
             )
 
+        if preset not in self.PRESETS:
+            raise ValueError(
+                f"preset must be one of {sorted(self.PRESETS)}, got {preset!r}"
+            )
+        # None means "not passed", so the preset supplies it; anything else
+        # was asked for and wins.  No preset key legitimately takes None.
+        explicit = {
+            "fuzzy": fuzzy,
+            "fuzzy_score_cutoff": fuzzy_score_cutoff,
+            "fuzzy_scorer": fuzzy_scorer,
+            "inchikey_skeleton": inchikey_skeleton,
+            "similarity_threshold": similarity_threshold,
+            "sources": sources,
+            "top_k_per_source": top_k_per_source,
+            "cluster_by_skeleton": cluster_by_skeleton,
+            "consensus_compat_threshold": consensus_compat_threshold,
+            "query_weight": query_weight,
+            "n_hits": n_hits,
+            "min_confidence": min_confidence,
+            "min_source_support": min_source_support,
+        }
+        chosen = dict(self.PRESETS[preset])
+        chosen.update({k: v for k, v in explicit.items() if v is not None})
+
         self.identifier_type = identifier_type
+        self.preset = preset
         self.strip_salts = strip_salts
-        self.fuzzy = fuzzy
-        self.similarity_threshold = float(similarity_threshold)
-        self.inchikey_skeleton = inchikey_skeleton
+        self.fuzzy = bool(chosen["fuzzy"])
+        self.similarity_threshold = float(chosen["similarity_threshold"])
+        self.inchikey_skeleton = bool(chosen["inchikey_skeleton"])
         self.show_progress = show_progress
         self.salt_smarts: List[str] = list(salt_smarts or [])
 
         # Multi-hit / tuning attributes
-        self.n_hits = self._validate_n_hits(n_hits)
-        self.min_confidence = float(min_confidence)
-        self.min_source_support = max(0, int(min_source_support))
+        self.n_hits = self._validate_n_hits(chosen["n_hits"])
+        self.min_confidence = float(chosen["min_confidence"])
+        self.min_source_support = max(0, int(chosen["min_source_support"]))
         self.use_opsin = bool(use_opsin)
         self.opsin_jar_fpath = opsin_jar_fpath
-        self.use_zeropm = bool(use_zeropm)
-        self.top_k_per_source = max(1, int(top_k_per_source))
-        self.cluster_by_skeleton = bool(cluster_by_skeleton)
-        self.fuzzy_score_cutoff = float(fuzzy_score_cutoff)
-        if fuzzy_scorer not in self._FUZZY_SCORERS:
+        self.sources: Tuple[str, ...] = _normalise_sources(chosen["sources"])
+        self.top_k_per_source = max(1, int(chosen["top_k_per_source"]))
+        self.cluster_by_skeleton = bool(chosen["cluster_by_skeleton"])
+        self.fuzzy_score_cutoff = float(chosen["fuzzy_score_cutoff"])
+        if chosen["fuzzy_scorer"] not in self._FUZZY_SCORERS:
             raise ValueError(
                 f"fuzzy_scorer must be one of {sorted(self._FUZZY_SCORERS)}, "
-                f"got {fuzzy_scorer!r}"
+                f"got {chosen['fuzzy_scorer']!r}"
             )
-        self.fuzzy_scorer = fuzzy_scorer
-        self.consensus_compat_threshold = float(consensus_compat_threshold)
-        self.query_weight = float(query_weight)
+        self.fuzzy_scorer = chosen["fuzzy_scorer"]
+        self.consensus_compat_threshold = float(chosen["consensus_compat_threshold"])
+        self.query_weight = float(chosen["query_weight"])
         self.return_alternatives = bool(return_alternatives)
+        self.online_fallback = bool(online_fallback)
+
+        if datasets not in self.DATASET_POLICIES:
+            raise ValueError(
+                f"datasets must be one of {sorted(self.DATASET_POLICIES)}, "
+                f"got {datasets!r}"
+            )
+        if redownload and datasets != "auto":
+            # Silently ignoring it would be worse: the caller asked for a fresh
+            # copy and would get a stale one with no indication.
+            raise ValueError(
+                f"redownload=True downloads, which datasets={datasets!r} does "
+                "not permit. Pass datasets='auto' to re-download, or call "
+                "provesid.datasets.fetch(..., force=True) yourself."
+            )
+        self.datasets = datasets
 
         self.data_dir = str(data_dir) if data_dir is not None else None
         self.redownload = redownload
@@ -614,39 +899,126 @@ class Search:
         self._opsin: Optional[PYOPSIN] = None
         self._opsin_available: bool = use_opsin
 
-        # ZeroPM is off the target list unless explicitly re-enabled, so an
-        # instance that was handed a client still must not query it — otherwise
-        # "disabled" would depend on how the caller happened to construct us.
-        if zeropm is not None and not self.use_zeropm:
-            log.warning(
-                "A ZeroPM client was passed but use_zeropm=False; ZeroPM will not "
-                "be queried. Pass use_zeropm=True to include it."
-            )
-            zeropm = None
+        self._SOURCE_KEYS: List[str] = list(self.sources)
 
-        self._SOURCE_KEYS: List[str] = (
-            list(self._ALL_SOURCE_KEYS) if self.use_zeropm
-            else list(self._DEFAULT_SOURCE_KEYS)
+        # A source left out of `sources` is not queried even when its client
+        # is passed; otherwise which sources ran would depend on how the
+        # caller happened to construct us.
+        passed = {
+            "chebi": chebi, "comptox": comptox, "pubchem": pubchem,
+            "zeropm": zeropm, "chembl": chembl,
+        }
+        for key, client in passed.items():
+            if client is not None and key not in self.sources:
+                log.warning(
+                    "A %s client was passed but %r is not in sources=%r; it will "
+                    "not be queried.",
+                    self._SOURCE_DISPLAY[key], key, list(self.sources),
+                )
+                passed[key] = None
+
+        # Source key -> client, or None until _ensure_clients() builds it (or
+        # for good, when it cannot be built).
+        self._clients: Dict[str, Any] = {
+            **passed,
+            "pubchem_online": None,
+            "cactus": None,
+        }
+
+        # Source keys whose client this instance constructed, and may
+        # therefore close.  A client the caller passed in belongs to the
+        # caller and outlives this Search; closing it would be closing
+        # someone else's database.
+        self._owned_clients: List[str] = []
+        self._closed: bool = False
+
+        # Whether _ensure_clients() has built the clients the caller did not
+        # pass.  Passing some does not count: those are used as given, and the
+        # rest are built on the first search as if none had been passed.
+        self._clients_initialized: bool = False
+
+        # The web services asked when every offline source missed.  Pooled
+        # and reported after the offline sources, and not at all when the
+        # fallback is off, so an offline run's source_details is unchanged.
+        self._ONLINE_KEYS: List[str] = (
+            list(ONLINE_SOURCE_KEYS) if self.online_fallback else []
         )
+        self._online_clients_built: bool = False
 
-        # Client references — may be None until _ensure_clients() is called.
-        self._chebi = chebi
-        self._comptox = comptox
-        self._pubchem = pubchem
-        self._zeropm = zeropm
-        self._chembl = chembl
-
-        # Track whether automatic client init has been attempted.
-        self._clients_initialized: bool = any(
-            c is not None for c in [chebi, comptox, pubchem, zeropm, chembl]
-        )
+        # Per search() call: queries retried online, and those it answered.
+        self._online_fallbacks: int = 0
+        self._online_resolved: int = 0
 
         # Sources that actually came up, filled in by _ensure_clients().
         self.sources_available: List[str] = []
         self.sources_unavailable: List[str] = []
         self._availability_logged: bool = False
 
+        # "required" is checked here rather than on the first search, so the
+        # run fails while the user is still looking at the line that started
+        # it.  The check is a directory listing -- no client is constructed and
+        # nothing is downloaded.
+        if self.datasets == "required":
+            require(self._datasets_needed(), self.data_dir)
+
+    @property
+    def settings(self) -> Dict[str, Any]:
+        """The matching and output settings in force, keyed as
+        [`PRESETS`][provesid.search.Search.PRESETS].
+
+        The preset's values with any explicit constructor argument applied, as
+        this instance will use them.  [`search`][provesid.search.Search.search]
+        records the same dict, with its own per-call overrides applied, in
+        ``df.attrs["settings"]``.
+
+        Returns:
+            A new dict with one entry per key of ``PRESETS["balanced"]``.
+
+        Example::
+
+            >>> s = Search("name", preset="strict", n_hits=3)
+            >>> s.settings["min_source_support"], s.settings["n_hits"]
+            (2, 3)
+            >>> s.settings == Search.PRESETS["strict"]
+            False
+        """
+        return {key: getattr(self, key) for key in self.PRESETS["balanced"]}
+
+    def _provenance(self, **run_overrides: Any) -> Dict[str, Any]:
+        """The ``df.attrs`` entries that say how a result frame was produced.
+
+        Args:
+            **run_overrides: Per-call values of
+                [`settings`][provesid.search.Search.settings] keys, as
+                [`search`][provesid.search.Search.search] resolved them.
+
+        Returns:
+            Dict of the preset, the settings in force for the call, the
+            offline sources that backed it and the online-fallback counters.
+        """
+        return {
+            "preset": self.preset,
+            "settings": {**self.settings, **run_overrides},
+            "sources_available": list(self.sources_available),
+            "sources_unavailable": list(self.sources_unavailable),
+            "online_fallbacks": self._online_fallbacks,
+            "online_resolved": self._online_resolved,
+        }
+
     # ── Client lifecycle ──────────────────────────────────────────────────────
+
+    def _datasets_needed(self) -> List[str]:
+        """Dataset names this instance would have to open on disk.
+
+        The queried sources (`_SOURCE_KEYS`, from ``sources``) minus any
+        whose client the caller constructed and
+        passed in --- that client has already found its data, wherever it put
+        it, so demanding a copy in the shared data directory would be wrong.
+
+        Returns:
+            Dataset names, in `_SOURCE_KEYS` order.
+        """
+        return [key for key in self._SOURCE_KEYS if self._clients[key] is None]
 
     def _ensure_clients(self) -> None:
         """Lazily initialise all offline source clients.
@@ -654,13 +1026,28 @@ class Search:
         Client construction is idempotent — it only runs once per Search
         instance.  Individual clients that fail to initialise are set to ``None``
         and a warning is logged; the search continues with the remaining sources
-        and :attr:`sources_available` / :attr:`sources_unavailable` record which
-        ones, so a three-source run stays distinguishable from a four-source one.
+        and [`sources_available`][provesid.search.Search] /
+        [`sources_unavailable`][provesid.search.Search] record which ones, so a
+        three-source run stays distinguishable from a four-source one.
 
-        Only the sources in :attr:`_SOURCE_KEYS` are constructed, so ZeroPM's
-        (large) database is never even opened unless ``use_zeropm=True``.
+        Only the sources in `_SOURCE_KEYS` are constructed, so a source left
+        out of ``sources`` (ZeroPM, by default) is never even opened.
+
+        Whether a missing dataset is downloaded here is the ``datasets``
+        policy's decision, and by default it is not: the clients are
+        constructed with ``auto_download=False``, a missing one is reported
+        with the size and the [`fetch`][provesid.datasets.fetch] call that would
+        install it, and the search runs on the sources that are present.
         """
+        if self._closed:
+            raise DatabaseClosedError(
+                "This Search was closed; the databases it opened are no longer "
+                "available. Construct a new Search to query again."
+            )
+
         if not self._clients_initialized:
+            # Looked up here rather than held on the class, so a test that
+            # patches ``provesid.search.PubChemID`` patches what is built.
             factories: Dict[str, Any] = {
                 "chebi": ChebiSDF,
                 "comptox": CompToxID,
@@ -668,25 +1055,46 @@ class Search:
                 "zeropm": ZeroPM,
                 "chembl": CheMBL,
             }
+            auto = self.datasets == "auto"
             for key in self._SOURCE_KEYS:
-                attr, factory = f"_{key}", factories[key]
-                if getattr(self, attr) is None:
+                if self._clients[key] is None:
                     try:
-                        setattr(
-                            self,
-                            attr,
-                            factory(data_dir=self.data_dir, redownload=self.redownload),
+                        self._clients[key] = factories[key](
+                            data_dir=self.data_dir,
+                            redownload=self.redownload,
+                            auto_download=auto,
                         )
+                        self._owned_clients.append(key)
+                    except FileNotFoundError as exc:
+                        if auto:
+                            log.warning(
+                                "Could not initialise offline source %s: %s", key, exc
+                            )
+                        else:
+                            # Under datasets="present" an absent dataset is an
+                            # ordinary state rather than a failure, so the line
+                            # says what it would cost and how to install it
+                            # instead of reading like an error.
+                            dataset = DATASETS[key]
+                            log.warning(
+                                "%s is not installed, so the %s source is not "
+                                "being queried (%s to download, %s on disk). "
+                                "Install it with %s, or pass datasets='auto'.",
+                                dataset.title, key,
+                                human_bytes(dataset.download_bytes),
+                                human_bytes(dataset.resident_bytes),
+                                fetch_command(key),
+                            )
                     except Exception as exc:
-                        log.warning("Could not initialise offline source %s: %s", attr[1:], exc)
+                        log.warning("Could not initialise offline source %s: %s", key, exc)
 
             self._clients_initialized = True
 
         self.sources_available = [
-            key for key in self._SOURCE_KEYS if getattr(self, f"_{key}") is not None
+            key for key in self._SOURCE_KEYS if self._clients[key] is not None
         ]
         self.sources_unavailable = [
-            key for key in self._SOURCE_KEYS if getattr(self, f"_{key}") is None
+            key for key in self._SOURCE_KEYS if self._clients[key] is None
         ]
 
         # Corroboration drives confidence, so a missing source silently lowers
@@ -701,6 +1109,99 @@ class Search:
                 ", ".join(self._SOURCE_DISPLAY[k] for k in self.sources_unavailable),
             )
         self._availability_logged = True
+
+    def _ensure_online_clients(self) -> None:
+        """Build the web-service clients, on the first query that needs them.
+
+        Not in `_ensure_clients`, because a run whose every query is
+        answered offline should not construct them at all.  Nothing is
+        contacted here; the clients only open a connection when asked.
+        """
+        if self._online_clients_built:
+            return
+        # Looked up at call time, like the offline factories, so a test that
+        # patches ``provesid.search.PubChemAPI`` patches what is built.
+        factories: Dict[str, Any] = {
+            "pubchem_online": PubChemAPI,
+            "cactus": NCIChemicalIdentifierResolver,
+        }
+        for key in self._ONLINE_KEYS:
+            try:
+                self._clients[key] = factories[key]()
+                self._owned_clients.append(key)
+            except Exception as exc:  # pragma: no cover - constructors do no I/O
+                log.warning("Could not initialise online source %s: %s", key, exc)
+        self._online_clients_built = True
+
+    def close(self) -> None:
+        """Close the source clients this instance constructed.
+
+        A [`Search`][provesid.search.Search] may hold four SQLite databases
+        open — CompTox, PubChemID, ChEMBL and, when ``sources`` names it, ZeroPM
+        — totalling several gigabytes of mapped file.  Until this method
+        existed there was no way to hand them back short of dropping the
+        ``Search`` and waiting for the collector, which on Windows meant the
+        files stayed locked.
+
+        Only clients this instance built are closed.  One passed to the
+        constructor belongs to the caller, who may still be using it, and
+        closing it here would be closing someone else's database.
+
+        Idempotent.  After it returns, [`search`][provesid.search.Search.search] raises
+        [`DatabaseClosedError`][provesid.sqlite_client.DatabaseClosedError] rather than
+        quietly running against whatever is left.
+
+        Examples:
+            >>> s = Search("cas", show_progress=False)
+            >>> s.search("50-00-0")["name"].tolist()
+            ['formaldehyde']
+            >>> s.close()
+            >>> s.search("50-00-0")
+            Traceback (most recent call last):
+            ...
+            provesid.sqlite_client.DatabaseClosedError: ...
+        """
+        if self._closed:
+            return
+        self._closed = True
+
+        for key in self._owned_clients:
+            close = getattr(self._clients[key], "close", None)
+            if close is not None:
+                try:
+                    close()
+                except Exception as exc:  # pragma: no cover - close rarely fails
+                    log.warning("Error closing the %s client: %s", key, exc)
+            self._clients[key] = None
+
+        self._owned_clients = []
+
+    def __enter__(self) -> "Search":
+        """Return the resolver, so ``with Search(...) as s`` binds it.
+
+        Returns:
+            (Search): ``self``.
+        """
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> bool:
+        """Close the clients this instance constructed, on the way out.
+
+        Args:
+            exc_type: Exception class, or None.
+            exc_value: Exception instance, or None.
+            traceback: Traceback, or None.
+
+        Returns:
+            (bool): False --- an exception raised in the block propagates.
+        """
+        self.close()
+        return False
 
     @staticmethod
     def _validate_n_hits(n_hits: Union[int, str]) -> Union[int, str]:
@@ -727,7 +1228,7 @@ class Search:
         """Lazily create the PYOPSIN client; disable for the session on failure.
 
         Returns:
-            A :class:`~provesid.PYOPSIN` instance, or ``None`` when OPSIN is
+            A [`PYOPSIN`][provesid.opsin.PYOPSIN] instance, or ``None`` when OPSIN is
             disabled or unavailable (e.g. no Java runtime).
         """
         if not self._opsin_available:
@@ -793,10 +1294,10 @@ class Search:
 
                 - A single string — returns a one-row DataFrame.
                 - A list of strings — one row per query.
-                - A :class:`pandas.DataFrame` — the column given by ``column``
+                - A `pandas.DataFrame` — the column given by ``column``
                   is used as the query list.  All other columns are preserved
                   in the output (broadcast across the hit rows of each query).
-                - A file path (:class:`pathlib.Path` or string ending in
+                - A file path (`pathlib.Path` or string ending in
                   ``.csv`` / ``.parquet``) — read into a DataFrame first;
                   ``column`` must be provided.
 
@@ -811,31 +1312,42 @@ class Search:
                 used.
 
         Returns:
-            DataFrame with columns defined in :data:`OUTPUT_COLUMNS`.  When
-            ``n_hits == 1`` (the default) there is one row per query; otherwise
-            up to ``n_hits`` ranked rows per query, ordered by descending
-            confidence with a ``hit_rank`` column (0 = best).
+            DataFrame with columns defined in
+            [`OUTPUT_COLUMNS`][provesid.search.OUTPUT_COLUMNS].  When ``n_hits
+            == 1`` (the default) there is one row per query; otherwise up to
+            ``n_hits`` ranked rows per query, ordered by descending confidence
+            with a ``hit_rank`` column (0 = best).
 
+            ``df.attrs["preset"]`` names the preset the instance was built
+            from and ``df.attrs["settings"]`` holds the settings this call
+            ran with ([`settings`][provesid.search.Search.settings] plus this
+            call's ``n_hits``, ``min_confidence`` and ``min_source_support``),
+            so a saved frame says how it was made.
             ``df.attrs["sources_available"]`` and
             ``df.attrs["sources_unavailable"]`` record which offline sources
-            backed the run (see :attr:`sources_available`).
+            backed the run (see [`sources_available`][provesid.search.Search]).
+             With ``online_fallback=True``, ``df.attrs["online_fallbacks"]``
+            counts the queries no offline source answered, which were therefore
+            asked online, and ``df.attrs["online_resolved"]`` those of them the
+            online services answered.  Both are 0 when the fallback is off.
 
         Raises:
             ValueError: If a DataFrame/file input is given but ``column`` is
                 not specified, or if ``n_hits`` is invalid.
             FileNotFoundError: If the given file path does not exist.
 
-        Example::
-
-            s = Search("cas")
-            df = s.search(["50-00-0", "64-17-5"])
-            df = s.search(Path("compounds.csv"), column="CAS")
-
-            # Return every plausible interpretation of an ambiguous name
-            s_name = Search("name")
-            df = s_name.search("xylene", n_hits="all")
+        Examples:
+            >>> s = Search("cas", show_progress=False)
+            >>> s.search(["50-00-0", "64-17-5"])["name"].tolist()
+            ['formaldehyde', 'ethanol']
+            >>> table = pd.DataFrame({"CAS": ["50-78-2"], "batch": ["A7"]})
+            >>> s.search(table, column="CAS")[["CASRN", "batch"]].values.tolist()
+            [['50-78-2', 'A7']]
+            >>> df = s.search(Path("compounds.csv"), column="CAS")  # doctest: +SKIP
         """
         self._ensure_clients()
+        self._online_fallbacks = 0
+        self._online_resolved = 0
 
         effective_n_hits = (
             self.n_hits if n_hits is None else self._validate_n_hits(n_hits)
@@ -891,8 +1403,11 @@ class Search:
 
         # Which sources backed this frame — a run degraded by a missing source
         # should not look like a full run afterwards.
-        result_df.attrs["sources_available"] = list(self.sources_available)
-        result_df.attrs["sources_unavailable"] = list(self.sources_unavailable)
+        result_df.attrs.update(self._provenance(
+            n_hits=effective_n_hits,
+            min_confidence=effective_min_conf,
+            min_source_support=effective_min_support,
+        ))
 
         return result_df
 
@@ -929,30 +1444,34 @@ class Search:
                 per hit.
 
         Returns:
-            A copy of ``df`` with the :data:`OUTPUT_COLUMNS` added under
+            A copy of ``df`` with the
+            [`OUTPUT_COLUMNS`][provesid.search.OUTPUT_COLUMNS] added under
             ``prefix``, in the original row order and with the original index.
             When ``n_hits`` yields more than one row per query the index is a
             fresh ``RangeIndex``, since rows no longer correspond one-to-one.
-            ``df.attrs["sources_available"]`` records which offline sources backed
-            the run (see :attr:`sources_available`).
+            ``df.attrs`` carries the same provenance
+            [`search`][provesid.search.Search.search] records: the preset and
+            settings, which offline sources backed the run and, with
+            ``online_fallback=True``, how many queries went online.
 
         Raises:
             KeyError: If ``column`` is not in ``df``.
             ValueError: If ``df`` already has columns starting with ``prefix``
                 that would collide with the added ones.
 
-        Example::
-
-            import pandas as pd
-            from provesid import Search
-
-            #    8 rows, 3 distinct CAS numbers -> only 3 searches
-            df = pd.DataFrame({
-                "CAS": ["64-17-5", "64-17-5", "50-00-0", "50-78-2"],
-                "boiling_point_C": [78.4, 78.2, -19.0, 140.0],
-            })
-            out = Search("cas").enrich(df, "CAS")
-            out[["CAS", "boiling_point_C", "provesid_name", "provesid_InChIKey"]]
+        Examples:
+            >>> # 4 rows, 3 distinct CAS numbers -> only 3 searches
+            >>> df = pd.DataFrame({
+            ...     "CAS": ["64-17-5", "64-17-5", "50-00-0", "50-78-2"],
+            ...     "boiling_point_C": [78.4, 78.2, -19.0, 140.0],
+            ... })
+            >>> out = Search("cas", show_progress=False).enrich(df, "CAS")
+            >>> out[["CAS", "boiling_point_C", "provesid_name", "provesid_InChIKey"]]
+                   CAS  boiling_point_C         provesid_name            provesid_InChIKey
+            0  64-17-5             78.4               ethanol  LFQSCWFLJHTTHZ-UHFFFAOYSA-N
+            1  64-17-5             78.2               ethanol  LFQSCWFLJHTTHZ-UHFFFAOYSA-N
+            2  50-00-0            -19.0          formaldehyde  WSFSSNUMVMOOMR-UHFFFAOYSA-N
+            3  50-78-2            140.0  acetylsalicylic acid  BSYNRYMUTXBXSQ-UHFFFAOYSA-N
         """
         if column not in df.columns:
             raise KeyError(f"Column {column!r} is not in the DataFrame.")
@@ -996,8 +1515,10 @@ class Search:
             out.index = df.index
 
         # Carry the source provenance of the underlying search (merge drops attrs).
-        out.attrs["sources_available"] = list(self.sources_available)
-        out.attrs["sources_unavailable"] = list(self.sources_unavailable)
+        # Read from the instance, not results.attrs, which a stubbed search()
+        # need not set.
+        run_overrides = {} if n_hits is None else {"n_hits": self._validate_n_hits(n_hits)}
+        out.attrs.update(self._provenance(**run_overrides))
         return out
 
     # ── Input normalisation ───────────────────────────────────────────────────
@@ -1010,7 +1531,7 @@ class Search:
         """Convert the ``queries`` argument to a plain list of strings.
 
         Args:
-            queries: Raw input from :meth:`search`.
+            queries: Raw input from [`search`][provesid.search.Search.search].
             column: Column name for DataFrame/file inputs.
 
         Returns:
@@ -1063,7 +1584,8 @@ class Search:
 
         Each resolver returns ``(base_template, pool, opsin_anchor)``; this
         method clusters the pool, ranks the clusters, and truncates to
-        ``n_hits``.
+        ``n_hits``.  An empty pool is where the online fallback happens, so
+        that no resolver has to know about it (see `_online_pool`).
 
         Args:
             query: A single identifier string.
@@ -1073,7 +1595,8 @@ class Search:
                 databases before truncation.
 
         Returns:
-            List of result dicts matching :data:`OUTPUT_COLUMNS` (length 1 when
+            List of result dicts matching
+            [`OUTPUT_COLUMNS`][provesid.search.OUTPUT_COLUMNS] (length 1 when
             ``n_hits == 1``).
         """
         dispatch = {
@@ -1086,6 +1609,8 @@ class Search:
             "formula": self._resolve_formula,
         }
         base_template, pool, opsin_anchor = dispatch[self.identifier_type](query)
+        if not pool and self._ONLINE_KEYS:
+            pool = self._online_pool(query, base_template["match_method"])
         return self._finalise_hits(
             base_template,
             pool,
@@ -1105,7 +1630,8 @@ class Search:
             foundby: The identifier type used for the search.
 
         Returns:
-            Dict with all :data:`OUTPUT_COLUMNS` keys present.
+            Dict with all [`OUTPUT_COLUMNS`][provesid.search.OUTPUT_COLUMNS]
+            keys present.
         """
         return {
             "query": query,
@@ -1153,7 +1679,7 @@ class Search:
             source_key: Originating source key (e.g. ``"chebi"``, ``"opsin"``).
             origin_rank: Rank position within the source's result list (0-based).
             match_method: How the candidate was found (key into
-                :data:`_BASE_CONFIDENCE`).
+                `_BASE_CONFIDENCE`).
             query_match_score: How well the candidate matches the query in
                 [0, 1].
 
@@ -1166,32 +1692,84 @@ class Search:
         cand["query_match_score"] = float(query_match_score)
         return cand
 
-    def _pool_from_candidates_dict(
+    def _collect(
         self,
-        candidates: Dict[str, Optional[Dict[str, Any]]],
-        match_method: str,
+        kind: str,
+        value: str,
         *,
-        default_score: float = 1.0,
-    ) -> List[Dict[str, Any]]:
-        """Convert a per-source ``{key: candidate}`` dict into a tagged pool.
+        label: Optional[str] = None,
+        k: int = 1,
+        sources: Optional[List[str]] = None,
+    ) -> Hits:
+        """Ask every available source one question from the lookup table.
+
+        This is the only place a source is queried.  Each source that has a
+        client and a row for ``kind`` in
+        [`provesid.sources.LOOKUPS`][provesid.sources.LOOKUPS] is asked in
+        turn.  One that raises is logged and left out, so a broken database
+        costs its own vote rather than the query.
 
         Args:
-            candidates: Mapping of source key → candidate (or ``None``).
+            kind: Lookup kind, a key of [`LOOKUPS`][provesid.sources.LOOKUPS],
+                such as ``"cas"`` or ``"fuzzy_name"``.
+            value: The identifier to look up.
+            label: Name for a ZeroPM candidate, when it should not be
+                ``value`` (see [`Query`][provesid.sources.Query]).
+            k: Candidates to take from each source.
+            sources: Restrict the question to these source keys.  Defaults
+                to every queried source.
+
+        Returns:
+            Source key -> that source's candidates, best first.  Sources that
+            were asked and found nothing map to an empty list; sources that
+            were not asked, or failed, are absent.
+        """
+        lookups = LOOKUPS[kind]
+        query = Query(value, label=label, k=k, fuzzy_cutoff=self.fuzzy_score_cutoff)
+        hits: Hits = {}
+        for key in self._SOURCE_KEYS if sources is None else sources:
+            client, lookup = self._clients.get(key), lookups.get(key)
+            if client is None or lookup is None:
+                continue
+            try:
+                hits[key] = lookup(client, query)
+            except Exception as exc:
+                # A held host was reported once, when the hold was recorded;
+                # a batch should not repeat it for every query that follows.
+                held = getattr(exc, "held_until", None) is not None
+                log.log(
+                    logging.DEBUG if held else logging.WARNING,
+                    "%s %s lookup failed for %r: %s",
+                    self._SOURCE_DISPLAY[key], kind, value, exc,
+                )
+        return hits
+
+    def _pool(
+        self,
+        hits: Hits,
+        match_method: str,
+        score: Union[float, Callable[[Dict[str, Any]], float]] = 1.0,
+    ) -> List[Dict[str, Any]]:
+        """Flatten per-source hits into a tagged candidate pool.
+
+        Candidates are pooled in `_SOURCE_KEYS` order, then the online
+        services', and, within a source, in the order the source ranked them.
+
+        Args:
+            hits: Source key -> candidates, as `_collect` returns.
             match_method: Match method to tag each candidate with.
-            default_score: ``query_match_score`` assigned to every candidate
-                (1.0 for exact-identifier matches; a similarity for fuzzy/
-                Tanimoto matches).
+            score: The ``query_match_score`` of every candidate: a number
+                (1.0 for exact-identifier matches), or a function of the
+                candidate for matches whose quality varies, such as names.
 
         Returns:
             List of tagged candidate records.
         """
         pool: List[Dict[str, Any]] = []
-        for key in self._SOURCE_KEYS:
-            cand = candidates.get(key)
-            if cand is None:
-                continue
-            self._tag_candidate(cand, key, 0, match_method, default_score)
-            pool.append(cand)
+        for key in self._SOURCE_KEYS + self._ONLINE_KEYS:
+            for rank, cand in enumerate(hits.get(key) or []):
+                cand_score = score(cand) if callable(score) else score
+                pool.append(self._tag_candidate(cand, key, rank, match_method, cand_score))
         return pool
 
     def _name_score(self, query: str, cand: Dict[str, Any]) -> float:
@@ -1199,11 +1777,12 @@ class Search:
 
         Compares the query against the candidate ``name``, ``IUPAC_name`` and
         each individual synonym using the configured fuzzy scorer (rapidfuzz)
-        when available, falling back to :func:`text_similarity`.
+        when available, falling back to
+        [`text_similarity`][provesid.tools.text_similarity].
 
         Note:
             This is a ranking signal, not evidence of an exact match — use
-            :func:`_matches_name_exactly` for that. The default scorer is
+            `_matches_name_exactly` for that. The default scorer is
             ``ratio``; scorers with a partial-ratio term (``WRatio``,
             ``partial_ratio``) score a short name highly whenever it appears
             anywhere inside the query (``WRatio("caffiene", "ne") == 90``),
@@ -1262,54 +1841,69 @@ class Search:
         Returns:
             List of tagged candidate records (one per source that matched).
         """
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
+        return self._pool(self._collect("inchikey", inchikey), match_method, query_match_score)
 
-        if self._chebi is not None:
-            try:
-                row = self._chebi.search_by_inchikey(inchikey)
-                if row:
-                    candidates["chebi"] = candidate_from_chebi_row(row)
-            except Exception as exc:
-                log.warning("ChEBI OPSIN-InChIKey lookup failed: %s", exc)
-        if self._comptox is not None:
-            try:
-                row = self._comptox.get_by_inchikey(inchikey)
-                if row:
-                    candidates["comptox"] = candidate_from_comptox_row(row)
-            except Exception as exc:
-                log.warning("CompTox OPSIN-InChIKey lookup failed: %s", exc)
-        if self._pubchem is not None:
-            try:
-                row = self._pubchem.get_by_inchikey(inchikey)
-                if row:
-                    candidates["pubchem"] = candidate_from_pubchem_row(row)
-            except Exception as exc:
-                log.warning("PubChemID OPSIN-InChIKey lookup failed: %s", exc)
-        if self._zeropm is not None:
-            try:
-                table = self._zeropm.get_id_table_from_inchikey(inchikey)
-                candidates["zeropm"] = candidate_from_zeropm_name_table(inchikey, table)
-            except Exception as exc:
-                log.warning("ZeroPM OPSIN-InChIKey lookup failed: %s", exc)
-        if self._chembl is not None:
-            try:
-                row = self._chembl.search_by_inchikey(inchikey)
-                if row:
-                    candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
-            except Exception as exc:
-                log.warning("ChEMBL OPSIN-InChIKey lookup failed: %s", exc)
+    def _online_pool(self, query: str, match_method: str) -> List[Dict[str, Any]]:
+        """Ask the online services a query no offline source answered.
 
-        return self._pool_from_candidates_dict(
-            candidates, match_method, default_score=query_match_score
+        The question is the query itself, asked as its own identifier type:
+        the identifier types and the lookup kinds share their names.  The
+        cross-source routes the offline resolvers take (ChEMBL by the SMILES a
+        CAS lookup found, and so on) have nothing to start from here, since
+        nothing was found.  A kind with no online row --- ``formula`` ---
+        asks nothing and is not counted as a fallback.
+
+        Args:
+            query: The query, as the user gave it.
+            match_method: The resolver's match method, which the online
+                candidates are tagged with: a CAS number PubChem knows is as
+                exact a CAS match as one a database knows.
+
+        Returns:
+            The tagged candidate pool, empty when neither service answered.
+        """
+        kind = self.identifier_type
+        if not any(key in LOOKUPS[kind] for key in self._ONLINE_KEYS):
+            return []
+
+        self._ensure_online_clients()
+        self._online_fallbacks += 1
+        log.debug(
+            "No offline source answered %s %r; asking %s.", kind, query,
+            ", ".join(self._SOURCE_DISPLAY[key] for key in self._ONLINE_KEYS),
         )
+
+        k = self.top_k_per_source if kind == "name" else 1
+        hits = self._collect(kind, query, k=k, sources=self._ONLINE_KEYS)
+        score: Union[float, Callable[[Dict[str, Any]], float]] = (
+            (lambda cand: self._name_score(query, cand)) if kind == "name" else 1.0
+        )
+        pool = self._pool(hits, match_method, score)
+
+        if pool:
+            self._online_resolved += 1
+        log.debug(
+            "Online fallback for %r: %s.", query,
+            ", ".join(
+                f"{self._SOURCE_DISPLAY[key]} {len(hits[key])}" for key in hits
+            ) or "no service answered",
+        )
+        return pool
 
     # ── CAS resolver ─────────────────────────────────────────────────────────
 
     def _resolve_cas(self, cas: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """Resolve a CAS Registry Number into a unified identifier record.
 
-        Queries ChEBI → CompTox → PubChemID (→ ZeroPM when ``use_zeropm=True``)
-        with waterfall priority, then enriches via ChEMBL.
+        Queries ChEBI, CompTox and PubChemID (and ZeroPM when ``sources``
+        names it) by CAS number.  ChEMBL records no CAS numbers,
+        so it is asked for the first SMILES the others found.
+
+        The template leaves ``CASRN`` empty, so a hit reports the compound's
+        current number, as a name or structure search does, and not
+        necessarily the one queried: atrazine found by the retired
+        ``39400-72-1`` is reported as ``1912-24-9``. The number queried stays
+        in ``query``.
 
         Args:
             cas: CAS Registry Number string.
@@ -1319,57 +1913,13 @@ class Search:
         """
         result = self._empty_result(cas, "CASRN")
         result["match_method"] = "exact_cas"
-        result["CASRN"] = cas
 
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
+        hits = self._collect("cas", cas)
+        smiles = _first_smiles_from_candidates(hits)
+        if not is_missing(smiles):
+            hits.update(self._collect("smiles", str(smiles), sources=["chembl"]))
 
-        # ChEBI
-        if self._chebi is not None:
-            try:
-                rows = self._chebi.search_by_cas(cas)
-                if rows:
-                    candidates["chebi"] = candidate_from_chebi_row(rows[0])
-            except Exception as exc:
-                log.warning("ChEBI CAS lookup failed for %r: %s", cas, exc)
-
-        # CompTox
-        if self._comptox is not None:
-            try:
-                row = self._comptox.get_by_casrn(cas)
-                if row:
-                    candidates["comptox"] = candidate_from_comptox_row(row)
-            except Exception as exc:
-                log.warning("CompTox CAS lookup failed for %r: %s", cas, exc)
-
-        # PubChemID
-        if self._pubchem is not None:
-            try:
-                row = self._pubchem.get_by_cas(cas)
-                if row:
-                    candidates["pubchem"] = candidate_from_pubchem_row(row)
-            except Exception as exc:
-                log.warning("PubChemID CAS lookup failed for %r: %s", cas, exc)
-
-        # ZeroPM
-        if self._zeropm is not None:
-            try:
-                table = self._zeropm.get_id_table_from_cas(cas)
-                candidates["zeropm"] = candidate_from_zeropm_name_table(cas, table)
-            except Exception as exc:
-                log.warning("ZeroPM CAS lookup failed for %r: %s", cas, exc)
-
-        # ChEMBL — enrichment via SMILES after primary sources
-        smiles_so_far = _first_smiles_from_candidates(candidates)
-        if self._chembl is not None and not is_missing(smiles_so_far):
-            try:
-                row = self._chembl.search_by_smiles(str(smiles_so_far))
-                if row:
-                    candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
-            except Exception as exc:
-                log.warning("ChEMBL CAS enrichment failed for %r: %s", cas, exc)
-
-        pool = self._pool_from_candidates_dict(candidates, "exact_cas")
-        return result, pool, None
+        return result, self._pool(hits, "exact_cas"), None
 
     # ── Name resolver ─────────────────────────────────────────────────────────
 
@@ -1421,7 +1971,7 @@ class Search:
         Pulls up to ``self.top_k_per_source`` candidates from each source.
         When ``self.fuzzy`` is enabled and the exact pass yields no strong
         match, the search is widened with non-exact matching and — only when
-        ``use_zeropm=True`` — ZeroPM's fuzzy ``get_id_table_from_similar_name``.
+        ``sources`` names ZeroPM — its fuzzy ``get_id_table_from_similar_name``.
 
         Args:
             name: Chemical name to search.
@@ -1430,207 +1980,39 @@ class Search:
             List of candidate records tagged with ``_source_key``,
             ``_origin_rank``, ``_match_method`` and ``query_match_score``.
         """
-        pool: List[Dict[str, Any]] = []
         k = self.top_k_per_source
-
-        def add(cand, source_key, rank, method):
-            if cand is None:
-                return
-            self._tag_candidate(cand, source_key, rank, method, self._name_score(name, cand))
-            pool.append(cand)
-
-        # ── Exact pass ──────────────────────────────────────────────────────
-        if self._chebi is not None:
-            try:
-                rows = self._chebi.search_by_name(name, exact=True) or []
-                if not rows:
-                    rows = self._chebi.search_by_synonym(name, exact=True) or []
-                for rank, row in enumerate(rows[:k]):
-                    add(candidate_from_chebi_row(row), "chebi", rank, "exact_name")
-            except Exception as exc:
-                log.warning("ChEBI name lookup failed for %r: %s", name, exc)
-
-        if self._comptox is not None:
-            try:
-                rows = self._comptox.search_by_name(name, exact=True, limit=k) or []
-                if not rows:
-                    row = self._comptox.get_by_name(name)
-                    rows = [row] if row else []
-                for rank, row in enumerate(rows[:k]):
-                    add(candidate_from_comptox_row(row), "comptox", rank, "exact_name")
-            except Exception as exc:
-                log.warning("CompTox name lookup failed for %r: %s", name, exc)
-
-        if self._pubchem is not None:
-            try:
-                rows = self._pubchem.search_by_name(name, exact=True, limit=k) or []
-                for rank, row in enumerate(rows[:k]):
-                    add(candidate_from_pubchem_row(row), "pubchem", rank, "exact_name")
-            except Exception as exc:
-                log.warning("PubChemID name lookup failed for %r: %s", name, exc)
-
-        if self._zeropm is not None:
-            try:
-                table = self._zeropm.get_id_table_from_name(name)
-                add(candidate_from_zeropm_name_table(name, table), "zeropm", 0, "exact_name")
-            except Exception as exc:
-                log.warning("ZeroPM name lookup failed for %r: %s", name, exc)
-
-        if self._chembl is not None:
-            try:
-                rows = self._chembl.search_by_name(name, limit=k, exact=True) or []
-                for rank, row in enumerate(rows[:k]):
-                    add(candidate_from_chembl_row(row, self._chembl), "chembl", rank, "exact_name")
-            except Exception as exc:
-                log.warning("ChEMBL name lookup failed for %r: %s", name, exc)
+        pool = self._pool(
+            self._collect("name", name, k=k),
+            "exact_name",
+            lambda cand: self._name_score(name, cand),
+        )
 
         # ── Fuzzy widening ──────────────────────────────────────────────────
         # "Strong" means a candidate is genuinely *called* the query name, not
         # merely that it scored highly: WRatio gives a substring hit 85.7, so a
         # score-based test lets one spurious synonym match suppress the widening
         # that would find the right compound.
-        cutoff = self.fuzzy_score_cutoff / 100.0
         strong = any(_matches_name_exactly(name, c) for c in pool)
         if self.fuzzy and not strong:
-            norm_name = self._normalize_name(name)
+            # ZeroPM is the only source that does true fuzzy *retrieval*, and
+            # reports the similarity it matched on; that score is kept rather
+            # than re-derived from the name ZeroPM's candidate was given.  It
+            # is off unless sources names it, which is the cost of dropping it:
+            # a typo that shares no substring with the real name stays
+            # unresolved.
+            def fuzzy_score(cand: Dict[str, Any]) -> float:
+                reported = cand.get("query_match_score")
+                return reported if reported is not None else self._name_score(name, cand)
 
-            def add_fuzzy(cand, source_key, rank, score=None):
-                """Add a fuzzy candidate, keeping only those at or above cutoff.
-
-                ``score`` overrides the name-similarity estimate; pass it when
-                the source already reported a true similarity, so it is not
-                re-derived from a candidate whose recorded name is the query.
-                """
-                if cand is None:
-                    return
-                if score is None:
-                    score = self._name_score(name, cand)
-                if score < cutoff:
-                    return
-                self._tag_candidate(cand, source_key, rank, "fuzzy_name", score)
-                pool.append(cand)
-
-            if self._chebi is not None:
-                try:
-                    rows = self._chebi.search_by_name(norm_name, exact=False) or []
-                    if not rows:
-                        rows = self._chebi.search_by_synonym(norm_name, exact=False) or []
-                    for rank, row in enumerate(rows[:k]):
-                        add_fuzzy(candidate_from_chebi_row(row), "chebi", rank)
-                except Exception as exc:
-                    log.warning("ChEBI fuzzy name lookup failed for %r: %s", name, exc)
-
-            if self._comptox is not None:
-                try:
-                    rows = self._comptox.search_by_name(norm_name, exact=False, limit=k) or []
-                    for rank, row in enumerate(rows[:k]):
-                        add_fuzzy(candidate_from_comptox_row(row), "comptox", rank)
-                except Exception as exc:
-                    log.warning("CompTox fuzzy name lookup failed for %r: %s", name, exc)
-
-            if self._pubchem is not None:
-                try:
-                    rows = self._pubchem.search_by_name(norm_name, exact=False, limit=k) or []
-                    for rank, row in enumerate(rows[:k]):
-                        add_fuzzy(candidate_from_pubchem_row(row), "pubchem", rank)
-                except Exception as exc:
-                    log.warning("PubChemID fuzzy name lookup failed for %r: %s", name, exc)
-
-            # ZeroPM is the only source that does true fuzzy *retrieval* (the
-            # others are substring-matched with exact=False), so it is the one
-            # that can reach a typo like "asprin" -> "aspirin".  It is off
-            # unless use_zeropm=True, which is the cost of dropping it: a typo
-            # that shares no substring with the real name stays unresolved.
-            if self._zeropm is not None:
-                try:
-                    table = self._zeropm.get_id_table_from_similar_name(
-                        norm_name,
-                        number_of_results=k,
-                        score_cutoff=self.fuzzy_score_cutoff,
-                    )
-                    if table is not None and not table.empty:
-                        # Label the candidate with what ZeroPM actually matched,
-                        # not with the query, and use its reported similarity.
-                        matched_name = str(table["matched_name"].iloc[0])
-                        matched_score = float(table["match_score"].iloc[0]) / 100.0
-                        add_fuzzy(
-                            candidate_from_zeropm_name_table(matched_name, table),
-                            "zeropm",
-                            0,
-                            score=matched_score,
-                        )
-                except Exception as exc:
-                    log.warning("ZeroPM fuzzy name lookup failed for %r: %s", name, exc)
-
-            if self._chembl is not None:
-                try:
-                    rows = self._chembl.search_by_name(norm_name, limit=k, exact=False) or []
-                    for rank, row in enumerate(rows[:k]):
-                        add_fuzzy(candidate_from_chembl_row(row, self._chembl), "chembl", rank)
-                except Exception as exc:
-                    log.warning("ChEMBL fuzzy name lookup failed for %r: %s", name, exc)
+            cutoff = self.fuzzy_score_cutoff / 100.0
+            widened = self._pool(
+                self._collect("fuzzy_name", self._normalize_name(name), k=k),
+                "fuzzy_name",
+                fuzzy_score,
+            )
+            pool.extend(c for c in widened if c["query_match_score"] >= cutoff)
 
         return pool
-
-    def _candidates_from_name(
-        self, name: str, exact: bool = True
-    ) -> Dict[str, Optional[Dict[str, Any]]]:
-        """Build candidates dict from a name query across all sources.
-
-        Args:
-            name: Chemical name to search.
-            exact: Whether to use exact matching.
-
-        Returns:
-            Dict mapping source keys to candidate records.
-        """
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
-
-        if self._chebi is not None:
-            try:
-                rows = self._chebi.search_by_name(name, exact=exact)
-                if not rows:
-                    rows = self._chebi.search_by_synonym(name, exact=exact)
-                if rows:
-                    candidates["chebi"] = candidate_from_chebi_row(rows[0])
-            except Exception as exc:
-                log.warning("ChEBI name lookup failed for %r: %s", name, exc)
-
-        if self._comptox is not None:
-            try:
-                row = self._comptox.get_by_name(name)
-                if row is None:
-                    matches = self._comptox.search_by_name(name, exact=False, limit=5)
-                    row = matches[0] if matches else None
-                if row:
-                    candidates["comptox"] = candidate_from_comptox_row(row)
-            except Exception as exc:
-                log.warning("CompTox name lookup failed for %r: %s", name, exc)
-
-        if self._pubchem is not None:
-            try:
-                rows = self._pubchem.search_by_name(name, exact=exact, limit=5)
-                if rows:
-                    candidates["pubchem"] = candidate_from_pubchem_row(rows[0])
-            except Exception as exc:
-                log.warning("PubChemID name lookup failed for %r: %s", name, exc)
-
-        if self._zeropm is not None:
-            try:
-                table = self._zeropm.get_id_table_from_name(name)
-                candidates["zeropm"] = candidate_from_zeropm_name_table(name, table)
-            except Exception as exc:
-                log.warning("ZeroPM name lookup failed for %r: %s", name, exc)
-
-        if self._chembl is not None:
-            try:
-                rows = self._chembl.search_by_name(name, limit=5)
-                if rows:
-                    candidates["chembl"] = candidate_from_chembl_row(rows[0], self._chembl)
-            except Exception as exc:
-                log.warning("ChEMBL name lookup failed for %r: %s", name, exc)
-
-        return candidates
 
     # ── SMILES resolver ───────────────────────────────────────────────────────
 
@@ -1638,9 +2020,9 @@ class Search:
         """Resolve a SMILES string into a unified identifier record.
 
         Canonicalises the input, derives an InChIKey, and queries sources by
-        InChIKey (ChEBI) or canonical SMILES.  Falls back to Tanimoto
-        similarity search when ``self.similarity_threshold > 0`` and no exact
-        match is found.
+        SMILES (retrying CompTox and PubChemID with the canonical form) and
+        ChEBI by the InChIKey.  Falls back to Tanimoto similarity search when
+        ``self.similarity_threshold > 0`` and no exact match is found.
 
         Args:
             smiles: SMILES string.
@@ -1656,77 +2038,30 @@ class Search:
         canonical = norm["canonical_smiles"] or smiles
         inchikey = norm["inchikey"] or inchikey_from_smiles(smiles)
 
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
-        match_method = "exact_smiles"
-
-        # ChEBI — lookup by InChIKey
-        if self._chebi is not None and not is_missing(inchikey):
-            try:
-                row = self._chebi.search_by_inchikey(str(inchikey))
-                if row:
-                    candidates["chebi"] = candidate_from_chebi_row(row)
-            except Exception as exc:
-                log.warning("ChEBI SMILES lookup failed for %r: %s", smiles, exc)
-
-        # CompTox
-        if self._comptox is not None:
-            try:
-                row = self._comptox.get_by_smiles(smiles)
-                if row is None and not is_missing(canonical):
-                    row = self._comptox.get_by_smiles(canonical)
-                if row:
-                    candidates["comptox"] = candidate_from_comptox_row(row)
-            except Exception as exc:
-                log.warning("CompTox SMILES lookup failed for %r: %s", smiles, exc)
-
-        # PubChemID
-        if self._pubchem is not None:
-            try:
-                row = self._pubchem.get_by_smiles(smiles)
-                if row is None and not is_missing(canonical):
-                    row = self._pubchem.get_by_smiles(canonical)
-                if row:
-                    candidates["pubchem"] = candidate_from_pubchem_row(row)
-            except Exception as exc:
-                log.warning("PubChemID SMILES lookup failed for %r: %s", smiles, exc)
-
-        # ZeroPM
-        if self._zeropm is not None:
-            try:
-                candidates["zeropm"] = candidate_from_zeropm_smiles(smiles, self._zeropm)
-            except Exception as exc:
-                log.warning("ZeroPM SMILES lookup failed for %r: %s", smiles, exc)
-
-        # ChEMBL
-        if self._chembl is not None:
-            try:
-                row = self._chembl.search_by_smiles(smiles)
-                if row:
-                    candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
-            except Exception as exc:
-                log.warning("ChEMBL SMILES lookup failed for %r: %s", smiles, exc)
+        hits = self._collect("smiles", smiles)
+        if canonical != smiles:
+            retry = [key for key in ("comptox", "pubchem") if hits.get(key) == []]
+            hits.update(self._collect("smiles", canonical, sources=retry))
+        if not is_missing(inchikey):
+            hits.update(self._collect("inchikey", str(inchikey), sources=["chebi"]))
 
         # Tanimoto similarity fallback
-        if not _any_candidate(candidates) and self.similarity_threshold > 0:
-            sim_candidates, tanimoto_score = self._tanimoto_candidates(smiles)
-            if _any_candidate(sim_candidates):
+        if not _any_candidate(hits) and self.similarity_threshold > 0:
+            similar, tanimoto_score = self._tanimoto_candidates(smiles)
+            if _any_candidate(similar):
                 score = tanimoto_score if tanimoto_score is not None else 0.0
-                pool = self._pool_from_candidates_dict(
-                    sim_candidates, "tanimoto", default_score=score
-                )
-                return result, pool, None
+                return result, self._pool(similar, "tanimoto", score), None
 
-        pool = self._pool_from_candidates_dict(candidates, match_method)
-        return result, pool, None
+        return result, self._pool(hits, "exact_smiles"), None
 
     # ── InChI resolver ────────────────────────────────────────────────────────
 
     def _resolve_inchi(self, inchi: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """Resolve an InChI string into a unified identifier record.
 
-        Converts the InChI to InChIKey via RDKit and delegates to
-        :meth:`_resolve_inchikey`.  Also queries sources that store InChI
-        directly (ChEBI, CompTox, PubChemID).
+        Queries the sources that store InChI directly (ChEBI, PubChemID and,
+        when enabled, ZeroPM), then CompTox by the InChIKey and ChEMBL by the
+        SMILES that RDKit derives from the InChI.
 
         Args:
             inchi: InChI string (must start with ``"InChI="``).
@@ -1756,54 +2091,13 @@ class Search:
         if not is_missing(smiles):
             result["SMILES"] = smiles
 
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
+        hits = self._collect("inchi", inchi)
+        if not is_missing(inchikey):
+            hits.update(self._collect("inchikey", str(inchikey), sources=["comptox"]))
+        if not is_missing(smiles):
+            hits.update(self._collect("smiles", str(smiles), sources=["chembl"]))
 
-        # ChEBI
-        if self._chebi is not None:
-            try:
-                row = self._chebi.search_by_inchi(inchi)
-                if row:
-                    candidates["chebi"] = candidate_from_chebi_row(row)
-            except Exception as exc:
-                log.warning("ChEBI InChI lookup failed for %r: %s", inchi[:40], exc)
-
-        # CompTox — lookup by InChIKey if derived
-        if self._comptox is not None and not is_missing(inchikey):
-            try:
-                row = self._comptox.get_by_inchikey(str(inchikey))
-                if row:
-                    candidates["comptox"] = candidate_from_comptox_row(row)
-            except Exception as exc:
-                log.warning("CompTox InChI lookup failed: %s", exc)
-
-        # PubChemID
-        if self._pubchem is not None:
-            try:
-                row = self._pubchem.get_by_inchi(inchi)
-                if row:
-                    candidates["pubchem"] = candidate_from_pubchem_row(row)
-            except Exception as exc:
-                log.warning("PubChemID InChI lookup failed: %s", exc)
-
-        # ZeroPM
-        if self._zeropm is not None:
-            try:
-                table = self._zeropm.get_id_table_from_inchi(inchi)
-                candidates["zeropm"] = candidate_from_zeropm_name_table(inchi, table)
-            except Exception as exc:
-                log.warning("ZeroPM InChI lookup failed: %s", exc)
-
-        # ChEMBL — via SMILES
-        if self._chembl is not None and not is_missing(smiles):
-            try:
-                row = self._chembl.search_by_smiles(str(smiles))
-                if row:
-                    candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
-            except Exception as exc:
-                log.warning("ChEMBL InChI lookup failed: %s", exc)
-
-        pool = self._pool_from_candidates_dict(candidates, "inchi")
-        return result, pool, None
+        return result, self._pool(hits, "inchi"), None
 
     # ── InChIKey resolver ─────────────────────────────────────────────────────
 
@@ -1812,7 +2106,8 @@ class Search:
 
         Queries all offline sources by InChIKey.  Falls back to 14-character
         skeleton matching when ``self.inchikey_skeleton`` is True and no exact
-        match is found.
+        match is found.  The skeleton is the connectivity block, so it finds
+        the compound regardless of stereochemistry, isotopes or charge.
 
         Args:
             inchikey: Full 27-character InChIKey
@@ -1825,62 +2120,15 @@ class Search:
         result["match_method"] = "exact_inchikey"
         result["InChIKey"] = inchikey
 
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
+        hits = self._collect("inchikey", inchikey)
         match_method = "exact_inchikey"
 
-        # ChEBI
-        if self._chebi is not None:
-            try:
-                row = self._chebi.search_by_inchikey(inchikey)
-                if row:
-                    candidates["chebi"] = candidate_from_chebi_row(row)
-            except Exception as exc:
-                log.warning("ChEBI InChIKey lookup failed for %r: %s", inchikey, exc)
+        if not _any_candidate(hits) and self.inchikey_skeleton:
+            skeleton_hits = self._collect("inchikey_skeleton", inchikey)
+            if _any_candidate(skeleton_hits):
+                hits, match_method = skeleton_hits, "inchikey_skeleton"
 
-        # CompTox
-        if self._comptox is not None:
-            try:
-                row = self._comptox.get_by_inchikey(inchikey)
-                if row:
-                    candidates["comptox"] = candidate_from_comptox_row(row)
-            except Exception as exc:
-                log.warning("CompTox InChIKey lookup failed for %r: %s", inchikey, exc)
-
-        # PubChemID
-        if self._pubchem is not None:
-            try:
-                row = self._pubchem.get_by_inchikey(inchikey)
-                if row:
-                    candidates["pubchem"] = candidate_from_pubchem_row(row)
-            except Exception as exc:
-                log.warning("PubChemID InChIKey lookup failed for %r: %s", inchikey, exc)
-
-        # ZeroPM
-        if self._zeropm is not None:
-            try:
-                table = self._zeropm.get_id_table_from_inchikey(inchikey)
-                candidates["zeropm"] = candidate_from_zeropm_name_table(inchikey, table)
-            except Exception as exc:
-                log.warning("ZeroPM InChIKey lookup failed for %r: %s", inchikey, exc)
-
-        # ChEMBL
-        if self._chembl is not None:
-            try:
-                row = self._chembl.search_by_inchikey(inchikey)
-                if row:
-                    candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
-            except Exception as exc:
-                log.warning("ChEMBL InChIKey lookup failed for %r: %s", inchikey, exc)
-
-        # InChIKey skeleton fallback
-        if not _any_candidate(candidates) and self.inchikey_skeleton:
-            skel_candidates, skeleton = self._skeleton_candidates(inchikey)
-            if _any_candidate(skel_candidates):
-                candidates = skel_candidates
-                match_method = "inchikey_skeleton"
-
-        pool = self._pool_from_candidates_dict(candidates, match_method)
-        return result, pool, None
+        return result, self._pool(hits, match_method), None
 
     # ── DTXSID resolver ───────────────────────────────────────────────────────
 
@@ -1900,59 +2148,16 @@ class Search:
         result["match_method"] = "dtxsid"
         result["DTXSID"] = dtxsid
 
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
-
-        # CompTox primary
-        if self._comptox is not None:
-            try:
-                row = self._comptox.get_by_dtxsid(dtxsid)
-                if row:
-                    candidates["comptox"] = candidate_from_comptox_row(row)
-            except Exception as exc:
-                log.warning("CompTox DTXSID lookup failed for %r: %s", dtxsid, exc)
-
-        # Cross-reference other sources by InChIKey
-        comptox_cand = candidates.get("comptox")
-        inchikey = comptox_cand.get("InChIKey") if comptox_cand else None
-
+        hits = self._collect("dtxsid", dtxsid)
+        comptox = hits.get("comptox") or []
+        inchikey = comptox[0].get("InChIKey") if comptox else None
         if not is_missing(inchikey):
-            # ChEBI
-            if self._chebi is not None:
-                try:
-                    row = self._chebi.search_by_inchikey(str(inchikey))
-                    if row:
-                        candidates["chebi"] = candidate_from_chebi_row(row)
-                except Exception as exc:
-                    log.warning("ChEBI DTXSID cross-ref failed: %s", exc)
+            others = [key for key in self._SOURCE_KEYS if key != "comptox"]
+            hits.update(
+                self._collect("inchikey", str(inchikey), label=dtxsid, sources=others)
+            )
 
-            # PubChemID
-            if self._pubchem is not None:
-                try:
-                    row = self._pubchem.get_by_inchikey(str(inchikey))
-                    if row:
-                        candidates["pubchem"] = candidate_from_pubchem_row(row)
-                except Exception as exc:
-                    log.warning("PubChemID DTXSID cross-ref failed: %s", exc)
-
-            # ZeroPM
-            if self._zeropm is not None:
-                try:
-                    table = self._zeropm.get_id_table_from_inchikey(str(inchikey))
-                    candidates["zeropm"] = candidate_from_zeropm_name_table(dtxsid, table)
-                except Exception as exc:
-                    log.warning("ZeroPM DTXSID cross-ref failed: %s", exc)
-
-            # ChEMBL
-            if self._chembl is not None:
-                try:
-                    row = self._chembl.search_by_inchikey(str(inchikey))
-                    if row:
-                        candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
-                except Exception as exc:
-                    log.warning("ChEMBL DTXSID cross-ref failed: %s", exc)
-
-        pool = self._pool_from_candidates_dict(candidates, "dtxsid")
-        return result, pool, None
+        return result, self._pool(hits, "dtxsid"), None
 
     # ── Formula resolver ──────────────────────────────────────────────────────
 
@@ -1976,106 +2181,12 @@ class Search:
         result["match_method"] = "formula"
         result["molecular_formula"] = formula
 
-        pool: List[Dict[str, Any]] = []
-        k = self.top_k_per_source
-
-        def add(cand, source_key, rank):
-            if cand is None:
-                return
-            # Completeness drives the query_match_score for formula matches.
-            score = self._completeness_score(cand)
-            self._tag_candidate(cand, source_key, rank, "formula", score)
-            pool.append(cand)
-
-        if self._chebi is not None:
-            try:
-                rows = self._chebi.search_by_formula(formula) or []
-                for rank, row in enumerate(_rank_rows_by_completeness(rows)[:k]):
-                    add(candidate_from_chebi_row(row), "chebi", rank)
-            except Exception as exc:
-                log.warning("ChEBI formula lookup failed for %r: %s", formula, exc)
-
-        if self._comptox is not None:
-            try:
-                rows = self._comptox.search_by_formula(formula) or []
-                for rank, row in enumerate(_rank_rows_by_completeness(rows)[:k]):
-                    add(candidate_from_comptox_row(row), "comptox", rank)
-            except Exception as exc:
-                log.warning("CompTox formula lookup failed for %r: %s", formula, exc)
-
-        if self._pubchem is not None:
-            try:
-                rows = self._pubchem.search_by_formula(formula) or []
-                for rank, row in enumerate(_rank_rows_by_completeness(rows)[:k]):
-                    add(candidate_from_pubchem_row(row), "pubchem", rank)
-            except Exception as exc:
-                log.warning("PubChemID formula lookup failed for %r: %s", formula, exc)
-
-        return result, pool, None
+        # Completeness drives the query_match_score for formula matches, which
+        # have no name to compare against.
+        hits = self._collect("formula", formula, k=self.top_k_per_source)
+        return result, self._pool(hits, "formula", self._completeness_score), None
 
     # ── Fuzzy name search ─────────────────────────────────────────────────────
-
-    def _fuzzy_name_candidates(
-        self, name: str
-    ) -> Tuple[Dict[str, Optional[Dict[str, Any]]], Optional[float]]:
-        """Search for a chemical name using fuzzy matching via rapidfuzz.
-
-        Normalises the query name, queries each source for fuzzy name matches,
-        and returns the best candidate per source plus the overall fuzzy score.
-
-        Args:
-            name: Chemical name to search (may contain typos or variations).
-
-        Returns:
-            Tuple of:
-            - Dict mapping source keys to the best fuzzy-matched candidate.
-            - Best fuzzy score in [0, 1], or ``None`` if rapidfuzz is
-              unavailable.
-        """
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
-
-        if not RAPIDFUZZ_AVAILABLE or _rfprocess is None:
-            log.warning("rapidfuzz not available; fuzzy name matching skipped.")
-            return candidates, None
-
-        norm_name = self._normalize_name(name)
-        best_score: float = 0.0
-
-        # ZeroPM has a built-in similar-name method
-        if self._zeropm is not None:
-            try:
-                results = self._zeropm.query_similar_name(norm_name)
-                if results is not None and not (
-                    isinstance(results, pd.DataFrame) and results.empty
-                ):
-                    # query_similar_name may return a list or DataFrame
-                    if isinstance(results, pd.DataFrame) and not results.empty:
-                        table = results
-                    else:
-                        table = None
-                    if table is not None:
-                        cand = candidate_from_zeropm_name_table(name, table)
-                        if cand:
-                            candidates["zeropm"] = cand
-                            best_score = max(best_score, 0.7)
-            except Exception as exc:
-                log.warning("ZeroPM fuzzy name search failed for %r: %s", name, exc)
-
-        # For other sources we use rapidfuzz directly against their search methods
-        # (they accept fuzzy/partial inputs via exact=False)
-        fuzzy_candidates = self._candidates_from_name(norm_name, exact=False)
-        for key, cand in fuzzy_candidates.items():
-            if cand is not None and candidates.get(key) is None:
-                candidates[key] = cand
-
-        # Compute best name similarity score across all found candidates
-        for cand in candidates.values():
-            if cand is None:
-                continue
-            sim = text_similarity(name, cand.get("name"))
-            best_score = max(best_score, sim)
-
-        return candidates, best_score if best_score > 0 else None
 
     def _normalize_name(self, name: str) -> str:
         """Normalise a chemical name for fuzzy matching.
@@ -2103,7 +2214,7 @@ class Search:
 
     def _tanimoto_candidates(
         self, query_smiles: str
-    ) -> Tuple[Dict[str, Optional[Dict[str, Any]]], Optional[float]]:
+    ) -> Tuple[Hits, Optional[float]]:
         """Find structurally similar compounds using Tanimoto similarity.
 
         Computes a Morgan fingerprint for ``query_smiles`` and queries each
@@ -2115,7 +2226,9 @@ class Search:
 
         Returns:
             Tuple of:
-            - Candidates dict (best match per source at or above threshold).
+
+            - Source key -> candidates (the best match per source at or
+              above threshold).
             - Best Tanimoto score observed, or ``None`` if RDKit is unavailable.
 
         Note:
@@ -2123,7 +2236,7 @@ class Search:
             future Parquet + vectorised fingerprint approach will be faster for
             large datasets.
         """
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
+        candidates: Hits = {}
 
         if not RDKIT_AVAILABLE or Chem is None or DataStructs is None or AllChem is None:
             log.warning("RDKit not available; Tanimoto search skipped.")
@@ -2153,97 +2266,34 @@ class Search:
                 return 0.0
 
         # ChEMBL provides a native similarity search
-        if self._chembl is not None:
+        chembl = self._clients.get("chembl")
+        if chembl is not None:
             try:
-                row = self._chembl.search_by_smiles(query_smiles)
+                row = chembl.search_by_smiles(query_smiles)
                 if row:
                     t = _tanimoto_from_smiles(row.get("canonical_smiles"))
                     if t >= self.similarity_threshold:
-                        candidates["chembl"] = candidate_from_chembl_row(row, self._chembl)
+                        candidates["chembl"] = [candidate_from_chembl_row(row, chembl)]
                         best_tanimoto = max(best_tanimoto, t)
             except Exception as exc:
                 log.warning("ChEMBL Tanimoto search failed: %s", exc)
 
         # PubChemID — try canonical SMILES lookup as a proxy
-        if self._pubchem is not None:
+        pubchem = self._clients.get("pubchem")
+        if pubchem is not None:
             try:
                 norm = normalize_structure(query_smiles)
                 if not is_missing(norm["canonical_smiles"]):
-                    row = self._pubchem.get_by_smiles(norm["canonical_smiles"])
+                    row = pubchem.get_by_smiles(norm["canonical_smiles"])
                     if row:
                         t = _tanimoto_from_smiles(row.get("smiles") or row.get("canonical_smiles"))
                         if t >= self.similarity_threshold:
-                            candidates["pubchem"] = candidate_from_pubchem_row(row)
+                            candidates["pubchem"] = [candidate_from_pubchem_row(row)]
                             best_tanimoto = max(best_tanimoto, t)
             except Exception as exc:
                 log.warning("PubChemID Tanimoto search failed: %s", exc)
 
         return candidates, best_tanimoto if best_tanimoto > 0 else None
-
-    # ── InChIKey skeleton search ──────────────────────────────────────────────
-
-    def _skeleton_candidates(
-        self, inchikey: str
-    ) -> Tuple[Dict[str, Optional[Dict[str, Any]]], str]:
-        """Search by the 14-character InChIKey skeleton (connectivity layer).
-
-        The first block of an InChIKey encodes the molecular skeleton.
-        Matching on this prefix finds compounds with the same connectivity
-        regardless of stereochemistry, isotopes, or charge.
-
-        Args:
-            inchikey: Full 27-character InChIKey.
-
-        Returns:
-            Tuple of:
-            - Candidates dict populated from skeleton matches.
-            - The 14-character skeleton prefix used.
-
-        Example::
-
-            candidates, skeleton = s._skeleton_candidates(
-                "BSYNRYMUTXBXSQ-UHFFFAOYSA-N"
-            )
-            # skeleton == "BSYNRYMUTXBXSQ"
-        """
-        skeleton = inchikey[:14]
-        candidates: Dict[str, Optional[Dict[str, Any]]] = {k: None for k in self._SOURCE_KEYS}
-
-        # CompTox — SQL LIKE query on inchikey column
-        if self._comptox is not None:
-            try:
-                row = self._comptox.get_by_inchikey(inchikey)
-                if row is None:
-                    # Partial-match: try all keys that start with skeleton
-                    rows = _comptox_skeleton_search(self._comptox, skeleton)
-                    row = rows[0] if rows else None
-                if row:
-                    candidates["comptox"] = candidate_from_comptox_row(row)
-            except Exception as exc:
-                log.warning("CompTox skeleton search failed for %r: %s", skeleton, exc)
-
-        # PubChemID
-        if self._pubchem is not None:
-            try:
-                row = self._pubchem.get_by_inchikey(inchikey)
-                if row is None:
-                    rows = _pubchem_skeleton_search(self._pubchem, skeleton)
-                    row = rows[0] if rows else None
-                if row:
-                    candidates["pubchem"] = candidate_from_pubchem_row(row)
-            except Exception as exc:
-                log.warning("PubChemID skeleton search failed for %r: %s", skeleton, exc)
-
-        # ChEBI — index-based prefix scan
-        if self._chebi is not None:
-            try:
-                rows = _chebi_skeleton_search(self._chebi, skeleton)
-                if rows:
-                    candidates["chebi"] = candidate_from_chebi_row(rows[0])
-            except Exception as exc:
-                log.warning("ChEBI skeleton search failed for %r: %s", skeleton, exc)
-
-        return candidates, skeleton
 
     # ── Source details ────────────────────────────────────────────────────────
 
@@ -2253,7 +2303,8 @@ class Search:
         """Build a per-source traceability record from the candidates dict.
 
         For each source, records whether it was found and which output fields
-        it has non-null values for.
+        it has non-null values for.  The online services are listed only when
+        ``online_fallback=True``.
 
         Args:
             candidates: Mapping of source key → candidate record.
@@ -2283,7 +2334,7 @@ class Search:
         }
 
         details: Dict[str, Dict[str, Any]] = {}
-        for key in self._SOURCE_KEYS:
+        for key in self._SOURCE_KEYS + self._ONLINE_KEYS:
             display = self._SOURCE_DISPLAY[key]
             cand = candidates.get(key)
             if cand is None:
@@ -2333,7 +2384,7 @@ class Search:
         For exact-identifier methods ``query_score`` is 1.0, which collapses the
         middle term to 1.0.
 
-        The ``support_factor`` (:data:`_SUPPORT_FACTOR`) is what keeps an
+        The ``support_factor`` (`_SUPPORT_FACTOR`) is what keeps an
         uncorroborated hit from winning on provenance alone.  ``consensus_score``
         measures *how well* the sources that answered agree, not *how many*
         answered, and a lone source agrees with itself perfectly — so before this
@@ -2342,14 +2393,15 @@ class Search:
         returned the wrong compound.
 
         A ``consensus_score`` of exactly 0.0 short-circuits to 0.0 rather than
-        following the formula. :func:`~provesid.tools.compute_consensus` only
-        returns 0.0 when there were no candidates at all — one source scores 1.0,
-        and even two fully disagreeing sources score 0.5 — so a zero consensus
+        following the formula.
+        [`compute_consensus`][provesid.tools.compute_consensus] only returns
+        0.0 when there were no candidates at all — one source scores 1.0, and
+        even two fully disagreeing sources score 0.5 — so a zero consensus
         means nothing matched, and the formula's floor of ``0.5 × base`` would
         report a no-match row as half-confident.
 
         Args:
-            match_method: One of the keys in :data:`_BASE_CONFIDENCE`.
+            match_method: One of the keys in `_BASE_CONFIDENCE`.
             consensus_score: Cross-source consensus agreement in [0, 1].
             fuzzy_score: rapidfuzz similarity in [0, 1]; used when
                 ``match_method == "fuzzy_name"``, scaled by the ``exact_name``
@@ -2449,7 +2501,7 @@ class Search:
 
         # Rank: OPSIN match first, then confidence, support, query agreement,
         # and (lower) origin rank as a final tie-break.  Corroboration is folded
-        # into ``confidence`` itself (see :data:`_SUPPORT_FACTOR`), so
+        # into ``confidence`` itself (see ``_SUPPORT_FACTOR``), so
         # ``n_source_support`` here only breaks ties between equally confident
         # clusters.
         hits.sort(
@@ -2552,18 +2604,17 @@ class Search:
         consensus_source, source_match_scores, match_score = compute_consensus(per_source)
         consensus_candidate = per_source.get(consensus_source) if consensus_source else None
 
-        for source_key in (k for k in self._SOURCE_KEYS if k != "chembl"):
+        # ChEMBL, then the online services, fill only what the others left.
+        fill_order = [k for k in self._SOURCE_KEYS if k != "chembl"] + ["chembl"] + self._ONLINE_KEYS
+        applied: List[Dict[str, Any]] = []
+        for source_key in fill_order:
             candidate = per_source.get(source_key)
             if candidate_compatible_with_consensus(
                 candidate, consensus_candidate, self.consensus_compat_threshold
             ):
                 apply_candidate_to_result(result, candidate)
-
-        chembl_cand = per_source.get("chembl")
-        if candidate_compatible_with_consensus(
-            chembl_cand, consensus_candidate, self.consensus_compat_threshold
-        ):
-            apply_candidate_to_result(result, chembl_cand)
+                applied.append(candidate)
+        result["CASRN"] = pick_first(result.get("CASRN"), pick_casrn(applied))
 
         # OPSIN supplies a structure even when no source row carried one.
         if opsin_match and is_missing(result.get("SMILES")) and not is_missing(opsin_smiles):
@@ -2659,8 +2710,8 @@ def mw_within(
     the hit's structure is within ``tolerance`` of the weight computed from the
     row's own ``reference_column``. It additionally *reports* — without requiring
     — agreement of the canonical SMILES and, when ``name_column`` is given, of
-    the name, so :func:`resolve_cascade` can record how much evidence backed
-    each row in its ``validated_by`` column.
+    the name, so [`resolve_cascade`][provesid.search.resolve_cascade] can
+    record how much evidence backed each row in its ``validated_by`` column.
 
     Args:
         tolerance: Maximum absolute difference in Da. Defaults to ``0.5``.
@@ -2671,17 +2722,16 @@ def mw_within(
 
     Returns:
         A callable ``(hit, row) -> list[str]`` suitable for
-        :func:`resolve_cascade`'s ``accept`` argument: the names of the checks
-        that passed, or an empty list to reject the hit.
+        [`resolve_cascade`][provesid.search.resolve_cascade]'s ``accept``
+        argument: the names of the checks that passed, or an empty list to
+        reject the hit.
 
-    Example::
-
-        accept = mw_within(0.5, reference_column="canonical_SMILES", name_column="name")
-        out = resolve_cascade(df, stages, accept=accept)
-        out["provesid_validated_by"].value_counts()
-        # mw+smiles+name    311
-        # mw+smiles          64
-        # mw                 12
+    Examples:
+        >>> accept = mw_within(0.5, reference_column="SMILES", name_column="name")
+        >>> accept({"SMILES": "CCO", "name": "ethanol"}, {"SMILES": "OCC", "name": "Ethanol"})
+        ['mw', 'smiles', 'name']
+        >>> accept({"SMILES": "CCCO"}, {"SMILES": "CCO"})       # 60.1 vs 46.07 Da
+        []
     """
     def accept(hit: Dict[str, Any], row: Dict[str, Any]) -> List[str]:
         reference = normalize_structure(row.get(reference_column))
@@ -2725,21 +2775,23 @@ def resolve_cascade(
 
     Experimental datasets are annotated unevenly — some rows have a CAS number,
     some only a name, some only a structure. This runs several
-    :class:`Search` instances in order, passing to each stage only the rows that
-    are still unresolved, so every row is resolved by the most reliable
-    identifier it actually has.
+    [`Search`][provesid.search.Search] instances in order, passing to each
+    stage only the rows that are still unresolved, so every row is resolved by
+    the most reliable identifier it actually has.
 
     Each hit is checked with ``accept`` before it counts as resolved. A hit that
     fails leaves its row pending for the next stage, which is what stops a
-    confident-but-wrong match from ending the cascade. Use :func:`mw_within` for
-    the usual molecular-weight check.
+    confident-but-wrong match from ending the cascade. Use
+    [`mw_within`][provesid.search.mw_within] for the usual molecular-weight
+    check.
 
     Args:
         df: Input DataFrame. Returned unmodified; the result is a copy.
         stages: Ordered list of ``(label, search, column)`` triples. ``label``
-            names the stage in the output, ``search`` is a :class:`Search`
-            instance, and ``column`` is the column it reads. Rows with an empty
-            value in ``column`` skip that stage.
+            names the stage in the output, ``search`` is a
+            [`Search`][provesid.search.Search] instance, and ``column`` is the
+            column it reads. Rows with an empty value in ``column`` skip that
+            stage.
         accept: Optional ``(hit, row) -> bool | list[str]`` predicate, where
             ``hit`` is the Search result row and ``row`` the input row, both as
             dicts. Return ``True``, or the names of the checks that passed (they
@@ -2748,42 +2800,43 @@ def resolve_cascade(
 
             Both dicts come from DataFrame rows, so a missing field is ``NaN``
             rather than ``None`` — and ``bool(NaN)`` is ``True``. Test emptiness
-            with :func:`pandas.isna` (or reuse :func:`mw_within`) rather than
-            truthiness.
+            with `pandas.isna` (or reuse
+            [`mw_within`][provesid.search.mw_within]) rather than truthiness.
         fallback_column: Column holding a SMILES from which to derive identifiers
             for rows no stage resolved. Those rows get ``resolved_by="rdkit"``.
             When ``None``, unresolved rows are left empty.
         prefix: Prepended to every added column. Defaults to ``"provesid_"``.
 
     Returns:
-        A copy of ``df`` with the :data:`OUTPUT_COLUMNS` added under ``prefix``,
-        plus ``<prefix>resolved_by`` (the stage that resolved the row,
-        ``"rdkit"``, or ``"none"``) and ``<prefix>validated_by``.
+        A copy of ``df`` with the
+        [`OUTPUT_COLUMNS`][provesid.search.OUTPUT_COLUMNS] added under
+        ``prefix``, plus ``<prefix>resolved_by`` (the stage that resolved the
+        row, ``"rdkit"``, or ``"none"``) and ``<prefix>validated_by``.
 
     Raises:
         KeyError: If a stage names a column that is not in ``df``.
         ValueError: If ``stages`` is empty.
 
-    Example::
+    Examples:
+        >>> data = pd.DataFrame({
+        ...     "CASRN":  ["50-78-2", "", "0-00-0"],
+        ...     "name":   ["", "caffeine", ""],
+        ...     "SMILES": ["CC(=O)Oc1ccccc1C(=O)O", "Cn1c(=O)c2c(ncn2C)n(C)c1=O", "CC(C)O"],
+        ... })
+        >>> out = resolve_cascade(
+        ...     data,
+        ...     stages=[
+        ...         ("cas",  Search("cas", show_progress=False),  "CASRN"),
+        ...         ("name", Search("name", show_progress=False), "name"),
+        ...     ],
+        ...     accept=mw_within(0.5, reference_column="SMILES"),
+        ...     fallback_column="SMILES",
+        ... )
+        >>> out[["provesid_name", "provesid_resolved_by", "provesid_validated_by"]].values.tolist()
+        [['acetylsalicylic acid', 'cas', 'mw+smiles'], ['caffeine', 'name', 'mw+smiles'], [nan, 'rdkit', 'self (rdkit from the given structure)']]
 
-        from provesid import Search, resolve_cascade, mw_within
-
-        out = resolve_cascade(
-            df,
-            stages=[
-                ("cas",    Search("cas"),                  "CASRN"),
-                ("name",   Search("name", use_opsin=True), "name"),
-                ("smiles", Search("smiles"),               "SMILES"),
-            ],
-            accept=mw_within(0.5, reference_column="SMILES"),
-            fallback_column="SMILES",
-        )
-        out["provesid_resolved_by"].value_counts()
-        # cas       412
-        # name       98
-        # smiles     31
-        # rdkit      14
-        # none        2
+        The third row's CAS number is not real, so no stage resolved it and
+        its identifiers were derived from its own SMILES.
     """
     if not stages:
         raise ValueError("stages must contain at least one (label, search, column).")
@@ -2925,24 +2978,6 @@ def _matches_name_exactly(query: str, cand: Dict[str, Any]) -> bool:
     return any(normalise(name) == target for name in _candidate_names(cand))
 
 
-def _rank_rows_by_completeness(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Sort source rows by number of non-null fields (most complete first).
-
-    Args:
-        rows: List of raw source record dicts.
-
-    Returns:
-        New list ordered by descending completeness; stable for ties.
-    """
-    if not rows:
-        return []
-    return sorted(
-        rows,
-        key=lambda r: sum(1 for v in r.values() if not is_missing(v)),
-        reverse=True,
-    )
-
-
 def _has_attachment_point(smiles: Any) -> bool:
     """Whether a SMILES describes a *group* rather than a whole compound.
 
@@ -3051,138 +3086,36 @@ def _cluster_candidates(
     return [{"members": members} for members in groups.values()]
 
 
-def _any_candidate(candidates: Dict[str, Optional[Dict[str, Any]]]) -> bool:
-    """Return True if at least one candidate is non-None.
+def _any_candidate(hits: Hits) -> bool:
+    """Return True if any source found at least one candidate.
 
     Args:
-        candidates: Dict mapping source keys to candidate records.
+        hits: Source key -> candidates, as ``Search._collect`` returns.
 
     Returns:
-        True when at least one value is not None.
+        True when at least one source's list is non-empty.
     """
-    return any(v is not None for v in candidates.values())
+    return any(hits.values())
 
 
-def _first_smiles_from_candidates(
-    candidates: Dict[str, Optional[Dict[str, Any]]]
-) -> Optional[str]:
-    """Return the first non-missing SMILES found among the candidates.
+def _first_smiles_from_candidates(hits: Hits) -> Optional[str]:
+    """Return the first non-missing SMILES among each source's top candidate.
 
-    Priority order: chebi, comptox, pubchem, zeropm, chembl.
+    Priority order is
+    [`provesid.sources.SOURCE_KEYS`][provesid.sources.SOURCE_KEYS]: chebi,
+    comptox, pubchem, zeropm, chembl.
 
     Args:
-        candidates: Dict mapping source keys to candidate records.
+        hits: Source key -> candidates, as ``Search._collect`` returns.
 
     Returns:
         SMILES string or None.
     """
-    for key in ["chebi", "comptox", "pubchem", "zeropm", "chembl"]:
-        cand = candidates.get(key)
-        if cand is None:
+    for key in SOURCE_KEYS:
+        cands = hits.get(key)
+        if not cands:
             continue
-        smiles = cand.get("SMILES") or cand.get("canonical_smiles")
+        smiles = cands[0].get("SMILES") or cands[0].get("canonical_smiles")
         if not is_missing(smiles):
             return smiles
     return None
-
-
-def _most_complete_row(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Select the most data-complete row from a list of source records.
-
-    Completeness is measured as the number of non-null values in the row.
-
-    Args:
-        rows: List of source record dicts.
-
-    Returns:
-        The row with the most non-null fields, or the first row if the list
-        has only one element.
-    """
-    if not rows:
-        return {}
-    if len(rows) == 1:
-        return rows[0]
-    return max(rows, key=lambda r: sum(1 for v in r.values() if not is_missing(v)))
-
-
-def _comptox_skeleton_search(
-    comptox: CompToxID, skeleton: str
-) -> List[Dict[str, Any]]:
-    """Search CompTox for InChIKeys sharing the same 14-character skeleton.
-
-    This function queries the CompTox SQLite database with a LIKE predicate on
-    the inchikey column.
-
-    Args:
-        comptox: Initialised :class:`~provesid.CompToxID` client.
-        skeleton: 14-character InChIKey connectivity prefix.
-
-    Returns:
-        List of matching rows (may be empty).
-    """
-    try:
-        import sqlite3
-
-        conn = comptox._conn  # type: ignore[attr-defined]
-        cur = conn.execute(
-            "SELECT * FROM chemicals WHERE INCHIKEY LIKE ? LIMIT 20",
-            (f"{skeleton}%",),
-        )
-        cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, row)) for row in cur.fetchall()]
-    except Exception as exc:
-        log.warning("CompTox skeleton search (SQL) failed: %s", exc)
-        return []
-
-
-def _pubchem_skeleton_search(
-    pubchem: PubChemID, skeleton: str
-) -> List[Dict[str, Any]]:
-    """Search PubChemID SQLite for InChIKeys sharing the same skeleton.
-
-    Args:
-        pubchem: Initialised :class:`~provesid.PubChemID` client.
-        skeleton: 14-character InChIKey connectivity prefix.
-
-    Returns:
-        List of matching rows (may be empty).
-    """
-    try:
-        conn = pubchem._conn  # type: ignore[attr-defined]
-        cur = conn.execute(
-            "SELECT * FROM compounds WHERE inchikey LIKE ? LIMIT 20",
-            (f"{skeleton}%",),
-        )
-        cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, row)) for row in cur.fetchall()]
-    except Exception as exc:
-        log.warning("PubChemID skeleton search (SQL) failed: %s", exc)
-        return []
-
-
-def _chebi_skeleton_search(
-    chebi: ChebiSDF, skeleton: str
-) -> List[Dict[str, Any]]:
-    """Search the ChebiSDF in-memory index for skeleton-matching InChIKeys.
-
-    Args:
-        chebi: Initialised :class:`~provesid.ChebiSDF` client.
-        skeleton: 14-character InChIKey connectivity prefix.
-
-    Returns:
-        List of matching compound dicts (may be empty).
-    """
-    try:
-        results = []
-        ik_index: Dict[str, Any] = chebi.index.get("inchikey_to_id", {})  # type: ignore[attr-defined]
-        for ik, chebi_id in ik_index.items():
-            if ik.startswith(skeleton):
-                compound = chebi.get_compound_by_id(chebi_id)
-                if compound:
-                    results.append(compound)
-                if len(results) >= 20:
-                    break
-        return results
-    except Exception as exc:
-        log.warning("ChEBI skeleton search failed: %s", exc)
-        return []

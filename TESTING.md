@@ -36,6 +36,43 @@ $env:CAS_API_KEY="your-cas-api-key-here"
 python -m pytest tests/ -v --ignore=tests/test_cascommonchem.py
 ```
 
+## Running the Docstring Examples
+
+Every public object's docstring carries an example, and they can be run as
+doctests:
+
+```bash
+python -m pytest --doctest-modules src/provesid
+```
+
+The ordinary run above never collects them. Examples that need the network
+are marked `# doctest: +SKIP`, and the run enforces it: `src/conftest.py`
+refuses every outbound connection, so an example that forgets the marker
+fails instead of quietly asking a live service. To re-record an online
+example's output, lift the block for that run:
+
+```bash
+PROVESID_DOCTEST_ALLOW_NETWORK=1 python -m pytest --doctest-modules src/provesid
+```
+
+Examples that read an offline database run against the installed copy; a
+module whose database is not installed is skipped, never downloaded
+(`src/conftest.py` again). The outputs shown were taken from the databases as
+installed on the day they were written, so a later release can change a count
+or an ordering without anything being wrong.
+
+## Building the Documentation
+
+```bash
+mkdocs build --strict
+```
+
+The API reference is rendered from the same docstrings, so a malformed one
+fails the build, and so does a link to a page or heading that does not exist.
+The tutorials are read from `examples/` (`scripts/mkdocs_hooks.py`); there is
+no copy under `docs/`. `scripts/validate_docs_local.sh --execute` also runs
+the MyST tutorials, which needs the network.
+
 ## Test Categories
 
 ### Core API Tests

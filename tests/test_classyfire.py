@@ -612,6 +612,139 @@ class TestClassyFireAPIStaticMethods:
         assert ClassyFireAPI.URL.startswith('http')
 
 
+
+class TestTruncatedResponses:
+    """
+    §31.3 item 8: get_query(1) returned None. The server stops sending after
+    about 108 KB while answering HTTP 200, so the whole query never arrives
+    (curl exits 18, requests raises ChunkedEncodingError), and the client
+    turned that into a bare None with no timeout and no log line.
+    """
+
+    @pytest.mark.unit
+    def test_a_cut_off_body_is_logged_not_silent(self, monkeypatch, caplog):
+        import requests
+
+        def broken(*args, **kwargs):
+            raise requests.exceptions.ChunkedEncodingError(
+                "Connection broken: IncompleteRead(2946 bytes read, 5246 more expected)")
+
+        monkeypatch.setattr(requests, "get", broken)
+        with caplog.at_level("WARNING", logger="provesid.classyfire"):
+            assert ClassyFireAPI.get_query(1, use_cache=False) is None
+        assert "IncompleteRead" in caplog.text
+
+    @pytest.mark.unit
+    def test_get_query_passes_paging_and_a_timeout(self, monkeypatch):
+        import requests
+        seen = {}
+
+        def fake_get(url, headers=None, params=None, timeout=None):
+            seen.update(url=url, params=params, timeout=timeout)
+            response = requests.Response()
+            response.status_code = 200
+            return response
+
+        monkeypatch.setattr(requests, "get", fake_get)
+        ClassyFireAPI.get_query(7, format="csv", page=2, per_page=10, use_cache=False)
+        assert seen == {"url": f"{ClassyFireAPI.URL}/queries/7.csv",
+                        "params": {"page": 2, "per_page": 10},
+                        "timeout": ClassyFireAPI.TIMEOUT}
+
+    @pytest.mark.unit
+    def test_get_classification_joins_every_page(self, monkeypatch):
+        pages = {
+            1: {"id": 1, "classification_status": "Done", "number_of_pages": 3,
+                "invalid_entities": [], "entities": [{"identifier": "a"}, {"identifier": "b"}]},
+            2: {"id": 1, "number_of_pages": 3, "invalid_entities": 0,
+                "entities": [{"identifier": "c"}]},
+            3: {"id": 1, "number_of_pages": 3, "invalid_entities": [{"identifier": "x"}],
+                "entities": [{"identifier": "d"}]},
+        }
+        asked = []
+
+        def fake_get_json(url, params=None):
+            asked.append(params)
+            return dict(pages[params["page"]])
+
+        monkeypatch.setattr(ClassyFireAPI._http, "get_json", fake_get_json)
+        result = ClassyFireAPI.get_classification(1, use_cache=False)
+
+        assert [e["identifier"] for e in result["entities"]] == ["a", "b", "c", "d"]
+        assert result["invalid_entities"] == [{"identifier": "x"}]
+        assert result["classification_status"] == "Done"
+        assert asked == [{"page": n, "per_page": ClassyFireAPI.PAGE_SIZE} for n in (1, 2, 3)]
+
+    @pytest.mark.unit
+    def test_get_classification_raises_this_module_s_error(self, monkeypatch):
+        """A cut-off page is a ClassyFireError, never a raw requests one."""
+        import requests
+        from provesid.classyfire import ClassyFireError
+
+        def broken(*args, **kwargs):
+            raise requests.exceptions.ChunkedEncodingError("Connection broken")
+
+        monkeypatch.setattr(ClassyFireAPI._http, "_send", broken)
+        with pytest.raises(ClassyFireError, match="Connection broken"):
+            ClassyFireAPI.get_classification(1, use_cache=False)
+
+
+class TestFailedRequestsAreNotCached:
+    """
+    The raw calls return None or the error response on a failure, and were
+    cached, so one HTTP 429 stayed the answer for good: query_status(1) came
+    back None after the server had recovered.
+    """
+
+    @pytest.fixture
+    def query_id(self):
+        """Unique per run, so no earlier run's cache entry answers."""
+        import uuid
+        return uuid.uuid4().int % 10**12
+
+    @staticmethod
+    def respond(status, body=b""):
+        import requests
+        response = requests.Response()
+        response.status_code = status
+        response._content = body
+        response.url = "http://classyfire.test"
+        return response
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("method", ["query_status", "get_query"])
+    def test_a_throttled_get_is_asked_again(self, monkeypatch, query_id, method):
+        import requests
+        call = getattr(ClassyFireAPI, method)
+
+        monkeypatch.setattr(requests, "get", lambda *a, **k: self.respond(429))
+        first = call(query_id)
+        assert first is None or first.status_code == 429
+
+        monkeypatch.setattr(requests, "get", lambda *a, **k: self.respond(200, b"Done"))
+        assert call(query_id).status_code == 200
+
+    @pytest.mark.unit
+    def test_a_failed_submission_is_asked_again(self, monkeypatch, query_id):
+        import requests
+        label = f"test-{query_id}"
+
+        monkeypatch.setattr(requests, "post", lambda *a, **k: self.respond(500))
+        assert ClassyFireAPI.submit_query(label, "CCO").status_code == 500
+
+        monkeypatch.setattr(requests, "post", lambda *a, **k: self.respond(200, b'{"id": 1}'))
+        assert ClassyFireAPI.submit_query(label, "CCO").status_code == 200
+
+    @pytest.mark.unit
+    def test_a_success_is_still_cached(self, monkeypatch, query_id):
+        import requests
+
+        monkeypatch.setattr(requests, "get", lambda *a, **k: self.respond(200, b"Done"))
+        ClassyFireAPI.query_status(query_id)
+        monkeypatch.setattr(requests, "get", lambda *a, **k: pytest.fail("not cached"))
+        assert ClassyFireAPI.query_status(query_id).text == "Done"
+
+
 if __name__ == "__main__":
     # Run tests if executed directly
     pytest.main([__file__, "-v"])

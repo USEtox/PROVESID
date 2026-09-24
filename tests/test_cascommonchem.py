@@ -179,26 +179,31 @@ class TestCASCommonChem:
         """Test smiles_to_detail functionality"""
         # Test with ethanol SMILES
         result = cas_api.smiles_to_detail('CCO')
-        
-        assert 'status' in result
-        
-        if result['status'] == 'Success':
-            # Should have found ethanol data
-            assert 'molecularFormula' in result
-            assert 'rn' in result
-            
-            # Check for ethanol characteristics
-            if result['molecularFormula']:
-                assert 'C2H6O' in result['molecularFormula'] or 'C2 H6 O' in result['molecularFormula']
-        elif result['status'] in ['Not found', 'Error']:
-            pytest.skip("CAS Common Chemistry API not available or SMILES not found")
-    
+        if result['status'] in ('Timeout', 'Network Error'):
+            pytest.skip("CAS Common Chemistry could not be reached")
+
+        # Not "Ethanol, dimer" or ethanol-d6, which CAS's search also finds.
+        assert result['status'] == 'Success'
+        assert result['rn'] == '64-17-5'
+
+    @pytest.mark.parametrize("smiles, rn", [
+        ("C1=CC=CC=C1", "71-43-2"),   # not benzene's homopolymer or dimer
+        ("C=O", "50-00-0"),           # not paraformaldehyde
+        ("O", "7732-18-5"),           # 30 hits, the rest water clusters
+        ("[Na+].[Cl-]", "7647-14-5"), # not rock salt
+    ])
+    def test_smiles_to_detail_picks_the_substance(self, cas_api, smiles, rn):
+        result = cas_api.smiles_to_detail(smiles)
+        if result['status'] in ('Timeout', 'Network Error'):
+            pytest.skip("CAS Common Chemistry could not be reached")
+        assert result['rn'] == rn
+
     def test_smiles_to_detail_invalid(self, cas_api):
         """Test smiles_to_detail with invalid SMILES"""
         result = cas_api.smiles_to_detail('invalid_smiles_xyz')
-        
-        assert 'status' in result
-        assert result['status'] in ['Not found', 'Error']
+
+        assert result['status'] == 'Invalid SMILES'
+        assert result['found'] is False
     
     def test_response_codes(self, cas_api):
         """Test that response codes are properly defined"""

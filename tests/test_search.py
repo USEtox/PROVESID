@@ -18,7 +18,6 @@ from provesid.search import (
     OUTPUT_COLUMNS,
     Search,
     _any_candidate,
-    _most_complete_row,
     normalize_structure,
     strip_salts,
 )
@@ -63,6 +62,9 @@ class _CompToxStub:
 
     def get_by_casrn(self, cas):
         return self._row
+
+    def get_by_alternate_casrn(self, cas):
+        return None
 
     def get_by_inchikey(self, ik):
         return self._row
@@ -238,7 +240,7 @@ def _make_search(**clients) -> Search:
     return Search(
         "cas",
         show_progress=False,
-        use_zeropm=zeropm is not None,
+        sources="all" if zeropm is not None else None,
         chebi=clients.get("chebi", _ChebiStub()),
         comptox=clients.get("comptox", _CompToxStub()),
         pubchem=clients.get("pubchem", _PubChemStub()),
@@ -345,11 +347,97 @@ class TestSearchInit:
         with pytest.raises(ValueError, match="identifier_type must be one of"):
             Search("invalid_type")
 
-    def test_injected_clients_not_reinitialised(self):
+    def test_one_injected_client_leaves_the_others_to_be_built(self, monkeypatch):
+        # Passing one client used to mark all five as initialised, so the
+        # other four were never built and the search ran on one source.
+        built = []
+
+        class _Built:
+            def __init__(self, **kwargs):
+                built.append(type(self).__name__)
+
+            def close(self):
+                pass
+
+        for name in ("ChebiSDF", "CompToxID", "PubChemID", "CheMBL", "ZeroPM"):
+            monkeypatch.setattr(search_module, name, type(name, (_Built,), {}))
+        chembl = _ChEMBLStub()
+        s = Search("cas", chembl=chembl, show_progress=False)
+        s._ensure_clients()
+        assert s._clients["chembl"] is chembl
+        assert sorted(built) == ["ChebiSDF", "CompToxID", "PubChemID"]
+        assert s.sources_available == ["chebi", "comptox", "pubchem", "chembl"]
+        assert s.sources_unavailable == []
+        assert "chembl" not in s._owned_clients        # the caller's, not closed
+        s._ensure_clients()
+        assert len(built) == 3                          # built once
+
+    def test_sources_limits_what_is_built_and_queried(self, monkeypatch):
+        built = []
+
+        class _Built:
+            def __init__(self, **kwargs):
+                built.append(type(self).__name__)
+
+            def close(self):
+                pass
+
+        for name in ("ChebiSDF", "CompToxID", "PubChemID", "CheMBL", "ZeroPM"):
+            monkeypatch.setattr(search_module, name, type(name, (_Built,), {}))
+        s = Search("cas", sources=["chembl", "comptox"], show_progress=False)
+        s._ensure_clients()
+        assert s.sources == ("comptox", "chembl")         # SOURCE_KEYS order
+        assert sorted(built) == ["CheMBL", "CompToxID"]
+        assert s.sources_available == ["comptox", "chembl"]
+        assert s.settings["sources"] == ("comptox", "chembl")
+
+    def test_sources_with_only_passed_clients_opens_nothing(self):
+        s = Search("cas", sources=["chebi", "comptox"], show_progress=False,
+                   chebi=_ChebiStub(_ASPIRIN_CHEBI), comptox=_CompToxStub(_ASPIRIN_COMPTOX))
+        row = s.search("50-78-2").iloc[0]
+        assert s._owned_clients == []
+        assert s.sources_available == ["chebi", "comptox"]
+        assert set(row["source_details"]) == {"ChEBI", "CompTox"}
+
+    @pytest.mark.parametrize("given,expected", [
+        ("pubchem", ("pubchem",)),
+        ("all", ("chebi", "comptox", "pubchem", "zeropm", "chembl")),
+        (("chembl", "chebi", "chembl"), ("chebi", "chembl")),
+    ])
+    def test_sources_accepts_a_key_all_or_a_sequence(self, given, expected):
+        assert Search("cas", sources=given, show_progress=False).sources == expected
+
+    @pytest.mark.parametrize("given,match", [
+        (["chebi", "pubchem_online"], "pubchem_online"),
+        ("cheBI", "cheBI"),
+        ([], "at least one"),
+    ])
+    def test_sources_rejects_unknown_or_no_names(self, given, match):
+        with pytest.raises(ValueError, match=match):
+            Search("cas", sources=given)
+
+    def test_a_client_passed_for_a_source_left_out_is_ignored(self, caplog):
+        with caplog.at_level("WARNING", logger="provesid.search"):
+            s = Search("cas", sources="chebi", chembl=_ChEMBLStub(), show_progress=False)
+        assert s._clients["chembl"] is None
+        assert any("'chembl' is not in sources" in r.getMessage() for r in caplog.records)
+
+    def test_sources_overrides_the_preset(self):
+        assert Search("name", preset="recall").sources == (
+            "chebi", "comptox", "pubchem", "zeropm", "chembl")
+        assert Search("name", preset="recall", sources="chebi").sources == ("chebi",)
+
+    def test_one_injected_client_with_the_others_absent(self, tmp_path, caplog):
+        # datasets="present" and an empty data directory: the other sources
+        # are reported missing, not built, and the passed one still answers.
         chebi = _ChebiStub()
-        s = Search("cas", chebi=chebi, show_progress=False)
-        assert s._chebi is chebi
-        assert s._clients_initialized
+        s = Search("cas", chebi=chebi, data_dir=tmp_path, show_progress=False)
+        with caplog.at_level("WARNING", logger="provesid.search"):
+            s._ensure_clients()
+        assert s._clients["chebi"] is chebi
+        assert s.sources_available == ["chebi"]
+        assert s.sources_unavailable == ["comptox", "pubchem", "chembl"]
+        assert any("running with 1 of 4 sources" in r.message for r in caplog.records)
 
     def test_strip_salts_default_false(self):
         s = Search(show_progress=False)
@@ -520,7 +608,7 @@ class TestResolveName:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -536,7 +624,7 @@ class TestResolveName:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -551,7 +639,7 @@ class TestResolveName:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -571,7 +659,7 @@ class TestResolveSmiles:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -585,7 +673,7 @@ class TestResolveSmiles:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -600,7 +688,7 @@ class TestResolveSmiles:
             chebi=_ChebiStub(),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -618,7 +706,7 @@ class TestResolveSmiles:
             chebi=_ChebiStub(),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -643,7 +731,7 @@ class TestResolveInchi:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(_ASPIRIN_PUBCHEM),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -657,7 +745,7 @@ class TestResolveInchi:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -671,7 +759,7 @@ class TestResolveInchi:
             chebi=_ChebiStub(),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -694,7 +782,7 @@ class TestResolveInchikey:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -708,7 +796,7 @@ class TestResolveInchikey:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -722,7 +810,7 @@ class TestResolveInchikey:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -739,7 +827,7 @@ class TestResolveInchikey:
             chebi=_ChebiStub(),  # no exact match
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -755,7 +843,7 @@ class TestResolveInchikey:
             chebi=_ChebiStub(),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -776,7 +864,7 @@ class TestResolveDtxsid:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(_ASPIRIN_COMPTOX),
             pubchem=_PubChemStub(_ASPIRIN_PUBCHEM),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -790,7 +878,7 @@ class TestResolveDtxsid:
             chebi=_ChebiStub(),
             comptox=_CompToxStub(_ASPIRIN_COMPTOX),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -804,7 +892,7 @@ class TestResolveDtxsid:
             chebi=_ChebiStub(),
             comptox=_CompToxStub(_ASPIRIN_COMPTOX),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -824,7 +912,7 @@ class TestResolveFormula:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(_ASPIRIN_COMPTOX),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -839,7 +927,7 @@ class TestResolveFormula:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(_ASPIRIN_COMPTOX),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -854,7 +942,7 @@ class TestResolveFormula:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -1044,7 +1132,7 @@ class TestSaltStrippingIntegration:
             chebi=_ChebiStub(),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -1059,7 +1147,7 @@ class TestSaltStrippingIntegration:
             chebi=_ChebiStub(),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -1074,7 +1162,7 @@ class TestSaltStrippingIntegration:
             chebi=_ChebiStub(),
             comptox=_CompToxStub(),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             chembl=_ChEMBLStub(),
         )
@@ -1089,29 +1177,13 @@ class TestSaltStrippingIntegration:
 
 class TestHelpers:
     def test_any_candidate_true(self):
-        assert _any_candidate({"a": {"x": 1}, "b": None}) is True
+        assert _any_candidate({"a": [{"x": 1}], "b": []}) is True
 
     def test_any_candidate_false(self):
-        assert _any_candidate({"a": None, "b": None}) is False
+        assert _any_candidate({"a": [], "b": []}) is False
 
     def test_any_candidate_empty(self):
         assert _any_candidate({}) is False
-
-    def test_most_complete_row_picks_best(self):
-        rows = [
-            {"a": 1, "b": None, "c": None},
-            {"a": 1, "b": 2, "c": 3},
-            {"a": 1, "b": 2, "c": None},
-        ]
-        best = _most_complete_row(rows)
-        assert best["c"] == 3
-
-    def test_most_complete_row_single_item(self):
-        rows = [{"a": 1}]
-        assert _most_complete_row(rows) == {"a": 1}
-
-    def test_most_complete_row_empty(self):
-        assert _most_complete_row([]) == {}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1152,6 +1224,7 @@ class TestMultiSourceConsensus:
 # Source availability
 # ─────────────────────────────────────────────────────────────────────────────
 
+@pytest.mark.usefixtures("no_installed_datasets")
 class TestSourceAvailability:
     """A source that fails to initialise must not vanish silently.
 
@@ -1165,7 +1238,7 @@ class TestSourceAvailability:
     def test_all_sources_reported_available(self):
         s = _make_search()
         s.search("50-78-2")
-        assert s.sources_available == list(Search._DEFAULT_SOURCE_KEYS)
+        assert s.sources_available == list(Search.PRESETS["balanced"]["sources"])
         assert s.sources_unavailable == []
 
     def test_missing_source_is_recorded(self):
@@ -1175,7 +1248,7 @@ class TestSourceAvailability:
             chebi=_ChebiStub(_ASPIRIN_CHEBI),
             comptox=_CompToxStub(_ASPIRIN_COMPTOX),
             pubchem=_PubChemStub(),
-            use_zeropm=True,
+            sources="all",
             zeropm=_ZeroPMStub(),
             # chembl left out — as when its database cannot be initialised
         )
@@ -1186,7 +1259,7 @@ class TestSourceAvailability:
     def test_availability_is_attached_to_the_result_frame(self):
         s = _make_search()
         df = s.search("50-78-2")
-        assert df.attrs["sources_available"] == list(Search._DEFAULT_SOURCE_KEYS)
+        assert df.attrs["sources_available"] == list(Search.PRESETS["balanced"]["sources"])
         assert df.attrs["sources_unavailable"] == []
 
     def test_availability_survives_enrich(self):
@@ -1216,29 +1289,29 @@ class TestZeroPMOptIn:
     ZeroPM aggregates regulatory inventories rather than curating compounds, so
     its name→structure rows are noisier than the other four sources while
     counting as a full independent vote in the corroboration ranking.  It is
-    excluded by default; ``use_zeropm=True`` restores it.
+    excluded by default; ``sources="all"`` restores it.
     """
 
     def test_zeropm_not_targeted_by_default(self):
         s = Search("cas", show_progress=False)
         assert "zeropm" not in s._SOURCE_KEYS
-        assert s.use_zeropm is False
+        assert s.sources == ("chebi", "comptox", "pubchem", "chembl")
 
     def test_zeropm_targeted_when_opted_in(self):
-        s = Search("cas", show_progress=False, use_zeropm=True)
+        s = Search("cas", show_progress=False, sources="all")
         assert "zeropm" in s._SOURCE_KEYS
-        assert s.use_zeropm is True
+        assert s.sources == ("chebi", "comptox", "pubchem", "zeropm", "chembl")
 
     def test_zeropm_client_ignored_when_not_opted_in(self, caplog):
         with caplog.at_level("WARNING", logger="provesid.search"):
             s = Search("cas", show_progress=False, zeropm=_ZeroPMStub())
-        assert s._zeropm is None
-        assert any("use_zeropm=False" in r.getMessage() for r in caplog.records)
+        assert s._clients["zeropm"] is None
+        assert any("'zeropm' is not in sources" in r.getMessage() for r in caplog.records)
 
     def test_zeropm_client_kept_when_opted_in(self):
         stub = _ZeroPMStub()
-        s = Search("cas", show_progress=False, use_zeropm=True, zeropm=stub)
-        assert s._zeropm is stub
+        s = Search("cas", show_progress=False, sources="all", zeropm=stub)
+        assert s._clients["zeropm"] is stub
 
     def test_zeropm_absent_from_reported_availability(self):
         s = _make_search()
@@ -1247,7 +1320,7 @@ class TestZeroPMOptIn:
         assert "zeropm" not in s.sources_unavailable
 
     def test_zeropm_contributes_only_when_opted_in(self):
-        """The same ZeroPM row reaches the result only with ``use_zeropm=True``."""
+        """The same ZeroPM row reaches the result only when ``sources`` names it."""
         without = _make_search().search("50-78-2").iloc[0]["source_details"]
         with_zpm = _make_search(
             zeropm=_ZeroPMStub(_ASPIRIN_ZEROPM)
@@ -1272,10 +1345,10 @@ def test_every_offline_source_initialises():
     """
     from platformdirs import user_data_dir
 
-    from provesid.chebi import ChebiSDF
+    from provesid.chebi_sdf import ChebiSDF
     from provesid.chembl import CheMBL
     from provesid.comptox import CompToxID
-    from provesid.pubchem import PubChemID
+    from provesid.pubchem_id import PubChemID
     from provesid.zeropm import ZeroPM
 
     data_dir = user_data_dir(appname="provesid", appauthor="USEtox")

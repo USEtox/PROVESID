@@ -8,6 +8,7 @@ on:
       - 'examples/**'
       - 'src/**'
       - 'mkdocs.yml'
+      - 'scripts/mkdocs_hooks.py'
       - 'pyproject.toml'
       - '.github/workflows/mkdocs-deploy.yml'
   workflow_dispatch:

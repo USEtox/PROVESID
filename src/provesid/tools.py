@@ -24,6 +24,7 @@ import logging
 import re
 from difflib import SequenceMatcher
 
+from .utils import check_CASRN
 from .zeropm import ZeroPM
 from .chembl import CheMBL
 
@@ -194,10 +195,12 @@ def extract_cas_values(value: Any) -> List[str]:
     text of everything else, so an entire source row can be handed over
     without knowing which of its columns holds a CAS.
 
-    The pattern is structural (``\d{2,7}-\d{2}-\d``) and does **not** verify
-    the check digit, so it can pick up a number-shaped string that is not a
-    registered CAS. An InChI is one source of these: ChEBI's for
-    ``XFNLWIPNTYNNJX-UHFFFAOYSA-N`` contains ``...(12)14-10-6-8...``. Pass
+    A match (``\d{2,7}-\d{2}-\d``) is kept only when its check digit
+    agrees (see [`check_CASRN`][provesid.utils.check_CASRN]). That drops
+    malformed numbers such as PubChem's ``001-02-2`` for atrazine and most
+    number-shaped fragments of other text: ChEBI's InChI for
+    ``XFNLWIPNTYNNJX-UHFFFAOYSA-N`` contains ``...(12)14-10-6-8...``. One
+    such fragment in ten still has a valid check digit by chance, so pass
     the fields that hold CAS numbers, not a whole row, where the source has
     such fields.
 
@@ -218,6 +221,8 @@ def extract_cas_values(value: Any) -> List[str]:
         ['50-78-2']
         >>> extract_cas_values(["50-78-2", "11126-35-5 | 50-78-2"])
         ['50-78-2', '11126-35-5']
+        >>> extract_cas_values("001-02-2; 1912-24-9")
+        ['1912-24-9']
     """
     found: List[str] = []
 
@@ -235,7 +240,7 @@ def extract_cas_values(value: Any) -> List[str]:
             found.extend(extract_cas_values(item))
     else:
         text = str(value)
-        found.extend(_CAS_PATTERN.findall(text))
+        found.extend(cas for cas in _CAS_PATTERN.findall(text) if check_CASRN(cas))
 
     return list(dict.fromkeys(found))
 

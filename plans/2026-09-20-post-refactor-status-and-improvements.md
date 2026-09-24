@@ -4135,13 +4135,15 @@ Items 1 and 2 are fixed (§31.6). Writing the notebooks turned up five more:
 8. **`ClassyFireAPI.get_query(1)` returns `None`** where `curl` gets HTTP 200
    and `Done` for the same URL. The client makes the request with no timeout
    and turns every `RequestException` into `e.response`. Step 7.
+   *Fixed, §44: `curl` did not get a complete answer either.*
 
 ### 31.4 Still open
 
 - ~~**The CAS Common Chemistry notebook is not executed.**~~ Executed on
   2026-09-23 with a real key (§31.8).
-- §31.3 items 3 and 5 to 8. Items 4 and 9 are fixed (§31.7, §31.9). *Item 5
-  is fixed (§33), item 7 (§39), item 6 (§40) and item 3 (§43).*
+- ~~§31.3 items 3 and 5 to 8.~~ Items 4 and 9 are fixed (§31.7, §31.9). *Item 5
+  is fixed (§33), item 7 (§39), item 6 (§40), item 3 (§43) and item 8
+  (§44). None of §31.3 is open.*
 - ~~`examples/notebooks/` still tracks `curated-solubility-dataset.csv` and
   `unique_cas_list.csv`, which nothing uses. The ESOL file moved to
   `examples/search/`.~~ Done, §41.
@@ -4831,3 +4833,56 @@ ethanol answers faked: `cas` is the list, the key is bare, and `resolve`
 still carries the prefix. The first two failed before. `test_nci_resolver.py`
 and the two cache test files: 75 passed. The resolver tutorial notebook was
 re-executed; cell 9 now shows the bare key and the CAS list.
+
+## 44. Landed on 2026-09-24 — ClassyFire's `None` (§31.3 item 8)
+
+§31.3 said `curl` gets HTTP 200 and `Done` where `get_query(1)` gets `None`.
+`curl` gets the status line and the start of the body, and then fails too:
+`curl: (18) transfer closed with outstanding read data remaining`. The `-s`
+in the first probe hid it. The saved body is JSON cut off mid-string.
+
+Measured on 2026-09-24:
+
+- The server stops sending after about 108.8 KB whatever is asked: the whole
+  query as JSON (cut at 9–11 s), page 1 or page 2 at the default 100 per page,
+  50 per page (cut at 4.6 s), and CSV. SDF answers HTTP 500. `requests`
+  raises `ChunkedEncodingError` ("IncompleteRead"), and the client turned it
+  into `e.response`, which is None. Asking for no compression changes nothing.
+- 25 per page (95 KB) and 10 per page (48 KB) arrive complete. Page 1 at 10
+  per page holds 6 entities.
+- `status.json` answers four bytes of plain text, `Done`, not JSON.
+- Three requests in quick succession pass, and the fourth gets HTTP 429 with
+  no `Retry-After`. Ten requests 2, 3 or 5 s apart all passed.
+
+Changes, with the three raw calls kept raw (step 7 stays postponed):
+
+- `submit_query`, `query_status` and `get_query` have a 60 s timeout
+  (`TIMEOUT`) and log a swallowed `RequestException` at WARNING. They
+  still return None or the error response.
+- `get_query` takes `page` and `per_page`, ClassyFire's own parameters.
+- `get_classification(query_id, per_page=None)` is the parsed wrapper. It
+  runs on a class-level `HTTPClient`, paced at `MIN_INTERVAL` = 2.5 s, and
+  fetches pages of `PAGE_SIZE` = 10. It joins `entities` and
+  `invalid_entities`, and raises `ClassyFireError` or
+  `ClassyFireNotFoundError`, both exported from `provesid`.
+- The class docstring's `query_status(...).json()` is now `.text`.
+
+Live, query 1: 66 pages, `Done`, 510 distinct entities, while
+`number_of_elements` says 655. The pages together hold 510. The whole
+document cannot be fetched to compare. At 0.5 s spacing the fetch took
+11 min 31 s, with 52 429s and 3 read timeouts, all retried. At 2.5 s it took
+4 min 53 s, with a few 429s still retried.
+
+Tests: `TestTruncatedResponses` in `test_classyfire.py` (4, all of which
+failed before): a cut-off body is logged; `get_query` passes the paging
+parameters and the timeout; `get_classification` joins three faked pages;
+a cut-off page raises `ClassyFireError`. `examples/ClassyFire/classyfire_tutorial.md`
+and `docs/guide/network.md` describe the truncation and the wrapper.
+
+### 44.1 Found on the way, not done
+
+- `number_of_elements` (655) against 510 entities on the pages. Whether
+  the rest are unclassifiable structures or pages the server shortens
+  cannot be told from outside.
+- The raw calls are `@cached` and store a `requests.Response`, including an
+  error response. That is step 7's to change.

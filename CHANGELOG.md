@@ -613,6 +613,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bare key. `nci_cas_to_mol` and `nci_id_to_mol` return the same. `resolve`
   still returns CACTUS's text unchanged. Their cache entries were retired
   (`version=2`).
+- **ClassyFire: a query too large for the server can be fetched in pages.**
+  `ClassyFireAPI.get_query(1)` returned `None`. The server stops sending
+  after about 108 KB while answering HTTP 200, so the query never arrived
+  whole, and `curl` fails on it too (exit 18). The client turned the error
+  into a bare `None`, and it had no timeout. The raw calls now have a
+  60-second timeout and log what failed at WARNING, and `get_query` takes
+  ClassyFire's `page` and `per_page`. The new
+  `ClassyFireAPI.get_classification(query_id)` fetches pages of 10, which
+  arrive complete, through the shared transport. It joins them into one
+  dict and raises `ClassyFireError` (exported from `provesid`) when a page
+  fails.
 - **The PUG-View parser reads the ICSC's solubility words.** The
   International Chemical Safety Cards grade water solubility as `none`,
   `very poor`, `poor`, `moderate`, `good` or `very good`.

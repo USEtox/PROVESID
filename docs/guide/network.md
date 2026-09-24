@@ -6,9 +6,10 @@ makes its requests through one shared transport,
 [`provesid.http`](../api/http.md). It decides how long to wait between
 requests, when a failure is worth retrying, and how long to back off, so the
 answer is the same for every service. Successful answers are also cached on
-disk; see [Caching](caching.md). `ClassyFireAPI` is the exception: it still
-calls `requests` directly, and the ClassyFire service has classified nothing
-new since February 2023.
+disk; see [Caching](caching.md). `ClassyFireAPI` is the exception: its three
+raw calls still use `requests` directly, and only `get_classification` goes
+through the transport. The ClassyFire service has classified nothing new
+since February 2023.
 
 ## Exceptions
 

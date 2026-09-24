@@ -1,6 +1,6 @@
 [project]
 name = "provesid"
-version = "0.7.0"
+version = "0.8.0"
 description = "A Python package for chemical identifier resolution and experimental property extraction"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -129,6 +129,10 @@ precision = 2
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# The sdist is every file git tracks; these are for working on the repository.
+[tool.hatch.build.targets.sdist]
+exclude = [".claude", ".github"]
 
 [dependency-groups]
 dev = [

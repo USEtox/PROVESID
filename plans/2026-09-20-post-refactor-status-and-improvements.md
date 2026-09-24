@@ -5054,9 +5054,8 @@ sees and so belong in one release that says so.
   The per-call `use_cache=` keyword went with the decorator; the
   constructor's flag reaches `resolve`.
 - **The ChEBI aliases are gone** (§28.5). `get_complete_entity` was
-  `get_compound`, and `batch_get_entities` looped over it, which
-  `get_compounds` does in one request. `examples/ChEBI/README.md` was the
-  only caller.
+  `get_compound`, and `batch_get_entities` was `batch_get_compounds` with
+  no pause. `examples/ChEBI/README.md` was the only caller.
 - **`config.py` prints nothing** (§4.12 step 11). `set_cas_api_key`
   returns the config file, `remove_cas_api_key` whether a key was stored,
   and `show_config` the `get_config_info()` dict. Each logs at INFO what it
@@ -5066,8 +5065,11 @@ sees and so belong in one release that says so.
   `utils.check_CASRN`. `comptox.py`'s `_CAS_NUMBER` still checks shape
   only: it guards a lookup, and a number with a wrong digit simply finds
   nothing. `PubChemAPI`'s synonym parser (`pubchem.py`, the `casrn` list)
-  does not check it either. The USEtox 3 comparison of §45.3 was not run
-  again.
+  does not check it either. §45.3's comparison, run again against
+  `eecd3f4`: by InChIKey 3 of 10,748 rows change, all from PubChemID, and
+  `CASRN` agrees for 9,053, up from 9,051 (`914434-22-1` → `13601-19-9`,
+  `13330-20-7` → `8027-00-7`; `001-01-1` → none). By name and by SMILES
+  (`sources="all"`), nothing changes.
 - **The three plain names of §30.1 have docstrings**:
   `CheMBL.DEFAULT_DB_URL`, `HTTPClient.limiter` and
   `PubChemView.experimental_properties`.
@@ -5095,8 +5097,58 @@ Whole suite: 1,614 passed, 36 skipped (the `slow` marker deselected).
 Doctests: 490 passed, 85 skipped. `scripts/validate_docs_local.sh`: the
 strict build passes.
 
-### 46.2 Still open
+### 46.2 Before the release: 0.8.0
+
+- **The `slow` tests**: 24 passed, 1 skipped.
+- **The online examples, re-recorded** (§28.5). The pytest route cannot do
+  it: `PROVESID_DOCTEST_ALLOW_NETWORK=1` lifts the socket block, but the
+  online examples carry `+SKIP` and stay skipped. A scratch runner took the
+  `+SKIP` off every example of the seven online clients (pubchem,
+  pubchemview, chebi, resolver, opsin, classyfire, cascommonchem), ran each
+  docstring against the live service, with the cache and config in temp
+  directories and the bulk-download hosts refused, and reported every
+  difference. 125 docstrings; resolver and pubchemview matched. The rest:
+  - `ChEBI.get_compounds`: each ID maps to `{exists, primary_chebi_id,
+    id_type, standardized_chebi_id, data}`, the record under `data`. The
+    example read `record["name"]` and raised `KeyError`. The docstring now
+    says so, and the CHANGELOG points `batch_get_entities` users at
+    `batch_get_compounds`, which returns the removed method's shape.
+  - `PubChemAPI.format_search_compound_result`: "aspirin" maps to one CID,
+    so the "several results" example got one dict and counted its 27 keys
+    (the example said 142). `search_compound` does not pass `name_type`,
+    so a list almost never comes back; the example now shows the one dict.
+  - `PubChemAPI.get_cids_by_name` by substance: the same four CIDs, in
+    another order.
+  - ClassyFire: query 1 gives 510 entities, not 655. Page 3 always holds 2
+    of 10, so this is the server's paging, as §44 found. `submit_query` is
+    answered HTTP 500. The other differences were HTTP 429, and the raw
+    calls, run 5 s apart, gave what their examples show.
+  - CAS Common Chemistry: the examples pass the placeholder key; with the
+    stored key substituted, all match but one: `api_key="not-a-key"`
+    reported `Success` because the answer was cached, and the cache key
+    leaves the API key out by design. Uncached it is `Unauthorized`.
+  - OPSIN: `doctest` gives `sys.stdout` no encoding and `py2opsin` reads
+    it; with one set, all 12 match. Not a package problem.
+
+  The runner's resolver example wrote `aspirin.png` into the working
+  directory (`download_image`). Deleted.
+- **ClassyFire's raw calls cached failures**, found by the 429s above:
+  `query_status` returned None on any error and was cached, so it answered
+  None after the server recovered; `submit_query` and `get_query` cached
+  their error responses. They take `skip_if=_request_failed` now: None or
+  a status of 400 or above is not stored. `tests/test_classyfire.py`, 4
+  new, 3 of which fail against the old module. ClassyFire's 429 body says
+  "12 POST requests per minute and 10 GET requests per second", which is
+  not what `MIN_INTERVAL`'s measurement found for GETs.
+- **Version 0.8.0**, with `uv.lock`, and the sdist leaves out `.claude/`
+  and `.github/`.
+
+Whole suite: 1,618 passed, 36 skipped (`slow` deselected). Doctests: 491
+passed, 85 skipped. `scripts/validate_docs_local.sh` passes.
+
+### 46.3 Still open
 
 - `reach.py` keeps `_read_xlsx_with_stdlib` although `openpyxl` is a
   dependency (§4.12 step 11).
-- `ClassyFireAPI.query_status` is cached (§28.5, documented).
+- `ClassyFireAPI.query_status` caches a successful status (§28.5,
+  documented).

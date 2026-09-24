@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-24
+
 ### Added
 
 - **`Search(online_fallback=True)`: ask PubChem and CACTUS what no offline
@@ -604,6 +606,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- **A failed ClassyFire request is no longer cached.** `submit_query`,
+  `query_status` and `get_query` return None or the error response on a
+  failure, and each was cached, so one HTTP 429 stayed the answer for good:
+  `query_status(1)` returned None after the server had recovered. Only a
+  response below 400 is cached now.
+- **Examples re-recorded against the live services (2026-09-24).**
+  `ChEBI.get_compounds` returns an entry per ID with `exists`, and the
+  record under `data`, not the bare record. `ClassyFireAPI.submit_query` is
+  answered HTTP 500. Query 1 holds 510 entities, not 655: the server's
+  pages hold fewer than `per_page` asks for, so `entities` can fall short
+  of `number_of_elements`. `PubChemAPI.format_search_compound_result`'s
+  "several results" example returned one, because PubChem maps "aspirin" to
+  one compound.
 - **A failed CACTUS request is no longer cached as "no data".**
   `NCIChemicalIdentifierResolver.get_molecular_data`, `resolve_multiple`,
   `batch_resolve`, `is_valid_identifier`, `search_by_partial_name` and the
@@ -945,7 +960,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`extract_cas_values` checks the check digit.** A CAS-shaped string
   whose check digit is wrong is no longer a CAS number, so PubChem's
   malformed `001-02-2` (atrazine) and `001-02-7` (caffeine) and most
-  number-shaped InChI fragments are dropped from `Search` candidates.
+  number-shaped InChI fragments are dropped from `Search` candidates. On
+  the USEtox 3 list by InChIKey (10,748 queries), 3 rows change, all from
+  PubChemID: two now report the list's number (`914434-22-1` →
+  `13601-19-9`, `13330-20-7` → `8027-00-7`), and one whose only "number"
+  was `001-01-1` reports none. By name (1,500) and SMILES (1,000), nothing
+  changes.
+- **The sdist leaves out `.claude/` and `.github/`.**
 - **`provesid.config` logs instead of printing.** `set_cas_api_key` returns
   the config file's path, `remove_cas_api_key` returns whether a key was
   stored, and `show_config` returns the `get_config_info()` dict. Each
@@ -1231,8 +1252,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 - **`ChEBI.get_complete_entity` and `ChEBI.batch_get_entities`.** They were
-  compatibility aliases. Use `get_compound`, and `get_compounds` for several
-  IDs in one request.
+  compatibility aliases. Use `get_compound`, and `batch_get_compounds`, which
+  returns the same `{CHEBI:<id>: record}` dict (its pause defaults to 0.1 s,
+  not 0). `get_compounds` asks for several IDs in one request, but returns
+  ChEBI's response as it is: each ID maps to an entry with `exists`, and the
+  record is under `data`.
 - **`MANIFEST.in`.** The build backend is hatchling, which never read it.
 - **`schema_documentation.txt` is no longer shipped in `provesid/data/`.** It
   was ChEMBL's schema for release 36, and the release `CheMBL` installs is

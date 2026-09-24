@@ -189,7 +189,6 @@ class PubChemView:
             logger=self.logger,
         )
 
-        # Standard experimental property headings
         self.experimental_properties = {
             "Accelerating Rate Calorimetry (ARC)": "Accelerating+Rate+Calorimetry+(ARC)",
             "Acid Value": "Acid+Value",
@@ -236,6 +235,10 @@ class PubChemView:
             "Vapor Pressure": "Vapor+Pressure",
             "Viscosity": "Viscosity"
         }
+        """PUG-View's experimental-property headings, each mapped to the form
+        it takes in a URL. [`get_property`][provesid.pubchemview.PubChemView.get_property]
+        looks a heading up here and otherwise swaps its spaces for ``+``, so
+        a heading missing from this dict still works."""
 
     CACHE_SCHEMA_VERSION = 2
     """Bumped whenever the *shape* of what a cached method returns changes, so

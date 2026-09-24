@@ -194,6 +194,10 @@ class CheMBL(SQLiteClient):
     """Release used when the ``latest/`` listing cannot be read."""
 
     DEFAULT_DB_URL = f"{LATEST_DIR_URL}chembl_{FALLBACK_RELEASE}_sqlite.tar.gz"
+    """The SQLite archive of `FALLBACK_RELEASE` under ``latest/``, used when the
+    listing cannot be read. ``latest/`` holds only the current release, so
+    this URL stops resolving once ChEMBL publishes a newer one.
+    """
 
     # ── Acquisition ───────────────────────────────────────────────────────────
 

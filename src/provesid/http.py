@@ -561,6 +561,11 @@ class HTTPClient:
         self.logger = logger or logging.getLogger(__name__)
         self.last_request_time = 0.0
         self.limiter = host_limiter(pace_host) if pace_host else RateLimiter()
+        """The [`RateLimiter`][provesid.http.RateLimiter] that paces and holds
+        this client's requests: the host's shared one from
+        [`host_limiter`][provesid.http.host_limiter] when ``pace_host`` is
+        given, so every client aimed at that host waits on one clock and one
+        ``Retry-After``, and a private one otherwise."""
 
     def rate_limit(self) -> None:
         """

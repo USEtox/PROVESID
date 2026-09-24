@@ -4699,7 +4699,7 @@ covers the formula case. The four per-100-mL cases failed before the fix.
 `test_pubchemview_parse.py` and `test_pubchemview.py`: 99 passed. Doctests
 of both modules: 21 passed, 17 skipped.
 
-### 39.1 Found on the way, not done
+### 39.1 Found on the way, not done — *done, §42*
 
 The ICSC scale for water solubility is words: `none`, `very poor`,
 `poor`, `moderate`, `good`, `very good`, `miscible`. Only `miscible` is in
@@ -4775,3 +4775,36 @@ in `zeropm.py` on the rotated mobility columns cites it.
   build ever used it.
 - `src/provesid/data/zeropm-v0-0-3.sqlite` (460 MB, ignored) sits beside
   v0-0-4 on this machine. It is a local file, not the repository's.
+
+## 42. Landed on 2026-09-24 — the ICSC solubility words (§39.1)
+
+PubChem's Solubility section for 36 common compounds, fetched on
+2026-09-24, gave 242 strings. The ICSC ones come in two shapes:
+
+- the word alone: `Solubility in water: none` (CID 23978), `…: very good`
+  (14917), `…: miscible`;
+- a number with the word after it in parentheses: `…, g/100ml at 15 °C:
+  0.25 (poor)` (2244), `(very poor)`, `(moderate)`, `(good)`, `(very good)`,
+  and pharmacopoeia terms such as `(slightly soluble)`.
+
+`miscible` and the pharmacopoeia terms were already in `QUALITATIVE_TERMS`.
+The ICSC's own words gave `qualitative=None`, and the bare ones gave nothing
+at all.
+
+`ICSC_SOLUBILITY_TERMS` holds `none`, `very poor`, `poor`, `moderate`,
+`good` and `very good`. `_find_qualitative` tries them only after
+`QUALITATIVE_TERMS` fails, and only through `_ICSC_SOLUBILITY`: `solubility
+in water`, any label, a colon, an optional number, then the word, optionally
+in parentheses, and then the end of the string. `None reported`,
+`Solubility in ethanol: good` and `…: none found in the literature` stay
+None. Over the 242 strings, the new words matched 9, all ICSC-shaped.
+
+The word is kept as written and not turned into a range. The cards grade
+8.7 g/100 mL `poor` and 1.3 g/100 mL `moderate`, so the words do not follow
+fixed thresholds. `qualitative == 'none'` is the string `'none'`, which the
+`ParsedValue` docstring now says.
+
+Tests: `test_icsc_solubility_words` (7 real strings, all of which failed
+before) and `test_icsc_words_elsewhere_are_not_qualitative` (5).
+`test_pubchemview_parse.py` and `test_pubchemview.py`: 111 passed.
+Doctests of both modules: 21 passed, 17 skipped.

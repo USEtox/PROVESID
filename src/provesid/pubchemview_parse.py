@@ -166,6 +166,15 @@ as it records a solubility, and dropping the row loses the information that
 somebody measured it and found it negligible.
 """
 
+ICSC_SOLUBILITY_TERMS = ('very poor', 'poor', 'moderate', 'very good', 'good', 'none')
+"""The International Chemical Safety Cards' words for water solubility, as in
+``"Solubility in water: none"`` or ``"…, g/100ml at 20 °C: 0.25 (poor)"``.
+``none``, ``poor`` and ``good`` are ordinary English, so unlike
+[`QUALITATIVE_TERMS`][provesid.pubchemview_parse.QUALITATIVE_TERMS] they are
+matched only in that shape, never anywhere in a string. The cards also use
+``miscible`` and the pharmacopoeia's terms, which are in ``QUALITATIVE_TERMS``.
+"""
+
 _OPERATORS = (
     ('greater than or equal to', '>='),
     ('less than or equal to', '<='),
@@ -223,8 +232,9 @@ class ParsedValue:
             string bounds the quantity rather than stating it, as in
             ``"greater than 100 mg/mL"``. The bound itself is in ``value``.
         qualitative: The term that stood in place of a number, lowercased —
-            ``'insoluble'``, ``'miscible'``, ``'negligible'``. Set whether or
-            not a number was also found.
+            ``'insoluble'``, ``'miscible'``, ``'negligible'``, or an ICSC
+            word such as ``'poor'`` or ``'none'`` (the string, not None).
+            Set whether or not a number was also found.
         conditions: Any remaining qualifying text, such as a pressure the
             measurement was made at or a ``/Estimated/`` note.
 
@@ -441,6 +451,17 @@ def _heading_unit(heading: Optional[str]) -> Optional[str]:
     return None
 
 
+_ICSC_SOLUBILITY = re.compile(
+    r'solubility in water\b[^:]*:\s*(?:' + _NUMBER + r'\s*)?\(?\s*('
+    + '|'.join(re.escape(term) for term in ICSC_SOLUBILITY_TERMS)
+    + r')\s*\)?\s*$')
+"""An ICSC water-solubility value that is, or ends in, one of its words:
+``solubility in water: none`` or ``solubility in water, g/100ml: 0.25
+(poor)``, lowercased. Anchored at both ends, so a word inside a longer
+sentence is not taken.
+"""
+
+
 def _find_qualitative(text: str) -> Optional[str]:
     """
     Find the qualitative term a value string uses in place of a number.
@@ -450,12 +471,17 @@ def _find_qualitative(text: str) -> Optional[str]:
 
     Returns:
         The matched term, lowercased, or None. The longest spelling wins, so
-        ``"practically insoluble"`` is not reported as ``"soluble"``.
+        ``"practically insoluble"`` is not reported as ``"soluble"``. An
+        [`ICSC_SOLUBILITY_TERMS`][provesid.pubchemview_parse.ICSC_SOLUBILITY_TERMS]
+        word counts only as the whole ICSC value.
     """
     lowered = text.lower()
     for term in QUALITATIVE_TERMS:
         if re.search(r'\b' + re.escape(term) + r'\b', lowered):
             return term
+    icsc = _ICSC_SOLUBILITY.match(lowered)
+    if icsc:
+        return icsc.group(1)
     return None
 
 

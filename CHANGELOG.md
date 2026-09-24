@@ -604,6 +604,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- **The PUG-View parser reads the ICSC's solubility words.** The
+  International Chemical Safety Cards grade water solubility as `none`,
+  `very poor`, `poor`, `moderate`, `good` or `very good`.
+  `"Solubility in water: none"` parsed to nothing at all, and
+  `"…, g/100ml at 15 °C: 0.25 (poor)"` kept 0.25 but lost the word. The word
+  is now `qualitative`. Because `none`, `poor` and `good` are ordinary
+  English, they count only when they are the whole ICSC value, or follow its
+  number in parentheses. The list is `pubchemview_parse.ICSC_SOLUBILITY_TERMS`.
 - **`PYOPSIN.get_id_from_list` gives each name its own CML.** py2opsin
   returns a list's CML as the lines of one document, and each record's `cml`
   held one of those lines: `"<?xml …"` for the first name, `"<cml …"` for the

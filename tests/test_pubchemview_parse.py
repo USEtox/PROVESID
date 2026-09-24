@@ -381,6 +381,42 @@ def test_qualitative_terms(text, term):
     assert parse_value(text, "Solubility").qualitative == term
 
 
+
+@pytest.mark.unit
+@pytest.mark.parametrize("text,term,value", [
+    # PubChem's ICSC strings, 2026-09-24 (CIDs 23978, 14917, 2244, 8003,
+    # 6344, 6569, 6342).
+    ("Solubility in water: none", "none", None),
+    ("Solubility in water: very good", "very good", None),
+    ("Solubility in water, g/100ml at 15 °C: 0.25 (poor)", "poor", 0.25),
+    ("Solubility in water, g/100ml at 20 °C: 0.004 (very poor)", "very poor", 0.004),
+    ("Solubility in water, g/100ml at 20 °C: 1.3 (moderate)", "moderate", 1.3),
+    ("Solubility in water, g/100ml at 20 °C: 29 (good)", "good", 29.0),
+    ("Solubility in water, g/100ml at 20 °C: 1390 (very good)", "very good", 1390.0),
+])
+def test_icsc_solubility_words(text, term, value):
+    """
+    The ICSC cards grade water solubility in words. ``"Solubility in water:
+    none"`` parsed to nothing at all, and ``"0.25 (poor)"`` lost the word.
+    """
+    parsed = parse_value(text, "Solubility")
+
+    assert parsed.qualitative == term
+    assert parsed.value == value
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("text", [
+    "None reported",
+    "Solubility in water: none found in the literature",
+    "Good solubility in ethanol",
+    "Solubility in ethanol: good",
+    "Poor, 0.5 g/L",
+])
+def test_icsc_words_elsewhere_are_not_qualitative(text):
+    """``none``, ``poor`` and ``good`` count only as the whole ICSC value."""
+    assert parse_value(text, "Solubility").qualitative is None
+
 @pytest.mark.unit
 def test_slash_note_becomes_a_condition():
     """PubChem marks an estimate by wrapping the note in slashes."""

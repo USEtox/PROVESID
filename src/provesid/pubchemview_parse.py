@@ -588,8 +588,11 @@ def _parse_numbers(text: str, heading: Optional[str]) -> Tuple[
         unit = _clean_unit(match.group(3))
         if unit is None:
             # "Vapor pressure, kPa at 20°C: 24" -- the unit is in the label.
+            # Digits may follow the first character, for the ICSC cards'
+            # "Solubility in water, g/100ml at 25 °C: 0.18"; a formula such
+            # as C6H6 is then a token too, but not a known unit.
             label_units = [_clean_unit(token) for token
-                           in re.findall(r'[A-Za-zµμ°%][A-Za-z/·°%²³]*',
+                           in re.findall(r'[A-Za-zµμ°%][A-Za-z0-9/·°%²³]*',
                                          match.group(1))]
             known = [candidate for candidate in label_units
                      if candidate in UNIT_TO_SI]

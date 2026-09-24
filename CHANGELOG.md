@@ -604,6 +604,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- **The PUG-View parser reads a unit with digits in a value's label.** The
+  International Chemical Safety Cards write water solubility as
+  `"Solubility in water, g/100ml at 25 °C: 0.18"` (benzene). `parse_value`
+  found 0.18 and the 25 °C, but looked for the unit in the label with a
+  pattern that allowed no digits, so `g/100ml` split into `g/` and `ml` and
+  the unit was `None`, with no SI value. It now reads `g/100mL`, or 1.8
+  kg/m³, and `mg/100ml` the same way. A formula in the label, such as
+  `C6H6`, is not taken for a unit.
 - **Passing one source client to `Search` no longer turns off the others.**
   One flag recorded whether the clients had been set up, and passing any
   client set it. `Search("cas", chembl=CheMBL(db_path=...))` therefore

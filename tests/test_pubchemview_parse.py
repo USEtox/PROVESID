@@ -457,6 +457,40 @@ def test_unit_stated_in_the_label():
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("text,value,unit,si,celsius", [
+    # Benzene's ICSC card: the unit in the label has digits in it.
+    ("Solubility in water, g/100ml at 25 °C: 0.18", 0.18, "g/100mL", 1.8, 25.0),
+    ("Solubility in water, g/100ml at 20 °C: 0.07 (very poor)", 0.07, "g/100mL", 0.7, 20.0),
+    ("Solubility in water, g/100ml: 0.18", 0.18, "g/100mL", 1.8, None),
+    ("Solubility in water, mg/100ml at 20 °C: 35", 35.0, "mg/100mL", 0.35, 20.0),
+    ("Solubility in water, g/l at 20 °C: 1.8", 1.8, "g/L", 1.8, 20.0),
+])
+def test_unit_with_digits_stated_in_the_label(text, value, unit, si, celsius):
+    """
+    The ICSC cards write solubility per 100 mL, with the unit in the label.
+
+    The label's tokens were read without digits, so ``g/100ml`` split into
+    ``g/`` and ``ml`` and the value came back with no unit.
+    """
+    parsed = parse_value(text, "Solubility")
+
+    assert parsed.value == value
+    assert parsed.unit == unit
+    assert parsed.value_si == pytest.approx(si)
+    assert parsed.unit_si == "kg/m³"
+    assert parsed.temperature_c == celsius
+
+
+@pytest.mark.unit
+def test_a_formula_in_the_label_is_not_a_unit():
+    """Letting digits into label tokens must not make ``C6H6`` a unit."""
+    parsed = parse_value("Solubility of C6H6 in water: 1.8", "Solubility")
+
+    assert parsed.value == 1.8
+    assert parsed.unit is None
+
+
+@pytest.mark.unit
 def test_heading_is_optional():
     """
     Passing no heading declines the hints rather than failing.

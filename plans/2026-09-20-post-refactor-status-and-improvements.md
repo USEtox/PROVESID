@@ -4128,7 +4128,8 @@ Items 1 and 2 are fixed (§31.6). Writing the notebooks turned up five more:
    of it (`"<?xml …"`, `"<cml …"`, `"    <atomArray>"`), not its own
    molecule. The other fields line up. The OPSIN tutorial leaves CML out.
 7. **The PUG-View parser misses `"Solubility in water, g/100ml at 25 °C:
-   0.18"`** (benzene). It parses neither the value nor the unit.
+   0.18"`** (benzene). It parses neither the value nor the unit. *Fixed,
+   §39: by then it read the value, and only the unit was missing.*
 8. **`ClassyFireAPI.get_query(1)` returns `None`** where `curl` gets HTTP 200
    and `Done` for the same URL. The client makes the request with no timeout
    and turns every `RequestException` into `e.response`. Step 7.
@@ -4137,7 +4138,8 @@ Items 1 and 2 are fixed (§31.6). Writing the notebooks turned up five more:
 
 - ~~**The CAS Common Chemistry notebook is not executed.**~~ Executed on
   2026-09-23 with a real key (§31.8).
-- §31.3 items 3 and 5 to 8. Items 4 and 9 are fixed (§31.7, §31.9).
+- §31.3 items 3 and 5 to 8. Items 4 and 9 are fixed (§31.7, §31.9). *Item 5
+  is fixed (§33), and item 7 (§39).*
 - `examples/notebooks/` still tracks `curated-solubility-dataset.csv` and
   `unique_cas_list.csv`, which nothing uses. The ESOL file moved to
   `examples/search/`.
@@ -4671,3 +4673,37 @@ re-running a notebook that calls online services. The generator reproduced
 the old output exactly, except for the changed key, before it was written.
 The diff is that one line. `mkdocs build --strict` is clean. Whole suite:
 1,587 passed, 37 skipped. Doctests of `search`: 11 passed.
+
+## 39. Landed on 2026-09-24 — the ICSC solubility unit (§31.3 item 7)
+
+§31.3 said the parser read neither the value nor the unit of benzene's
+`"Solubility in water, g/100ml at 25 °C: 0.18"`. On 2026-09-24 it read
+0.18 and 25 °C, and the unit was `None`, so there was no SI value either.
+The string takes the labelled-value path in `_parse_numbers`, pattern 3.
+Pattern 3 looks for a unit in the label when none follows the number, and it
+split the label into tokens with `[A-Za-zµμ°%][A-Za-z/·°%²³]*`. There were no
+digits in the class, so `g/100ml` came out as `g/` and `ml`, neither a known
+unit. `mg/l` worked because it has no digit, and so did §31's `kPa` case.
+
+The fix adds `0-9` to the class after the first character. A label may now
+yield a formula such as `C6H6` as a token, but only tokens in `UNIT_TO_SI`
+are kept, so it is dropped. `g/100ml` and `mg/100ml` were already in
+`UNIT_ALIASES` and `UNIT_TO_SI` (10 and 0.01 kg/m³), so nothing else
+changed.
+
+Tests: `test_unit_with_digits_stated_in_the_label` covers five ICSC shapes:
+`g/100ml` with and without a temperature, with a trailing `(very poor)`,
+`mg/100ml`, and `g/l` as a control. `test_a_formula_in_the_label_is_not_a_unit`
+covers the formula case. The four per-100-mL cases failed before the fix.
+`test_pubchemview_parse.py` and `test_pubchemview.py`: 99 passed. Doctests
+of both modules: 21 passed, 17 skipped.
+
+### 39.1 Found on the way, not done
+
+The ICSC scale for water solubility is words: `none`, `very poor`,
+`poor`, `moderate`, `good`, `very good`, `miscible`. Only `miscible` is in
+`QUALITATIVE_TERMS`, so `"Solubility in water: none"` parses to nothing at
+all. Adding them is not a one-line change. `none` and `good` are ordinary
+English and turn up in other headings, so they would need to be matched
+only in the ICSC shape (`Solubility in water: <term>`), not anywhere in the
+string.

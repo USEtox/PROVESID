@@ -135,7 +135,7 @@ def synonym_sample(comptox):
 
 @pytest.mark.integration
 @pytest.mark.slow
-def test_name_resolution_has_zero_wrong_hits(comptox, synonym_sample):
+def test_name_resolution_has_zero_wrong_hits(comptox, synonym_sample, tmp_path):
     """The resolver must never return a structurally different compound.
 
     Resolves each sampled synonym through a CompTox-only, precision-first
@@ -147,10 +147,8 @@ def test_name_resolution_has_zero_wrong_hits(comptox, synonym_sample):
         "name",
         show_progress=False,
         comptox=comptox,
-        chebi=None,
-        pubchem=None,
-        zeropm=None,
-        chembl=None,
+        # An empty directory, so the other sources are absent, not built.
+        data_dir=tmp_path,
     )
 
     queries = [syn for syn, _ in synonym_sample]

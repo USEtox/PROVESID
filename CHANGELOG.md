@@ -604,6 +604,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- **Passing one source client to `Search` no longer turns off the others.**
+  One flag recorded whether the clients had been set up, and passing any
+  client set it. `Search("cas", chembl=CheMBL(db_path=...))` therefore
+  never built ChEBI, CompTox or PubChemID. It ran on ChEMBL alone and gave
+  empty rows with confidence 0.0, which only a WARNING in the log
+  explained. Each source client left `None` is now built on the first
+  search, under the `datasets` policy, whether or not others were passed.
+  A client that is passed is still used as given and left open by
+  `close()`. A caller who passed `chebi=None` and so on to leave sources
+  out now gets them. To leave a source out, point `data_dir` at a
+  directory without its dataset.
 - **`Search` passed on CompTox's and ZeroPM's non-standard InChIKeys.**
   CompTox stores a key computed from a non-standard InChI (flag `N`, as in
   `PGRHXDWITVMQBC-UHFFFAOYNA-N`) for 131,885 of its 1.15 million keys, and

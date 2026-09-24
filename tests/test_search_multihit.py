@@ -23,6 +23,10 @@ from provesid.search import (
 )
 from provesid.tools import make_candidate
 
+# Each Search here is handed stubs for some sources; the rest must be absent,
+# not built from the real databases.
+pytestmark = pytest.mark.usefixtures("no_installed_datasets")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers / stubs

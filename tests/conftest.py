@@ -30,6 +30,20 @@ os.environ.setdefault(
 )
 
 
+@pytest.fixture
+def no_installed_datasets(tmp_path, monkeypatch):
+    """
+    Point ``PROVESID_DATA_DIR`` at an empty directory for one test.
+
+    ``Search`` builds every source client it was not handed, so a test that
+    passes stubs for some sources would otherwise open the real databases for
+    the rest.  With nothing installed, those sources are reported missing and
+    the search runs on the stubs alone.
+    """
+    monkeypatch.setenv("PROVESID_DATA_DIR", str(tmp_path))
+    return tmp_path
+
+
 @pytest.fixture(autouse=True)
 def _no_host_hold_leaks():
     """

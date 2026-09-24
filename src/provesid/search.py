@@ -760,8 +760,12 @@ class Search:
                 fresh dataset download.  Requires ``datasets="auto"``, since
                 the other two policies do not download at all.
             chebi: Pre-initialised [`ChebiSDF`][provesid.chebi_sdf.ChebiSDF]
-                client.  When ``None`` the client is created lazily on first
-                use.
+                client.  Each queried source whose client is left ``None``
+                is built on the first search, under the ``datasets`` policy,
+                whether or not others were passed; a client that is passed is used
+                as given and left open by
+                [`close`][provesid.search.Search.close].  To leave a source
+                out, point ``data_dir`` at a directory without its dataset.
             comptox: Pre-initialised [`CompToxID`][provesid.comptox.CompToxID] client.
             pubchem: Pre-initialised
                 [`PubChemID`][provesid.pubchem_id.PubChemID] client.
@@ -896,10 +900,10 @@ class Search:
         self._owned_clients: List[str] = []
         self._closed: bool = False
 
-        # Track whether automatic client init has been attempted.
-        self._clients_initialized: bool = any(
-            c is not None for c in self._clients.values()
-        )
+        # Whether _ensure_clients() has built the clients the caller did not
+        # pass.  Passing some does not count: those are used as given, and the
+        # rest are built on the first search as if none had been passed.
+        self._clients_initialized: bool = False
 
         # The web services asked when every offline source missed.  Pooled
         # and reported after the offline sources, and not at all when the

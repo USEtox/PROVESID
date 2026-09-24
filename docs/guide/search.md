@@ -191,3 +191,8 @@ with Search("cas", pubchem=db) as s:
     df = s.search("50-00-0")
 db.get_by_cas("64-17-5")        # still open
 ```
+
+Passing one client does not stop `Search` from building the others: here
+ChEBI, CompTox and ChEMBL are opened as usual on the first search, and
+closed at the end of the `with` block. To leave a source out, pass a
+`data_dir` that does not hold its dataset.

@@ -347,11 +347,42 @@ class TestSearchInit:
         with pytest.raises(ValueError, match="identifier_type must be one of"):
             Search("invalid_type")
 
-    def test_injected_clients_not_reinitialised(self):
+    def test_one_injected_client_leaves_the_others_to_be_built(self, monkeypatch):
+        # Passing one client used to mark all five as initialised, so the
+        # other four were never built and the search ran on one source.
+        built = []
+
+        class _Built:
+            def __init__(self, **kwargs):
+                built.append(type(self).__name__)
+
+            def close(self):
+                pass
+
+        for name in ("ChebiSDF", "CompToxID", "PubChemID", "CheMBL", "ZeroPM"):
+            monkeypatch.setattr(search_module, name, type(name, (_Built,), {}))
+        chembl = _ChEMBLStub()
+        s = Search("cas", chembl=chembl, show_progress=False)
+        s._ensure_clients()
+        assert s._clients["chembl"] is chembl
+        assert sorted(built) == ["ChebiSDF", "CompToxID", "PubChemID"]
+        assert s.sources_available == ["chebi", "comptox", "pubchem", "chembl"]
+        assert s.sources_unavailable == []
+        assert "chembl" not in s._owned_clients        # the caller's, not closed
+        s._ensure_clients()
+        assert len(built) == 3                          # built once
+
+    def test_one_injected_client_with_the_others_absent(self, tmp_path, caplog):
+        # datasets="present" and an empty data directory: the other sources
+        # are reported missing, not built, and the passed one still answers.
         chebi = _ChebiStub()
-        s = Search("cas", chebi=chebi, show_progress=False)
+        s = Search("cas", chebi=chebi, data_dir=tmp_path, show_progress=False)
+        with caplog.at_level("WARNING", logger="provesid.search"):
+            s._ensure_clients()
         assert s._clients["chebi"] is chebi
-        assert s._clients_initialized
+        assert s.sources_available == ["chebi"]
+        assert s.sources_unavailable == ["comptox", "pubchem", "chembl"]
+        assert any("running with 1 of 4 sources" in r.message for r in caplog.records)
 
     def test_strip_salts_default_false(self):
         s = Search(show_progress=False)
@@ -1138,6 +1169,7 @@ class TestMultiSourceConsensus:
 # Source availability
 # ─────────────────────────────────────────────────────────────────────────────
 
+@pytest.mark.usefixtures("no_installed_datasets")
 class TestSourceAvailability:
     """A source that fails to initialise must not vanish silently.
 

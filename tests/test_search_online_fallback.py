@@ -17,6 +17,10 @@ from provesid.search import Search
 from provesid.sources import LOOKUPS, Query
 from provesid.tools import candidate_from_cactus, candidate_from_pubchem_online
 
+# Each Search here is handed stubs for some sources; the rest must be absent,
+# not built from the real databases.
+pytestmark = pytest.mark.usefixtures("no_installed_datasets")
+
 _ASPIRIN_SMILES = "CC(=O)OC1=CC=CC=C1C(=O)O"
 _ASPIRIN_IK = "BSYNRYMUTXBXSQ-UHFFFAOYSA-N"
 _ASPIRIN_INCHI = "InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)"

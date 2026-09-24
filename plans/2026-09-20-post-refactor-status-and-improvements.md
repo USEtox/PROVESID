@@ -393,7 +393,7 @@ replace it.
   "required before using `PubChemID`", which auto-download made untrue, and it
   documents `cd c:\projects\git\PROVESID`.
 
-### 4.13 Passing one source client to `Search` silently disables the others
+### 4.13 Passing one source client to `Search` silently disables the others — **done, §37**
 
 Found while validating §9, not by reading the code. `Search.__init__` ends with
 
@@ -4564,3 +4564,53 @@ lookups on all four columns succeed. Removing the `SMILES` call fails 5 of
 them. With the `Search`, sources, CompTox, non-standard-key, ZeroPM,
 SQLite-lifecycle and dataset-manager suites: 702 passed. Doctests of
 `comptox`, `sources` and `search`: 41 passed, 3 skipped.
+
+## 37. Landed on 2026-09-24 — one client passed to `Search` no longer disables the others (§4.13)
+
+- `_clients_initialized` starts `False` whatever is passed. It records only
+  whether `_ensure_clients` has run, and that already built only the
+  clients left `None`. The comment in `__init__` and the `chebi` argument's
+  docstring say so, and `docs/guide/search.md` adds a sentence under
+  "Closing".
+- `_datasets_needed`, which `datasets="required"` checks, already left out
+  the clients passed in. `close()` already closed only `_owned_clients`.
+  Neither changed.
+
+### 37.1 The tests relied on the bug
+
+The fix is one line. The work was in the tests. A pytest plugin wrapped
+`_ensure_clients` and recorded every test in which a client was passed and
+another was then built. It found 38. They had passed stubs for some sources
+and `None`, or nothing, for the rest, expecting those to stay empty, and
+with the fix they opened the real databases in `PROVESID_DATA_DIR`. 25
+failed. `test_search_precision_regression.py::test_name_resolution_has_zero_wrong_hits`
+still passed, but its docstring calls it a "CompTox-only" run and it had
+become a four-source one. `test_sources._search` is documented as "A
+Search with exactly these clients and no others".
+
+- `conftest.py` gains `no_installed_datasets`, which sets
+  `PROVESID_DATA_DIR` to an empty `tmp_path`. All the tests in
+  `test_search_multihit.py` and `test_search_online_fallback.py` use it,
+  and so do `TestSourceAvailability` in `test_search.py` and `TestCollect`
+  in `test_sources.py`. Sources without a stub are reported missing, as the
+  tests always assumed.
+- The precision test passes `data_dir=tmp_path` instead: its `comptox`
+  fixture is module-scoped and must still find the real database.
+- The same plugin, run again, finds two tests that pass one client and build
+  the rest, both on purpose. One is the new regression test. The other is
+  `test_sqlite_lifecycle`'s `test_a_client_passed_in_is_left_open`, which
+  uses the real databases.
+
+Tests: `test_injected_clients_not_reinitialised` asserted the flag was set
+and is replaced by two. One passes ChEMBL and checks that the other three
+are built once, from patched factories, that all four are available and
+that ChEMBL is not owned. It fails without the fix. The other passes
+ChEBI with an empty `data_dir` and checks the three missing sources are
+reported and the warning given. The whole suite: 1,576 passed, 37 skipped.
+Before the test changes it was 26 failed, 1,549 passed. Doctests of `search`
+and `sources`: 16 passed.
+
+A caller still has no direct way to say "only these sources". An empty
+`data_dir` leaves out everything not passed, and keeping all but one needs
+a directory without that one dataset. A `sources=` argument would say it
+plainly. It is not part of this fix.

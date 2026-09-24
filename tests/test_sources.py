@@ -153,6 +153,7 @@ class TestRankRowsByCompleteness:
 # Search._collect, the one caller
 # ─────────────────────────────────────────────────────────────────────────────
 
+@pytest.mark.usefixtures("no_installed_datasets")
 class TestCollect:
     def test_asks_only_sources_with_a_client(self):
         s = _search(pubchem=_PubChem())

@@ -24,7 +24,13 @@ Examples:
     >>> from provesid.classyfire import ClassyFireAPI
     >>> result = ClassyFireAPI.get_classification(1)           # doctest: +SKIP
     >>> result["classification_status"], len(result["entities"])  # doctest: +SKIP
-    ('Done', 655)
+    ('Done', 510)
+    >>> result["number_of_elements"]                              # doctest: +SKIP
+    655
+
+The server's pages hold fewer entities than ``per_page`` asks for (page 3
+of query 1 always has 2 of 10), so a query's ``entities`` can fall short of
+its ``number_of_elements``.
 """
 
 import logging
@@ -34,6 +40,32 @@ from .cache import cached, clear_cache, get_cache_info
 from .http import HTTPClient, NotFoundError, ServiceError
 
 logger = logging.getLogger(__name__)
+
+
+def _request_failed(result) -> bool:
+    """
+    Report whether a raw call came back without a successful response.
+
+    The raw calls return None on a connection failure (``query_status`` on
+    any failure) and the error response itself on an HTTP error, so caching
+    them would keep one HTTP 429 or 500 as the answer for good.
+
+    Args:
+        result: The value returned by a raw call.
+
+    Returns:
+        True for None and for a response whose status is 400 or above.
+
+    Examples:
+        >>> import requests
+        >>> throttled = requests.Response(); throttled.status_code = 429
+        >>> _request_failed(None), _request_failed(throttled)
+        (True, True)
+        >>> done = requests.Response(); done.status_code = 200
+        >>> _request_failed(done)
+        False
+    """
+    return result is None or result.status_code >= 400
 
 
 class ClassyFireError(ServiceError):
@@ -73,11 +105,13 @@ class ClassyFireAPI:
     warning: new submissions are no longer processed.
 
     Examples:
-        >>> response = ClassyFireAPI.submit_query(
-        ...     "Example Query", "C1=CC(=CC=C1[N+](=O)[O-])Cl")    # doctest: +SKIP
-        >>> query_id = response.json()["id"]                       # doctest: +SKIP
-        >>> ClassyFireAPI.query_status(query_id).text             # doctest: +SKIP
+        A query submitted before 2023:
+
+        >>> ClassyFireAPI.query_status(1, use_cache=False).text   # doctest: +SKIP
         'Done'
+        >>> result = ClassyFireAPI.get_classification(1)          # doctest: +SKIP
+        >>> result["entities"][0]["kingdom"]["name"]              # doctest: +SKIP
+        'Organic compounds'
     """
     URL = 'http://classyfire.wishartlab.com'
 
@@ -138,7 +172,7 @@ class ClassyFireAPI:
         return get_cache_info(service='classyfire')
 
     @staticmethod
-    @cached(service='classyfire')
+    @cached(service='classyfire', skip_if=_request_failed)
     def submit_query(label, input, type='STRUCTURE', use_cache=True):
         """
         Submit a structure for classification.
@@ -155,11 +189,13 @@ class ClassyFireAPI:
             not raised; a connection failure comes back as None.
 
         Note:
-            New submissions have not been processed since February 2023.
+            New submissions have not been processed since February 2023. On
+            2026-09-24 the server answered HTTP 500 to one.
 
         Examples:
             >>> response = ClassyFireAPI.submit_query("test", "CCO")  # doctest: +SKIP
-            >>> response.json()["id"]                                  # doctest: +SKIP
+            >>> response.status_code, response.json()                  # doctest: +SKIP
+            (500, {'status': 500, 'error': 'Internal Server Error'})
         """
         try:
             response = requests.post(
@@ -177,7 +213,7 @@ class ClassyFireAPI:
         return response
 
     @staticmethod
-    @cached(service='classyfire')
+    @cached(service='classyfire', skip_if=_request_failed)
     def query_status(query_id, use_cache=True):
         """
         Retrieves the status of a query.
@@ -194,9 +230,9 @@ class ClassyFireAPI:
             text such as ``Done``, not JSON: read ``.text``.
 
         Note:
-            The status is cached like everything else here, so polling with
-            the cache on sees the first answer forever; poll with
-            ``use_cache=False``.
+            A successful status is cached like everything else here, so
+            polling with the cache on sees the first answer forever; poll
+            with ``use_cache=False``. A failed request is not cached.
 
         Examples:
             >>> ClassyFireAPI.query_status(1, use_cache=False).status_code  # doctest: +SKIP
@@ -215,7 +251,7 @@ class ClassyFireAPI:
             return None
 
     @staticmethod
-    @cached(service='classyfire')
+    @cached(service='classyfire', skip_if=_request_failed)
     def get_query(query_id, format="json", page=None, per_page=None, use_cache=True):
         """
         Retrieve a query's classification.

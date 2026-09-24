@@ -688,6 +688,63 @@ class TestTruncatedResponses:
         with pytest.raises(ClassyFireError, match="Connection broken"):
             ClassyFireAPI.get_classification(1, use_cache=False)
 
+
+class TestFailedRequestsAreNotCached:
+    """
+    The raw calls return None or the error response on a failure, and were
+    cached, so one HTTP 429 stayed the answer for good: query_status(1) came
+    back None after the server had recovered.
+    """
+
+    @pytest.fixture
+    def query_id(self):
+        """Unique per run, so no earlier run's cache entry answers."""
+        import uuid
+        return uuid.uuid4().int % 10**12
+
+    @staticmethod
+    def respond(status, body=b""):
+        import requests
+        response = requests.Response()
+        response.status_code = status
+        response._content = body
+        response.url = "http://classyfire.test"
+        return response
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("method", ["query_status", "get_query"])
+    def test_a_throttled_get_is_asked_again(self, monkeypatch, query_id, method):
+        import requests
+        call = getattr(ClassyFireAPI, method)
+
+        monkeypatch.setattr(requests, "get", lambda *a, **k: self.respond(429))
+        first = call(query_id)
+        assert first is None or first.status_code == 429
+
+        monkeypatch.setattr(requests, "get", lambda *a, **k: self.respond(200, b"Done"))
+        assert call(query_id).status_code == 200
+
+    @pytest.mark.unit
+    def test_a_failed_submission_is_asked_again(self, monkeypatch, query_id):
+        import requests
+        label = f"test-{query_id}"
+
+        monkeypatch.setattr(requests, "post", lambda *a, **k: self.respond(500))
+        assert ClassyFireAPI.submit_query(label, "CCO").status_code == 500
+
+        monkeypatch.setattr(requests, "post", lambda *a, **k: self.respond(200, b'{"id": 1}'))
+        assert ClassyFireAPI.submit_query(label, "CCO").status_code == 200
+
+    @pytest.mark.unit
+    def test_a_success_is_still_cached(self, monkeypatch, query_id):
+        import requests
+
+        monkeypatch.setattr(requests, "get", lambda *a, **k: self.respond(200, b"Done"))
+        ClassyFireAPI.query_status(query_id)
+        monkeypatch.setattr(requests, "get", lambda *a, **k: pytest.fail("not cached"))
+        assert ClassyFireAPI.query_status(query_id).text == "Done"
+
+
 if __name__ == "__main__":
     # Run tests if executed directly
     pytest.main([__file__, "-v"])

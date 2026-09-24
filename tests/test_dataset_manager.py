@@ -440,7 +440,8 @@ class TestSearchDatasetPolicy:
         assert os.listdir(tmp_path) == []
         assert search.sources_available == []
         assert search.sources_unavailable == list(Search.PRESETS["balanced"]["sources"])
-        assert len(frame) == 1 and frame.iloc[0]["CASRN"] == "50-00-0"
+        assert len(frame) == 1 and frame.iloc[0]["query"] == "50-00-0"
+        assert frame.iloc[0]["CASRN"] is None
 
         reported = "\n".join(caplog.messages)
         for name in Search.PRESETS["balanced"]["sources"]:

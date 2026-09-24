@@ -604,6 +604,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- **`Search` reports the current CAS number, not the smallest string.**
+  Aspirin came out as `11126-35-5` and atrazine as `11121-31-6`, both
+  retired, because every source's CAS numbers were sorted as text and the
+  first was taken. `extract_cas_values` and `make_candidate` now keep the
+  source's order, which puts CompTox's `CASRN` column first and follows
+  PubChem's synonym order. ChEBI, ChEMBL and CACTUS do not rank their
+  numbers, so their candidates list them lowest registry number first (the
+  new `tools.sort_cas_by_number`). For 82.6% of the 41,313 CompTox
+  substances with more than one CAS, the current number is the lowest, and
+  for 42.5% it is the smallest as a string. The new `tools.pick_casrn`
+  chooses a hit's number from all its candidates and asks an unranked
+  source that lists several numbers last. `apply_candidate_to_result` no
+  longer fills `CASRN`. ChEBI's CAS numbers are read from its `CAS Registry
+  Numbers` field only. Reading the whole row picked up fragments of the
+  InChI such as `14-10-6`. On the USEtox 3 substance list (10,748
+  InChIKeys), `CASRN` agrees with the list's own number for 9,051 rows,
+  up from 7,229, and 10 rows that agreed no longer do.
+- **A search by CAS reports the compound's number, not the query.** `CASRN`
+  was set to the number searched, so atrazine found by the retired
+  `39400-72-1` said `39400-72-1`. It now says `1912-24-9`, chosen as for any
+  other search, and `query` keeps the number searched. A miss leaves `CASRN`
+  empty. On the USEtox 3 list, 34 of 10,752 CAS searches report another
+  number: 14 were retired numbers, and 16 are current numbers whose hit is
+  a more specific structure, such as `93685-81-5` found as dodecane,
+  `112-40-3`.
+- **`ZeroPM.get_cas_from_inchi` and `get_cas_from_inchikey` return their
+  numbers in a fixed order,** the order ZeroPM stored its results in. The
+  query had no `ORDER BY`. On 20,000 structures the order is the same as
+  before.
 - **`NCIChemicalIdentifierResolver.get_molecular_data` parses `cas` and
   `stdinchikey`.** It already split `names` into a list and read `mw` as a
   float. `cas` came back as CACTUS's text, several numbers in one string,

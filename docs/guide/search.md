@@ -104,7 +104,7 @@ sent. How the requests are paced and retried is described in
 | Column | Description |
 |---|---|
 | `query` | the input value |
-| `CASRN` | CAS Registry Number |
+| `CASRN` | the compound's CAS Registry Number, the current one where the sources say which; a search by a retired number reports the current one, and `query` keeps the number searched |
 | `name`, `IUPAC_name` | preferred common name, IUPAC name |
 | `molecular_formula`, `molecular_mass` | formula and molecular weight |
 | `SMILES` | SMILES as the source gave it |

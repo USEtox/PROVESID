@@ -122,6 +122,15 @@ def normalize_synonyms(value: Any) -> Optional[str]:
 
 _CAS_PATTERN = re.compile(r"\b\d{2,7}-\d{2}-\d\b")
 
+UNRANKED_CAS_SOURCES = ("ChEBI", "ChEMBL", "CACTUS")
+"""Sources whose CAS numbers carry no ranking.
+
+Their candidates list the numbers by registry number (see
+[`sort_cas_by_number`][provesid.tools.sort_cas_by_number]), and
+[`pick_casrn`][provesid.tools.pick_casrn] asks one that lists several only
+when no other source has a number.
+"""
+
 
 def to_float(value: Any) -> Optional[float]:
     """Convert a value to float, or to None when it will not convert.
@@ -187,17 +196,28 @@ def extract_cas_values(value: Any) -> List[str]:
 
     The pattern is structural (``\d{2,7}-\d{2}-\d``) and does **not** verify
     the check digit, so it can pick up a number-shaped string that is not a
-    registered CAS.
+    registered CAS. An InChI is one source of these: ChEBI's for
+    ``XFNLWIPNTYNNJX-UHFFFAOYSA-N`` contains ``...(12)14-10-6-8...``. Pass
+    the fields that hold CAS numbers, not a whole row, where the source has
+    such fields.
+
+    The numbers keep the order they are found in, because a source's order
+    can carry meaning: CompTox's ``CASRN`` column holds the current number,
+    and PubChem lists its synonyms most relevant first. A set has no order,
+    so its members are read sorted.
 
     Args:
         value: A row, a collection, or a single value of any type.
 
     Returns:
-        The distinct CAS-shaped strings found, sorted, or an empty list.
+        The distinct CAS-shaped strings found, first occurrence first, or an
+        empty list.
 
     Examples:
         >>> extract_cas_values({"CASRN": "50-78-2", "syn": ["ASA", "50-78-2"]})
         ['50-78-2']
+        >>> extract_cas_values(["50-78-2", "11126-35-5 | 50-78-2"])
+        ['50-78-2', '11126-35-5']
     """
     found: List[str] = []
 
@@ -207,15 +227,41 @@ def extract_cas_values(value: Any) -> List[str]:
     if isinstance(value, dict):
         for dict_value in value.values():
             found.extend(extract_cas_values(dict_value))
-    elif isinstance(value, (list, tuple, set)):
+    elif isinstance(value, (list, tuple)):
         for item in value:
+            found.extend(extract_cas_values(item))
+    elif isinstance(value, set):
+        for item in sorted(value, key=str):
             found.extend(extract_cas_values(item))
     else:
         text = str(value)
         found.extend(_CAS_PATTERN.findall(text))
 
-    deduped = sorted(set(found))
-    return deduped
+    return list(dict.fromkeys(found))
+
+
+def sort_cas_by_number(cas_values: List[str]) -> List[str]:
+    """Order CAS numbers by registry number, lowest first.
+
+    For sources whose list carries no ranking. The current number is
+    usually the lowest, because the numbers that CAS later retired were
+    mostly registered after it: of the 41,313 CompTox substances with more
+    than one CAS, the ``CASRN`` column is the lowest number for 82.6%, and
+    the smallest as a string for 42.5%. Where a source does rank its
+    numbers, keep that order instead.
+
+    Args:
+        cas_values: CAS numbers, as returned by
+            [`extract_cas_values`][provesid.tools.extract_cas_values].
+
+    Returns:
+        A new list, ordered by the number with the hyphens removed.
+
+    Examples:
+        >>> sort_cas_by_number(["11126-35-5", "50-78-2"])
+        ['50-78-2', '11126-35-5']
+    """
+    return sorted(cas_values, key=lambda cas: int(cas.replace("-", "")))
 
 
 def inchi_to_smiles(inchi: Optional[str]) -> Optional[str]:
@@ -346,8 +392,12 @@ def standardize_inchi_and_key(
 def first_cas(cas_values: List[str]) -> Optional[str]:
     """Pick one CAS number out of a candidate's list.
 
-    The list from [`extract_cas_values`][provesid.tools.extract_cas_values] is
-    sorted, so this is stable across runs rather than dependent on row order.
+    The list keeps the source's order (see
+    [`extract_cas_values`][provesid.tools.extract_cas_values]), so the first
+    number is the one the source puts first. For CompTox that is its
+    ``CASRN`` column, the current number, ahead of the retired ones in its
+    identifiers. Sorting the list instead would put aspirin's retired
+    ``11126-35-5`` ahead of ``50-78-2``, since it is smaller as a string.
 
     Args:
         cas_values: CAS numbers, as returned by
@@ -356,13 +406,9 @@ def first_cas(cas_values: List[str]) -> Optional[str]:
     Returns:
         The first CAS number, or None when the list is empty.
 
-    Note:
-        "First" is first as a string, which is not the best number: aspirin's
-        CompTox row sorts the retired ``11126-35-5`` ahead of ``50-78-2``.
-
     Examples:
-        >>> first_cas(extract_cas_values("50-78-2 | 11126-35-5"))
-        '11126-35-5'
+        >>> first_cas(extract_cas_values(["50-78-2", "11126-35-5 | 50-78-2"]))
+        '50-78-2'
         >>> first_cas([]) is None
         True
     """
@@ -409,7 +455,10 @@ def make_candidate(
             RDKit computes from ``smiles``.
         synonyms: Synonyms, already flattened by
             [`normalize_synonyms`][provesid.tools.normalize_synonyms].
-        cas_candidates: Every CAS the row mentions, deduplicated and sorted.
+        cas_candidates: Every CAS the row mentions, in the source's order.
+            Duplicates are dropped and the first occurrence kept, so the
+            first number stays the one
+            [`first_cas`][provesid.tools.first_cas] reports.
 
     Returns:
         The candidate record: a dict with the keys ``source``, ``name``,
@@ -441,7 +490,7 @@ def make_candidate(
         "DTXSID": dtxsid,
         "molecular_mass": pick_first(to_float(molecular_mass), rdkit_mass),
         "Synonyms": synonyms,
-        "CAS_candidates": sorted(set(cas_candidates or [])),
+        "CAS_candidates": list(dict.fromkeys(cas_candidates or [])),
     }
 
 
@@ -584,13 +633,63 @@ def candidate_compatible_with_consensus(
     return candidate_similarity(candidate, consensus) >= threshold
 
 
+def pick_casrn(candidates: List[Optional[Dict[str, Any]]]) -> Optional[str]:
+    """Choose one CAS number for a hit from the candidates that make it up.
+
+    Candidates are asked in the order given, and the first number of the
+    first one that has any is the answer. A candidate from one of the
+    [`UNRANKED_CAS_SOURCES`][provesid.tools.UNRANKED_CAS_SOURCES] that lists
+    more than one number is asked last, because its first number is only the
+    lowest: ChEBI lists (R)-camphor as ``76-22-2`` and ``464-49-3``, and
+    CompTox, whose ``CASRN`` column is the current number, gives
+    ``464-49-3``, the number for that stereoisomer. One number needs no
+    ranking, so a source that gives only one keeps its place: for
+    inorganics, PubChem often puts another form first (iron(II) oxide,
+    ChEBI's ``1345-25-1``, is ``17125-56-3`` there).
+
+    Args:
+        candidates: The candidates applied to the hit, most trusted first.
+            None entries are skipped.
+
+    Returns:
+        The chosen CAS number, or None when no candidate has one.
+
+    Examples:
+        >>> chebi = make_candidate("ChEBI", cas_candidates=["76-22-2", "464-49-3"])
+        >>> comptox = make_candidate("CompTox", cas_candidates=["464-49-3"])
+        >>> pick_casrn([chebi, comptox])
+        '464-49-3'
+        >>> pick_casrn([chebi, None])
+        '76-22-2'
+        >>> pick_casrn([make_candidate("ChEBI", cas_candidates=["1345-25-1"]),
+        ...             make_candidate("PubChemID", cas_candidates=["17125-56-3", "1345-25-1"])])
+        '1345-25-1'
+        >>> pick_casrn([]) is None
+        True
+    """
+    def offers_an_unranked_choice(cand: Dict[str, Any]) -> bool:
+        return cand.get("source") in UNRANKED_CAS_SOURCES and len(cand.get("CAS_candidates") or []) > 1
+
+    present = [cand for cand in candidates if cand is not None]
+    # sorted() is stable, so the order given is kept within each group.
+    for cand in sorted(present, key=offers_an_unranked_choice):
+        cas = first_cas(cand.get("CAS_candidates") or [])
+        if cas is not None:
+            return cas
+    return None
+
+
 def apply_candidate_to_result(result: Dict[str, Any], candidate: Optional[Dict[str, Any]]) -> None:
     """Fill a result's empty fields from a candidate, in place.
 
     Never overwrites: a field already carrying a value is left alone, so
     applying candidates in priority order means the most trusted source that
     had something to say wins each field independently. A result can therefore
-    take its structure from one source and its CAS from another.
+    take its structure from one source and its name from another.
+
+    ``CASRN`` is not filled here. Which source's CAS is best depends on all
+    the candidates together, so the caller chooses it with
+    [`pick_casrn`][provesid.tools.pick_casrn].
 
     Args:
         result: The result dict to fill, modified in place.
@@ -600,17 +699,15 @@ def apply_candidate_to_result(result: Dict[str, Any], candidate: Optional[Dict[s
         None. The mutation is the point.
 
     Examples:
-        >>> result = {"CASRN": "50-78-2", "name": None}
+        >>> result = {"name": "aspirin", "SMILES": None}
         >>> apply_candidate_to_result(result, make_candidate(
-        ...     "CompTox", name="Aspirin", smiles="CC(=O)OC1=C(C=CC=C1)C(O)=O",
-        ...     cas_candidates=["11126-35-5"]))
-        >>> result["CASRN"], result["name"], result["source"]
-        ('50-78-2', 'Aspirin', 'CompTox')
+        ...     "CompTox", name="Aspirin", smiles="CC(=O)OC1=C(C=CC=C1)C(O)=O"))
+        >>> result["name"], result["SMILES"], result["source"]
+        ('aspirin', 'CC(=O)OC1=C(C=CC=C1)C(O)=O', 'CompTox')
     """
     if candidate is None:
         return
 
-    result["CASRN"] = pick_first(result.get("CASRN"), first_cas(candidate.get("CAS_candidates") or []))
     result["name"] = pick_first(result.get("name"), candidate.get("name"))
     result["IUPAC_name"] = pick_first(result.get("IUPAC_name"), candidate.get("IUPAC_name"))
     result["molecular_formula"] = pick_first(result.get("molecular_formula"), candidate.get("molecular_formula"))
@@ -704,7 +801,11 @@ def candidate_from_chebi_row(row: Dict[str, Any]) -> Dict[str, Any]:
 
     Returns:
         The candidate record. ChEBI states no mass, so the mass comes from
-        RDKit via [`make_candidate`][provesid.tools.make_candidate].
+        RDKit via [`make_candidate`][provesid.tools.make_candidate]. The CAS
+        numbers come from the ``CAS Registry Numbers`` field alone: the rest
+        of the row, the InChI in particular, can contain CAS-shaped strings.
+        ChEBI lists them sorted as text, which is no ranking, so they are
+        reordered by [`sort_cas_by_number`][provesid.tools.sort_cas_by_number].
 
     Examples:
         >>> from provesid import ChebiSDF
@@ -722,7 +823,7 @@ def candidate_from_chebi_row(row: Dict[str, Any]) -> Dict[str, Any]:
         inchi=row.get("INCHI"),
         inchikey=row.get("INCHIKEY"),
         synonyms=normalize_synonyms(row.get("SYNONYM")),
-        cas_candidates=extract_cas_values(row),
+        cas_candidates=sort_cas_by_number(extract_cas_values(row.get("CAS Registry Numbers"))),
     )
 
 
@@ -816,7 +917,7 @@ def candidate_from_zeropm_name_table(name: str, table: pd.DataFrame) -> Optional
 
     working = table.copy()
     if "rank" in working.columns:
-        working = working.sort_values(by="rank", ascending=True)
+        working = working.sort_values(by="rank", ascending=True, kind="stable")
 
     first = working.iloc[0]
     inchi = first.get("inchi")
@@ -846,9 +947,9 @@ def candidate_from_zeropm_smiles(smiles_query: str, zeropm: ZeroPM) -> Optional[
     """Adapt a ZeroPM structure lookup into a single candidate record.
 
     ZeroPM cannot be queried by structure directly. The SMILES is resolved to
-    CAS numbers first, and up to five of those are looked up and pooled — a
-    cap, because a structure that matches many registry entries would
-    otherwise cost one query each for no added agreement.
+    CAS numbers first, and the first five, in ZeroPM's order, are looked up
+    and pooled — a cap, because a structure that matches many registry
+    entries would otherwise cost one query each for no added agreement.
 
     Args:
         smiles_query: The structure to look up, as SMILES.
@@ -885,9 +986,9 @@ def candidate_from_zeropm_smiles(smiles_query: str, zeropm: ZeroPM) -> Optional[
         return make_candidate("ZeroPM", smiles=smiles_query, cas_candidates=cas_values)
 
     combined = pd.concat(tables, ignore_index=True)
-    # The CAS numbers come sorted, not ranked, and the first can belong to a
-    # relative of the query: for "CCO" it is 14742-23-5, 13C-labelled ethanol.
-    # Take the structure from a row that is the query, when one is.
+    # The CAS numbers are not ranked and include relatives of the query: for
+    # "CCO" they include 14742-23-5, 13C-labelled ethanol. Take the structure
+    # from a row that is the query, when one is.
     query_key = inchikey_from_smiles(smiles_query)
     same_structure = combined[combined["inchikey"] == query_key] if query_key else combined.iloc[0:0]
     first = same_structure.iloc[0] if not same_structure.empty else combined.iloc[0]
@@ -919,7 +1020,9 @@ def candidate_from_chembl_row(row: Dict[str, Any], chembl: Optional[CheMBL] = No
             candidate is worth having without its mass.
 
     Returns:
-        The candidate record. ChEMBL states no formula.
+        The candidate record. ChEMBL states no formula. Its synonyms are
+        sorted alphabetically, so the CAS numbers among them are reordered by
+        [`sort_cas_by_number`][provesid.tools.sort_cas_by_number].
 
     Examples:
         >>> row = {"pref_name": "ASPIRIN", "canonical_smiles": "CC(=O)Oc1ccccc1C(=O)O",
@@ -946,7 +1049,7 @@ def candidate_from_chembl_row(row: Dict[str, Any], chembl: Optional[CheMBL] = No
         inchikey=row.get("standard_inchi_key"),
         molecular_mass=(props or {}).get("mw_freebase"),
         synonyms=normalize_synonyms(row.get("synonyms")),
-        cas_candidates=extract_cas_values(row.get("synonyms")),
+        cas_candidates=sort_cas_by_number(extract_cas_values(row.get("synonyms"))),
     )
 
 
@@ -1000,7 +1103,9 @@ def candidate_from_cactus(smiles: str, names: Optional[List[str]] = None) -> Dic
     CACTUS answers one representation per request, so the caller asks for the
     two that matter --- the structure and the name list --- and everything
     else is derived here: the InChIKey by RDKit, the CAS numbers from the
-    names, among which CACTUS lists them.
+    names, among which CACTUS lists them. CACTUS's order is no ranking
+    (ethanol's first CAS is ``121182-78-3``, not ``64-17-5``), so they are
+    reordered by [`sort_cas_by_number`][provesid.tools.sort_cas_by_number].
 
     Args:
         smiles: The SMILES CACTUS resolved the identifier to.
@@ -1022,7 +1127,7 @@ def candidate_from_cactus(smiles: str, names: Optional[List[str]] = None) -> Dic
         smiles=smiles,
         inchikey=inchikey_from_smiles(smiles),
         synonyms=normalize_synonyms(names),
-        cas_candidates=extract_cas_values(names),
+        cas_candidates=sort_cas_by_number(extract_cas_values(names)),
     )
 
 

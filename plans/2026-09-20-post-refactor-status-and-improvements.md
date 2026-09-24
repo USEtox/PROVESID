@@ -3143,7 +3143,7 @@ with CID 0 instead of a 404, and that is filtered out as a miss.
   realistic case for this feature. `examples/search/online_fallback_demo.py`
   uses one.
 
-### 23.5 Found while validating: `CASRN` is the smallest CAS string, not the best one
+### 23.5 Found while validating: `CASRN` is the smallest CAS string, not the best one — **done, §45**
 
 With no CAS in the query, the live runs reported atrazine as `11121-31-6`
 and aspirin as `11126-35-5`. Both are real but retired numbers. CACTUS
@@ -3526,7 +3526,7 @@ another source for chemicals CompTox holds no InChIKey for.
 
 ### 26.5 Still open
 
-- **`CASRN` reports the number queried, not the current one.**
+- *Done, §45: a row reports the current number.* **`CASRN` reports the number queried, not the current one.**
   `_resolve_cas` sets `result["CASRN"] = cas`, so atrazine found by
   `39400-72-1` is reported as `CASRN = 39400-72-1`. The current `1912-24-9`
   is available in the candidate. The online fallback does the same, so
@@ -3727,7 +3727,7 @@ since February 2023 (step 7 is still postponed).
 
 ### 28.5 Still open
 
-- §23.5 shows in the examples: `first_cas` picks the retired `11126-35-5`
+- *Done, §45.* §23.5 shows in the examples: `first_cas` picks the retired `11126-35-5`
   for aspirin from CompTox, and a fuzzy "asprin" returns it as `CASRN`.
 - `ChEBI.get_complete_entity` and `batch_get_entities` are compatibility
   aliases, which dev-principle 1 says not to keep.
@@ -4886,3 +4886,140 @@ and `docs/guide/network.md` describe the truncation and the wrapper.
   cannot be told from outside.
 - The raw calls are `@cached` and store a `requests.Response`, including an
   error response. That is step 7's to change.
+
+## 45. Landed on 2026-09-24 — `CASRN` is the current number (§23.5, §26.5)
+
+§23.5 put the fix in CompTox's `CASRN` column and PubChem's synonym order.
+§43 found that CACTUS's order is no ranking. The user settled §26.5's
+question: a row reports the compound's current number, and `query` keeps
+the number searched.
+
+### 45.1 How each source orders its numbers
+
+Measured on the installed databases:
+
+| source | order | used as |
+|---|---|---|
+| CompTox | `CASRN` column, then the alternates in `IDENTIFIER` | ranked |
+| PubChemID | rowid order of `cas_numbers`, which follows PubChem's synonyms (caffeine: `58-08-2`, `95789-13-2`, `001-02-7`, …) | ranked |
+| ZeroPM, by name | table rank | ranked |
+| ZeroPM, by structure | the order ZeroPM stored its results in; not a ranking, but ethanol's starts `64-17-5`, aspirin's `50-78-2`, caffeine's `58-08-2` | ranked |
+| PubChem (online) | synonym order | ranked |
+| ChEBI | `CAS Registry Numbers`, sorted as text (299 of 28,952 entries list more than one) | unranked |
+| ChEMBL | synonyms `ORDER BY syn_type, synonyms`, alphabetical | unranked |
+| CACTUS | `names`; ethanol starts `121182-78-3` | unranked |
+
+For an unranked list, the lowest registry number is the best guess. Of the
+41,313 CompTox substances with more than one CAS, `CASRN` is the lowest
+number for 34,135 (82.6%) and the smallest string for 17,564 (42.5%).
+
+### 45.2 What changed
+
+- `extract_cas_values` keeps first-occurrence order (a set is read sorted),
+  and `make_candidate` keeps the order it is given.
+- `sort_cas_by_number` orders a list by registry number.
+  `candidate_from_chebi_row`, `candidate_from_chembl_row` and
+  `candidate_from_cactus` use it.
+- `candidate_from_chebi_row` reads `CAS Registry Numbers` only. It walked
+  the whole row, and the pattern matches inside an InChI: the thioester
+  `XFNLWIPNTYNNJX-UHFFFAOYSA-N` was reported as `14-10-6`, from
+  `…(12)14-10-6-8…`. On the InChIKey run below, 598 of the 3,967 rows
+  whose `source` was ChEBI had such a fragment as `CASRN`.
+- `pick_casrn(candidates)` chooses a hit's number: the first number of the
+  first candidate that has one, in fill order, except that a candidate from
+  `UNRANKED_CAS_SOURCES` (ChEBI, ChEMBL, CACTUS) listing more than one
+  number is asked last. `apply_candidate_to_result` no longer fills
+  `CASRN`. `_build_result_for_cluster` calls `pick_casrn` on the
+  candidates it applied.
+- `_resolve_cas` no longer sets `CASRN` to the query. A miss has `CASRN`
+  None, as a miss of any other kind does.
+- `ZeroPM.get_cas_from_inchi` and `get_cas_from_inchikey` say
+  `GROUP BY aq.query ORDER BY MIN(ar.rowid)` instead of `SELECT DISTINCT`
+  with no order. On 20,000 random structures (2,410 with more than one
+  number) the result equals the old one.
+  `candidate_from_zeropm_smiles` looks up the first five in that order
+  instead of the first five as text.
+
+### 45.3 Before and after, on the USEtox 3 substance list
+
+`USEtoxInput/notebooks/USEtox3_final_unique_CASRN.csv`: 10,752 substances,
+each with the CAS number CAS Common Chemistry gives. That number is the
+reference. It is not always the number for the exact structure: dodecene
+is listed as `25378-22-7` (mixed isomers), and 1-dodecene is `112-41-4`.
+"Before" is HEAD (`fa06321`) from a frozen copy. `Search(..., n_hits=1)`,
+default sources.
+
+| run | queries | `CASRN` agrees before | after | better | worse | other change |
+|---|---:|---:|---:|---:|---:|---:|
+| InChIKey | 10,748 | 7,229 | 9,051 | 1,832 | 10 | 33 |
+| name (first 1,500, shuffled with seed 20260924) | 1,500 | 815 | 1,048 | 233 | 0 | 4 |
+| SMILES, `sources="all"` (1,000) | 1,000 | 729 | 851 | 128 | 6 | 16 |
+
+Every other output column (`name`, `DTXSID`, `InChIKey`, `source`) is
+identical in all runs. The InChIKey run's worse rows: 6 where PubChem's
+first number is not the list's (`8066-11-3` → `8072-81-9`), 3 where
+CompTox's `CASRN` is not the list's (`136379-59-4` → `1422359-85-0`), and
+pyraclofos, where ChEBI's two numbers put `77458-01-6` second. One row lost
+its `CASRN`: ChEBI's only "number" for it was the InChI fragment `12-15-6`.
+
+The SMILES run is the one that exercises ZeroPM. Four of its six worse rows
+are ZeroPM putting another number for the same substance first (barium
+sulfate: `13462-86-7` → `7727-43-7`). The fifth is PubChem, and the sixth
+is anethole, whose ChEBI entry lists `5932-68-3` and `97-54-1`.
+
+Two other rules were tried first, on the same InChIKey run:
+
+| rule | agrees | worse |
+|---|---:|---:|
+| source order, unranked lists by number, fill order unchanged | 9,044 | 13 |
+| every ranked source before every unranked one | 9,068 | 21 |
+| unranked sources last only when they list more than one (landed) | 9,051 | 10 |
+
+The second put PubChem ahead of a ChEBI that lists one number, and for
+inorganics PubChem's first number is often another form: iron(II) oxide,
+`1345-25-1`, became `17125-56-3`, and phosphorus, `7723-14-0`, became
+`12185-10-3`. The first put ChEBI's lowest number ahead of CompTox for
+stereoisomers: (R)-camphor, `464-49-3`, became camphor, `76-22-2`.
+
+**CAS searches** (all 10,752). Before, `CASRN` was always the query. Now
+34 rows report another number, and 24 misses have no `CASRN`:
+
+- 14 queries are CompTox alternates, retired numbers, and report CompTox's
+  `CASRN` (`110895-43-7` → Triazamate, `112143-82-5`).
+- 16 queries are some CompTox substance's own `CASRN`, but the hit is a
+  more specific structure from PubChem or ChEBI, and the row reports that
+  structure's number: `93685-81-5` → dodecane, `112-40-3`; `139-33-3`
+  (disodium EDTA) → EDTA, `60-00-4`; `1321-94-4` (methylnaphthalene) →
+  1-methylnaphthalene, `90-12-0`; `11113-50-1` → boric acid,
+  `10043-35-3`. Before, the row paired the query's number with the other
+  structure.
+- 4 are not in CompTox, and PubChem lists another number first.
+
+### 45.4 Tests
+
+`tests/test_tools_candidates.py`, 17 new: order kept by extraction,
+`make_candidate`, CompTox and PubChem; ChEBI reads only its CAS field and
+orders by number, as does CACTUS; `pick_casrn` prefers CompTox over a ChEBI
+with two numbers, keeps a ChEBI with one ahead of PubChem, and falls back
+to an unranked source; `Search("cas")` reports `1912-24-9` for
+`39400-72-1`, keeps `464-49-3` for (R)-camphor, and leaves a miss empty.
+Run against HEAD, the ones that do not import the new helpers fail, except
+the (R)-camphor test, which HEAD passes by echoing the query. The whole
+suite: 1,630 passed, 37 skipped, 1 failed. The failure was
+`test_dataset_manager.py`'s `test_present_downloads_nothing_...`, which
+checked a miss's `CASRN` equal to the query; it now checks `query`, and
+that `CASRN` is None (the file: 44 passed).
+Doctests of `search`, `sources`, `tools` and `zeropm`: 110 passed.
+`mkdocs build --strict` is clean.
+
+### 45.5 Found on the way, not done
+
+- `_CAS_PATTERN` does not check the check digit, so PubChem's `001-02-2`
+  (atrazine) and `001-02-7` (caffeine) count as CAS numbers. Sorted as
+  text, `001-02-2` was atrazine's first PubChem number. Checking the digit
+  would drop them and the InChI fragments.
+- The 16 CAS searches whose hit is a more specific structure: the
+  substance the number names (a UVCB, a salt, an isomer mixture) is in
+  CompTox, with its own row, but ranks below the structure. Whether a CAS
+  search should rank the row that holds the queried number as its `CASRN`
+  first is a ranking question, not a CAS-order one.

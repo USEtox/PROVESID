@@ -97,6 +97,7 @@ from .tools import (
     inchikey_from_smiles,
     is_missing,
     make_candidate,
+    pick_casrn,
     pick_first,
     text_similarity,
 )
@@ -1898,6 +1899,12 @@ class Search:
         names it) by CAS number.  ChEMBL records no CAS numbers,
         so it is asked for the first SMILES the others found.
 
+        The template leaves ``CASRN`` empty, so a hit reports the compound's
+        current number, as a name or structure search does, and not
+        necessarily the one queried: atrazine found by the retired
+        ``39400-72-1`` is reported as ``1912-24-9``. The number queried stays
+        in ``query``.
+
         Args:
             cas: CAS Registry Number string.
 
@@ -1906,7 +1913,6 @@ class Search:
         """
         result = self._empty_result(cas, "CASRN")
         result["match_method"] = "exact_cas"
-        result["CASRN"] = cas
 
         hits = self._collect("cas", cas)
         smiles = _first_smiles_from_candidates(hits)
@@ -2598,20 +2604,17 @@ class Search:
         consensus_source, source_match_scores, match_score = compute_consensus(per_source)
         consensus_candidate = per_source.get(consensus_source) if consensus_source else None
 
-        for source_key in (k for k in self._SOURCE_KEYS if k != "chembl"):
-            candidate = per_source.get(source_key)
-            if candidate_compatible_with_consensus(
-                candidate, consensus_candidate, self.consensus_compat_threshold
-            ):
-                apply_candidate_to_result(result, candidate)
-
         # ChEMBL, then the online services, fill only what the others left.
-        for source_key in ["chembl"] + self._ONLINE_KEYS:
+        fill_order = [k for k in self._SOURCE_KEYS if k != "chembl"] + ["chembl"] + self._ONLINE_KEYS
+        applied: List[Dict[str, Any]] = []
+        for source_key in fill_order:
             candidate = per_source.get(source_key)
             if candidate_compatible_with_consensus(
                 candidate, consensus_candidate, self.consensus_compat_threshold
             ):
                 apply_candidate_to_result(result, candidate)
+                applied.append(candidate)
+        result["CASRN"] = pick_first(result.get("CASRN"), pick_casrn(applied))
 
         # OPSIN supplies a structure even when no source row carried one.
         if opsin_match and is_missing(result.get("SMILES")) and not is_missing(opsin_smiles):

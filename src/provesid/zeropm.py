@@ -786,9 +786,12 @@ class ZeroPM(SQLiteClient):
         -------
         str, list, or None
             CAS number, list of CAS numbers, or None if not found. Every CAS
-            number whose query reaches this structure at any rank, in no
-            particular order: formaldehyde's list includes carbon monoxide's
-            ``630-08-0``, which reaches it at rank 2.
+            number whose query reaches this structure at any rank, so the
+            list includes relatives: formaldehyde's includes carbon
+            monoxide's ``630-08-0``, which reaches it at rank 2. The order is
+            the order ZeroPM stored its results in, which is not a ranking
+            but often puts the main number first: ethanol's list starts
+            ``64-17-5`` and caffeine's ``58-08-2``.
 
         Examples
         --------
@@ -806,12 +809,15 @@ class ZeroPM(SQLiteClient):
 
         inchi_id = result[0]
 
-        # Find all query_ids for this inchi_id that are CAS numbers
+        # Find all query_ids for this inchi_id that are CAS numbers, in the
+        # order ZeroPM stored its results
         self.cursor.execute("""
-            SELECT DISTINCT aq.query
+            SELECT aq.query
             FROM api_results ar
             JOIN api_ready_query aq ON ar.query_id = aq.query_id
             WHERE ar.inchi_id = ? AND aq.type = 'CAS Registry Number'
+            GROUP BY aq.query
+            ORDER BY MIN(ar.rowid)
         """, (inchi_id,))
         cas_numbers = [row[0] for row in self.cursor.fetchall()]
 
@@ -853,12 +859,15 @@ class ZeroPM(SQLiteClient):
 
         inchi_id = result[0]
 
-        # Find all query_ids for this inchi_id that are CAS numbers
+        # Find all query_ids for this inchi_id that are CAS numbers, in the
+        # order ZeroPM stored its results
         self.cursor.execute("""
-            SELECT DISTINCT aq.query
+            SELECT aq.query
             FROM api_results ar
             JOIN api_ready_query aq ON ar.query_id = aq.query_id
             WHERE ar.inchi_id = ? AND aq.type = 'CAS Registry Number'
+            GROUP BY aq.query
+            ORDER BY MIN(ar.rowid)
         """, (inchi_id,))
         cas_numbers = [row[0] for row in self.cursor.fetchall()]
 

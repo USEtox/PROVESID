@@ -4099,6 +4099,7 @@ These are code, not tutorial text, and are listed so they are not lost:
    newline-joined string, and `stdinchikey` keeps CACTUS's `InChIKey=`
    prefix. Both are the raw service format. Dev-principle §3 keeps the raw
    call, so a parsed wrapper is the place to fix it, if anywhere.
+   *Fixed, §43.*
 
 Items 1 and 2 are fixed (§31.6). Writing the notebooks turned up five more:
 
@@ -4140,7 +4141,7 @@ Items 1 and 2 are fixed (§31.6). Writing the notebooks turned up five more:
 - ~~**The CAS Common Chemistry notebook is not executed.**~~ Executed on
   2026-09-23 with a real key (§31.8).
 - §31.3 items 3 and 5 to 8. Items 4 and 9 are fixed (§31.7, §31.9). *Item 5
-  is fixed (§33), item 7 (§39) and item 6 (§40).*
+  is fixed (§33), item 7 (§39), item 6 (§40) and item 3 (§43).*
 - ~~`examples/notebooks/` still tracks `curated-solubility-dataset.csv` and
   `unique_cas_list.csv`, which nothing uses. The ESOL file moved to
   `examples/search/`.~~ Done, §41.
@@ -4808,3 +4809,25 @@ Tests: `test_icsc_solubility_words` (7 real strings, all of which failed
 before) and `test_icsc_words_elsewhere_are_not_qualitative` (5).
 `test_pubchemview_parse.py` and `test_pubchemview.py`: 111 passed.
 Doctests of both modules: 21 passed, 17 skipped.
+
+## 43. Landed on 2026-09-24 — CACTUS's `cas` and `stdinchikey` (§31.3 item 3)
+
+§31.3 put the fix in a parsed wrapper, since dev-principle §3 keeps the raw
+call. `get_molecular_data` already was one: it split `names` into a list and
+read `mw` as a float, but passed `cas` and `stdinchikey` through. It now
+splits `cas` into a list, in CACTUS's order (`_lines`), and strips the
+`InChIKey=` prefix (`_strip_inchikey_prefix`). `nci_cas_to_mol` and
+`nci_id_to_mol` return the same. `resolve` is unchanged.
+
+The list is not a ranking, so the wrapper does not pick a "primary" CAS. On
+2026-09-24 ethanol's list started with 121182-78-3 (64-17-5 second), and
+caffeine's was `['71701-02-5', '95789-13-2', '58-08-2']`.
+
+`get_molecular_data`, `nci_cas_to_mol` and `nci_id_to_mol` are
+`@cached(version=2)`, so no entry of the old shape is served.
+
+Tests: `TestMolecularDataIsParsed` in `test_nci_resolver.py`, with CACTUS's
+ethanol answers faked: `cas` is the list, the key is bare, and `resolve`
+still carries the prefix. The first two failed before. `test_nci_resolver.py`
+and the two cache test files: 75 passed. The resolver tutorial notebook was
+re-executed; cell 9 now shows the bare key and the CAS list.

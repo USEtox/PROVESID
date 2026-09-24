@@ -127,6 +127,41 @@ def nci_classify(response: requests.Response) -> Outcome:
     return default_classify(response)
 
 
+def _lines(text: str) -> List[str]:
+    """
+    Split a CACTUS answer that holds one value per line.
+
+    Args:
+        text: The answer, as ``resolve`` returns it.
+
+    Returns:
+        The non-empty lines, stripped, in CACTUS's order.
+
+    Examples:
+        >>> _lines("64-17-5\\n8024-45-1\\n")
+        ['64-17-5', '8024-45-1']
+    """
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def _strip_inchikey_prefix(text: str) -> str:
+    """
+    Remove the ``InChIKey=`` CACTUS writes before a key.
+
+    Args:
+        text: The ``stdinchikey`` answer.
+
+    Returns:
+        The bare 27-character key.
+
+    Examples:
+        >>> _strip_inchikey_prefix("InChIKey=LFQSCWFLJHTTHZ-UHFFFAOYSA-N")
+        'LFQSCWFLJHTTHZ-UHFFFAOYSA-N'
+    """
+    text = text.strip()
+    return text[len("InChIKey="):] if text.startswith("InChIKey=") else text
+
+
 class NCIChemicalIdentifierResolver:
     """
     A Python interface to the NCI Chemical Identifier Resolver web service
@@ -139,8 +174,12 @@ class NCIChemicalIdentifierResolver:
 
     URL API scheme: https://cactus.nci.nih.gov/chemical/structure/{identifier}/{representation}
 
-    Answers come back as CACTUS writes them: text, several values one per
-    line (``names``, ``cas``), InChIKeys with their ``InChIKey=`` prefix.
+    [`resolve`][provesid.resolver.NCIChemicalIdentifierResolver.resolve]
+    answers as CACTUS writes: text, several values one per line (``names``,
+    ``cas``), InChIKeys with their ``InChIKey=`` prefix.
+    [`get_molecular_data`][provesid.resolver.NCIChemicalIdentifierResolver.get_molecular_data]
+    and the ``nci_*_to_mol`` functions parse it into lists, a bare key and a
+    float.
 
     Examples:
         >>> resolver = NCIChemicalIdentifierResolver()
@@ -452,13 +491,19 @@ class NCIChemicalIdentifierResolver:
 
         return results
 
-    @cached(service='nci')
+    # version=2: cas became a list and stdinchikey lost its InChIKey= prefix.
+    @cached(service='nci', version=2)
     def get_molecular_data(self, identifier: str) -> Dict[str, Any]:
         """
         Get comprehensive molecular data for a chemical identifier
 
         This method attempts to retrieve multiple common properties and identifiers
         for a given chemical, similar to the original nci_cas_to_mol function.
+
+        Unlike [`resolve`][provesid.resolver.NCIChemicalIdentifierResolver.resolve],
+        this parses CACTUS's text: ``names`` and ``cas`` become lists,
+        ``stdinchikey`` loses its ``InChIKey=`` prefix and ``mw`` becomes a
+        float.
 
         Args:
             identifier: Input chemical identifier
@@ -468,14 +513,20 @@ class NCIChemicalIdentifierResolver:
             ``success`` (False only when nothing resolved), ``error``,
             ``available_data`` and, at the top level for convenience, each
             representation (``stdinchi``, ``stdinchikey``, ``smiles``,
-            ``names`` as a list, ``iupac_name``, ``cas``, ``mw`` as a float,
-            ``formula``, ``ficts``, ``ficus``, ``uuuuu``, ``hashisy``), None
-            where it failed. Twelve requests.
+            ``names`` as a list, ``iupac_name``, ``cas`` as a list, ``mw`` as
+            a float, ``formula``, ``ficts``, ``ficus``, ``uuuuu``,
+            ``hashisy``), None where it failed. Twelve requests.
+
+            ``cas`` is every CAS number CACTUS associates with the structure,
+            in its order, which is not a ranking: ethanol's list starts with
+            121182-78-3, not 64-17-5. Treat it as a set of candidates.
 
         Examples:
-            >>> data = NCIChemicalIdentifierResolver().get_molecular_data("50-00-0")  # doctest: +SKIP
-            >>> data["success"], data["formula"], data["mw"], data["smiles"]          # doctest: +SKIP
-            (True, 'CH2O', 30.0262, 'C=O')
+            >>> data = NCIChemicalIdentifierResolver().get_molecular_data("64-17-5")  # doctest: +SKIP
+            >>> data["formula"], data["mw"], data["stdinchikey"]                      # doctest: +SKIP
+            ('C2H6O', 46.0688, 'LFQSCWFLJHTTHZ-UHFFFAOYSA-N')
+            >>> "64-17-5" in data["cas"]                                              # doctest: +SKIP
+            True
         """
         # Standard representations to retrieve
         standard_reps = [
@@ -497,10 +548,10 @@ class NCIChemicalIdentifierResolver:
                 value = self.resolve(identifier, rep)
 
                 # Process specific data types
-                if rep == 'names':
-                    # Split names by newline and filter empty strings
-                    names_list = [name.strip() for name in value.split('\n') if name.strip()]
-                    result['available_data'][rep] = names_list
+                if rep in ('names', 'cas'):
+                    result['available_data'][rep] = _lines(value)
+                elif rep == 'stdinchikey':
+                    result['available_data'][rep] = _strip_inchikey_prefix(value)
                 elif rep == 'mw':
                     # Try to convert molecular weight to float
                     try:
@@ -688,7 +739,7 @@ class NCIChemicalIdentifierResolver:
 
 # Convenience functions for backwards compatibility and ease of use
 
-@cached(service='nci')
+@cached(service='nci', version=2)
 def nci_cas_to_mol(cas_rn: str) -> Dict[str, Any]:
     """
     Convert a CAS RN to a molecule data structure using the NCI web API
@@ -711,7 +762,7 @@ def nci_cas_to_mol(cas_rn: str) -> Dict[str, Any]:
     resolver = NCIChemicalIdentifierResolver()
     return resolver.get_molecular_data(cas_rn)
 
-@cached(service='nci')
+@cached(service='nci', version=2)
 def nci_id_to_mol(identifier: str) -> Dict[str, Any]:
     """
     Convert any chemical identifier to a molecule data structure
@@ -726,7 +777,7 @@ def nci_id_to_mol(identifier: str) -> Dict[str, Any]:
 
     Examples:
         >>> nci_id_to_mol("CCO")["stdinchikey"]                  # doctest: +SKIP
-        'InChIKey=LFQSCWFLJHTTHZ-UHFFFAOYSA-N'
+        'LFQSCWFLJHTTHZ-UHFFFAOYSA-N'
     """
     resolver = NCIChemicalIdentifierResolver()
     return resolver.get_molecular_data(identifier)

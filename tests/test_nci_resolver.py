@@ -483,6 +483,49 @@ class TestNCIClassification:
         assert issubclass(NCIResolverNotFoundError, NotFoundError)
 
 
+
+class TestMolecularDataIsParsed:
+    """
+    get_molecular_data parsed names and mw but passed cas and stdinchikey
+    through as CACTUS writes them: seven CAS numbers in one string, and a key
+    that equals no bare key from any other source.
+    """
+
+    # CACTUS's answers for ethanol, 2026-09-24.
+    ANSWERS = {
+        "cas": "121182-78-3\n64-17-5\n8024-45-1\n8000-16-6\n68475-56-9\n71076-86-3\n71329-38-9",
+        "stdinchikey": "InChIKey=LFQSCWFLJHTTHZ-UHFFFAOYSA-N",
+        "names": "ethanol\n64-17-5\nethyl alcohol",
+        "mw": "46.0688",
+    }
+
+    @pytest.fixture
+    def resolver(self, monkeypatch):
+        resolver = NCIChemicalIdentifierResolver(pause_time=0)
+        monkeypatch.setattr(
+            resolver, "_make_request",
+            lambda url: self.ANSWERS.get(url.rsplit("/", 1)[1], "x"),
+        )
+        return resolver
+
+    @pytest.mark.unit
+    def test_cas_is_a_list_in_cactus_order(self, resolver):
+        data = resolver.get_molecular_data("ethanol", use_cache=False)
+
+        assert data["cas"] == self.ANSWERS["cas"].split("\n")
+        assert data["available_data"]["cas"] == data["cas"]
+
+    @pytest.mark.unit
+    def test_stdinchikey_is_bare(self, resolver):
+        data = resolver.get_molecular_data("ethanol", use_cache=False)
+
+        assert data["stdinchikey"] == "LFQSCWFLJHTTHZ-UHFFFAOYSA-N"
+
+    @pytest.mark.unit
+    def test_resolve_stays_raw(self, resolver):
+        """Dev-principle 3: the raw call keeps CACTUS's format."""
+        assert resolver.resolve("ethanol", "stdinchikey", use_cache=False).startswith("InChIKey=")
+
 if __name__ == "__main__":
     # Run tests if executed directly
     pytest.main([__file__, "-v"])

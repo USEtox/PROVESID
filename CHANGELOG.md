@@ -604,6 +604,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- **`NCIChemicalIdentifierResolver.get_molecular_data` parses `cas` and
+  `stdinchikey`.** It already split `names` into a list and read `mw` as a
+  float. `cas` came back as CACTUS's text, several numbers in one string,
+  and `stdinchikey` as `InChIKey=LFQSCW…`, which matches no bare key from any
+  other source. `cas` is now a list in CACTUS's order, which is not a ranking
+  (ethanol's starts with 121182-78-3, not 64-17-5), and `stdinchikey` is the
+  bare key. `nci_cas_to_mol` and `nci_id_to_mol` return the same. `resolve`
+  still returns CACTUS's text unchanged. Their cache entries were retired
+  (`version=2`).
 - **The PUG-View parser reads the ICSC's solubility words.** The
   International Chemical Safety Cards grade water solubility as `none`,
   `very poor`, `poor`, `moderate`, `good` or `very good`.

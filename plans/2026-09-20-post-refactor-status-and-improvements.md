@@ -378,7 +378,9 @@ replace it.
   holding two unrelated things: an online PUG-REST client and an offline SQLite
   database. §8 below makes the split more attractive, since the FTP builder
   belongs beside `PubChemID`, not beside `PubChemAPI`.
-- **Step 11**: `zeropm.py` logging, `reach.py` xlsx, `config.py` printing.
+- **Step 11**: ~~`zeropm.py` logging~~, `reach.py` xlsx, ~~`config.py` printing~~.
+  *`zeropm.py` prints nothing; `config.py` since §46. `reach.py` declares
+  `openpyxl` but still keeps `_read_xlsx_with_stdlib` as a fallback.*
 - ~~**A circuit breaker** (§23.8).~~ **Done, §27.** A `Retry-After` is information about the *host*,
   so it belongs on the host's clock as a "not before T" that every client
   respects, making a known-throttled host fail at once. The shared `RateLimiter`
@@ -389,9 +391,10 @@ replace it.
   of `scripts/build_pubchem_id_db.py`), `examining_pubchem.py`,
   `recreate_tables.sql`, `schema_documentation.txt`. A package data directory
   should hold data.
-- **`scripts/README.md` is wrong and Windows-specific**: it says a local build is
+- ~~**`scripts/README.md` is wrong and Windows-specific**: it says a local build is
   "required before using `PubChemID`", which auto-download made untrue, and it
-  documents `cd c:\projects\git\PROVESID`.
+  documents `cd c:\projects\git\PROVESID`.~~ *Fixed: it now says `PubChemID()`
+  builds the database itself, and names no Windows path.*
 
 ### 4.13 Passing one source client to `Search` silently disables the others — **done, §37**
 
@@ -1223,8 +1226,8 @@ three helpers that read a database now close explicitly in a `finally`.
 - ~~Step 2 (§9.5, the `search_by_name` `UNION` rewrite)~~ — **done, §12**.
 - ~~§9.3's ordering instability~~ — **done, §12**. The tests added in step 1
   still compare sets rather than lists, which remains correct.
-- §4.13 — passing one client to `Search` disables the others — was found doing
-  this work and is not fixed.
+- ~~§4.13 — passing one client to `Search` disables the others — was found doing
+  this work and is not fixed.~~ — **done, §37**.
 - `keep_inchi=False` is implemented and tested but unmeasured on real data at
   this commit; §9.6's 1.55 GB comes from the prototype.
 - Routes 2 and 3 of §9.7 (build during download, stream the MySQL dump) are not
@@ -1351,7 +1354,8 @@ writing it.
 
 ### 12.7 Still open
 
-- §4.13 — passing one client to `Search` disables the others — remains unfixed.
+- ~~§4.13 — passing one client to `Search` disables the others — remains unfixed.~~
+  — **done, §37**.
 - ~~Step 3~~ — **done, §13**. Step 4 (the dataset manager) is next.
 
 ---
@@ -2968,7 +2972,8 @@ refactor. So the label is carried through, and a test pins it.
   it needs a way to tell "not passed" apart from "passed `None`", because
   three test helpers pass `chebi=None, ...` precisely to get a one-source
   `Search`. That is a behaviour change with its own design question, so it
-  was kept out of a commit whose claim is "no behaviour change".
+  was kept out of a commit whose claim is "no behaviour change". *Fixed
+  since, §37.*
 - §4.4's online fallback is now one more row per kind plus a flag, as §4.5
   predicted. That is step 14.
 
@@ -3022,7 +3027,7 @@ here.
 
 ### 22.6 Still open
 
-- §4.13, above.
+- ~~§4.13, above.~~ — **done, §37**.
 - The ZeroPM synonym order (§22.4) should be sorted or insertion-ordered in
   `tools.candidate_from_zeropm_smiles`.
 - `comptox_skeleton_search` and `pubchem_skeleton_search` still reach into
@@ -3165,7 +3170,7 @@ commit with its own equivalence check, so it was kept out of this one.
   Step 16's circuit breaker is the fix: once a host is known to be
   throttled, `RateLimiter` should fail its requests at once, with one
   message.
-- §4.13 and §22.6 are unchanged.
+- §4.13 and §22.6 are unchanged. *§4.13 is done since, §37.*
 
 ---
 
@@ -3295,7 +3300,8 @@ CompTox.
 - Presets name policies, but the three were chosen by reasoning, and §24.2
   measured them afterwards. No sample has yet tested whether, for example,
   `cluster_by_skeleton=False` belongs in `strict`.
-- §23.5, §4.13 and §22.6 are unchanged.
+- §23.5, §4.13 and §22.6 are unchanged. *§4.13 is done since (§37), and
+  §23.5 (§45).*
 
 ---
 
@@ -3539,7 +3545,8 @@ another source for chemicals CompTox holds no InChIKey for.
   an offline candidate with neither a structure nor a DTXSID, and under
   §23's rule that blocks the fallback. Whether a candidate with no
   identifiers at all should count as "found" deserves a look.
-- §24.5's other items, §23.5, §4.13 and §22.6 are unchanged.
+- §24.5's other items, §23.5, §4.13 and §22.6 are unchanged. *§4.13 is
+  done since (§37), and §23.5 (§45).*
 
 ---
 
@@ -3638,6 +3645,7 @@ PubChem.
   decide when a host is healthy again, which `Retry-After` decides for us.
   Nothing here needs it yet.
 - §26.5, §24.5's other items, §23.5, §4.13 and §22.6 are unchanged.
+  *§4.13 is done since (§37), and §23.5 and §26.5 (§45).*
 
 ## 28. Landed on 2026-09-22 — step 17, docstrings with examples (§4.12)
 
@@ -3729,10 +3737,11 @@ since February 2023 (step 7 is still postponed).
 
 - *Done, §45.* §23.5 shows in the examples: `first_cas` picks the retired `11126-35-5`
   for aspirin from CompTox, and a fuzzy "asprin" returns it as `CASRN`.
-- `ChEBI.get_complete_entity` and `batch_get_entities` are compatibility
-  aliases, which dev-principle 1 says not to keep.
-- `NCIChemicalIdentifierResolver.get_molecular_data`, `resolve_multiple` and
-  `batch_resolve` are cached even when some representations failed.
+- ~~`ChEBI.get_complete_entity` and `batch_get_entities` are compatibility
+  aliases, which dev-principle 1 says not to keep.~~ *Removed, §46.*
+- ~~`NCIChemicalIdentifierResolver.get_molecular_data`, `resolve_multiple` and
+  `batch_resolve` are cached even when some representations failed.~~
+  *Fixed, §46.*
 - `ClassyFireAPI.query_status` is cached, so polling with the cache on sees
   the first answer forever (documented, not changed).
 - The online examples are skipped by design, so they will drift as the
@@ -4027,14 +4036,15 @@ not the range's `*_min_si`/`*_max_si`.
 ### 30.7 Still open
 
 - **The tutorials** (step 19).
-- **Three public names are still plain** because they have no docstring
-  (§30.1).
+- ~~**Three public names are still plain** because they have no docstring
+  (§30.1).~~ *Documented, §46.*
 - **`help()` shows the reference syntax.** A reader of the source or of
   `help(Search)` sees `` [`PRESETS`][provesid.search.Search.PRESETS] ``. That
   is the cost of links checked by `--strict`. mkdocstrings-python's
   `relative_crossrefs`/`scoped_crossrefs` would allow the shorter
   `` [`PRESETS`][] ``, at the price of resolution that depends on scope.
 - §27.6, §26.5, §24.5's other items, §23.5, §4.13 and §22.6 are unchanged.
+  *§4.13 is done since (§37), and §23.5 and §26.5 (§45).*
 
 ## 31. Step 19 begun on 2026-09-23 — the tutorials reviewed (§4.11, §29.5)
 
@@ -4147,7 +4157,8 @@ Items 1 and 2 are fixed (§31.6). Writing the notebooks turned up five more:
 - ~~`examples/notebooks/` still tracks `curated-solubility-dataset.csv` and
   `unique_cas_list.csv`, which nothing uses. The ESOL file moved to
   `examples/search/`.~~ Done, §41.
-- The README (step 20) still describes the old tutorials.
+- ~~The README (step 20) still describes the old tutorials.~~ Done, §32:
+  all ten tutorial links resolve (checked again 2026-09-24).
 
 ### 31.5 Decisions taken, 2026-09-23
 
@@ -4353,7 +4364,9 @@ dependency, but nothing in `src/` imports it.
 
 With this, every numbered step of §6 is done except step 7, which is postponed
 (§17.0). The items still open are §31.3 items 3, 5, 6, 7 and 8, the two
-unused CSVs in `examples/notebooks/`, §4.13 and §30.7.
+unused CSVs in `examples/notebooks/`, §4.13 and §30.7. *All since done: §31.3
+in §33, §39, §40, §43 and §44, the CSVs in §41, §4.13 in §37 and §30.7 in
+§46.*
 
 ## 33. Landed on 2026-09-23 — non-standard InChIKeys (§31.3 item 5)
 
@@ -4772,10 +4785,10 @@ in `zeropm.py` on the rotated mobility columns cites it.
 
 ### 41.1 Found on the way, not done
 
-- `MANIFEST.in` is setuptools configuration. The build backend is
+- ~~`MANIFEST.in` is setuptools configuration. The build backend is
   hatchling, which does not read it. Its `recursive-include
   src/provesid/data *` would take in the multi-GB databases if a setuptools
-  build ever used it.
+  build ever used it.~~ *Deleted, §46.*
 - `src/provesid/data/zeropm-v0-0-3.sqlite` (460 MB, ignored) sits beside
   v0-0-4 on this machine. It is a local file, not the repository's.
 
@@ -5014,12 +5027,76 @@ Doctests of `search`, `sources`, `tools` and `zeropm`: 110 passed.
 
 ### 45.5 Found on the way, not done
 
-- `_CAS_PATTERN` does not check the check digit, so PubChem's `001-02-2`
+- ~~`_CAS_PATTERN` does not check the check digit, so PubChem's `001-02-2`
   (atrazine) and `001-02-7` (caffeine) count as CAS numbers. Sorted as
   text, `001-02-2` was atrazine's first PubChem number. Checking the digit
-  would drop them and the InChI fragments.
+  would drop them and the InChI fragments.~~ *Done, §46.*
 - The 16 CAS searches whose hit is a more specific structure: the
   substance the number names (a UVCB, a salt, an isomer mixture) is in
   CompTox, with its own row, but ranks below the structure. Whether a CAS
   search should rank the row that holds the queried number as its `CASRN`
   first is a ranking question, not a CAS-order one.
+
+## 46. Landed on 2026-09-24 — cleanups for a breaking release (§28.5, §30.7, §41.1, §45.5)
+
+Seven small items, collected because four of them change what a caller
+sees and so belong in one release that says so.
+
+- **CACTUS caches only `resolve`** (§28.5). `get_molecular_data`,
+  `resolve_multiple` and `batch_resolve` caught every `NCIResolverError`
+  as `None` and were cached, so a timeout became the answer for good. The
+  same was true of `is_valid_identifier` (`False`), `search_by_partial_name`
+  (`[]`) and all nine `nci_*` functions, which wrap `resolve` the same way.
+  Each builds on `resolve`, which is cached and raises on failure, so
+  removing their own `@cached` fixes all of them without telling a
+  "not found" from a failure in each. The cost is one cache read per
+  representation instead of one per call: twelve for `get_molecular_data`.
+  The per-call `use_cache=` keyword went with the decorator; the
+  constructor's flag reaches `resolve`.
+- **The ChEBI aliases are gone** (§28.5). `get_complete_entity` was
+  `get_compound`, and `batch_get_entities` looped over it, which
+  `get_compounds` does in one request. `examples/ChEBI/README.md` was the
+  only caller.
+- **`config.py` prints nothing** (§4.12 step 11). `set_cas_api_key`
+  returns the config file, `remove_cas_api_key` whether a key was stored,
+  and `show_config` the `get_config_info()` dict. Each logs at INFO what it
+  printed.
+- **`MANIFEST.in` is deleted** (§41.1).
+- **`extract_cas_values` checks the check digit** (§45.5), with
+  `utils.check_CASRN`. `comptox.py`'s `_CAS_NUMBER` still checks shape
+  only: it guards a lookup, and a number with a wrong digit simply finds
+  nothing. `PubChemAPI`'s synonym parser (`pubchem.py`, the `casrn` list)
+  does not check it either. The USEtox 3 comparison of §45.3 was not run
+  again.
+- **The three plain names of §30.1 have docstrings**:
+  `CheMBL.DEFAULT_DB_URL`, `HTTPClient.limiter` and
+  `PubChemView.experimental_properties`.
+- **Stale plan entries** are marked: §4.12 (step 11, `scripts/README.md`),
+  §31.4 (the README, done in §32), §32's closing list, and the "still
+  open" lists that carried §4.13 after §37: §11.6, §12.7, §22.3, §22.6,
+  §23.6, §24.5, §26.5, §27.6 and §30.7.
+
+### 46.1 Tests
+
+`tests/test_nci_resolver.py`, 4 new: one timed-out request, then a good
+one, gives `None` then the value from `get_molecular_data`,
+`resolve_multiple` and `batch_resolve`, and a found answer from `resolve`
+is still cached. Against HEAD's `resolver.py` the first three fail.
+`tests/test_config.py`, 3 new, in a temporary config directory: nothing
+reaches stdout, and each function returns what it printed.
+
+The mocked tests of §43 asked for `"ethanol"` with `use_cache=False`,
+which still writes, so their made-up answers reached the test cache
+(`/tmp/provesid_test_cache/nci`) and a live test read `'x'` as ethanol's
+formula. They now use an identifier unique to the run, and that cache was
+cleared.
+
+Whole suite: 1,614 passed, 36 skipped (the `slow` marker deselected).
+Doctests: 490 passed, 85 skipped. `scripts/validate_docs_local.sh`: the
+strict build passes.
+
+### 46.2 Still open
+
+- `reach.py` keeps `_read_xlsx_with_stdlib` although `openpyxl` is a
+  dependency (§4.12 step 11).
+- `ClassyFireAPI.query_status` is cached (§28.5, documented).

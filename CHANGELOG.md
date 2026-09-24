@@ -604,6 +604,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one.
 
 ### Fixed
+- **A failed CACTUS request is no longer cached as "no data".**
+  `NCIChemicalIdentifierResolver.get_molecular_data`, `resolve_multiple`,
+  `batch_resolve`, `is_valid_identifier`, `search_by_partial_name` and the
+  `nci_*` functions turn a failed request into `None`, `[]` or `False`, and
+  were each cached, so one timeout or 503 stayed those answers for good.
+  Only `resolve` is cached now. It raises on a failure, and the others build
+  on it, so they still read its cache. The per-call `use_cache=` keyword is
+  gone from those methods. Pass `use_cache=False` to the constructor
+  instead.
 - **`Search` reports the current CAS number, not the smallest string.**
   Aspirin came out as `11126-35-5` and atrazine as `11121-31-6`, both
   retired, because every source's CAS numbers were sorted as text and the
@@ -933,6 +942,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PubChemAPI.get_cache_info`.
 
 ### Changed
+- **`extract_cas_values` checks the check digit.** A CAS-shaped string
+  whose check digit is wrong is no longer a CAS number, so PubChem's
+  malformed `001-02-2` (atrazine) and `001-02-7` (caffeine) and most
+  number-shaped InChI fragments are dropped from `Search` candidates.
+- **`provesid.config` logs instead of printing.** `set_cas_api_key` returns
+  the config file's path, `remove_cas_api_key` returns whether a key was
+  stored, and `show_config` returns the `get_config_info()` dict. Each
+  logs at INFO what it used to print.
 - **`Search(sources=...)` chooses the offline databases, and replaces
   `use_zeropm`.** It takes a list of keys from `provesid.sources.SOURCE_KEYS`,
   one key, or `"all"`. The sources are queried in `SOURCE_KEYS` order
@@ -1213,6 +1230,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the default set in `Search._DEFAULT_SOURCE_KEYS`.
 
 ### Removed
+- **`ChEBI.get_complete_entity` and `ChEBI.batch_get_entities`.** They were
+  compatibility aliases. Use `get_compound`, and `get_compounds` for several
+  IDs in one request.
+- **`MANIFEST.in`.** The build backend is hatchling, which never read it.
 - **`schema_documentation.txt` is no longer shipped in `provesid/data/`.** It
   was ChEMBL's schema for release 36, and the release `CheMBL` installs is
   whichever is latest. `chembl.py` and `examples/chembl/README.md` now point

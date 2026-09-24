@@ -4471,7 +4471,7 @@ suites: 634 passed. Doctests of `comptox`, `sources` and `search`: 41 passed,
 
 CompTox's `SMILES`, `DTXCID` and `MOLECULAR_FORMULA` are unindexed too, at
 0.13 to 0.17 s a lookup. `Search` reads `SMILES` for each SMILES query. They
-are left as they are.
+are left as they are. *Done, §36.*
 
 ## 35. Landed on 2026-09-23 — ZeroPM finds a non-standard InChI (§33.4)
 
@@ -4521,3 +4521,46 @@ the fix that search found the diol in CompTox only; now ZeroPM supports it
 too. With the `Search`, sources, CompTox, non-standard-key, ZeroPM and
 SQLite-lifecycle suites: 645 passed. Doctests of `zeropm`, `comptox`,
 `sources`, `search`, `utils` and `tools`: 139 passed, 3 skipped.
+
+## 36. Landed on 2026-09-24 — indexes on CompTox's `SMILES`, `DTXCID` and `MOLECULAR_FORMULA` (§34)
+
+Built on a copy of the installed database, one at a time:
+
+| column | build | added | lookup before (a miss) | after |
+|---|---:|---:|---:|---:|
+| `SMILES` | 1.1 s | 57 MiB | 0.16 s | 0.09 ms |
+| `DTXCID` | 0.6 s | 27 MiB | 0.14 s | 0.08 ms |
+| `MOLECULAR_FORMULA` | 0.7 s | 21 MiB | 0.16 s | 0.05 ms |
+
+A formula with hits returns sooner even when scanning, because `LIMIT` stops
+the scan at the hundredth row. `C9H8O4` takes 1.1 ms with the index. The
+installed file is now 1.31 GB.
+
+- §34's index is now one of four. `LOOKUP_INDEXES` maps each column to its
+  index name and replaces `INCHIKEY_INDEX`. `_build_lookup_index(connection,
+  column)` replaces `_build_inchikey_index`, and
+  `_ensure_lookup_index(column)` replaces `_ensure_inchikey_index`.
+  `get_by_inchikey`, `get_by_smiles`, `get_by_dtxcid` and
+  `search_by_formula` each call it with their own column, so a user who never
+  looks up a formula never pays for that index. The class attribute
+  `_lookup_indexes_checked`, a frozenset, replaces
+  `_inchikey_index_checked`. An instance replaces its own copy rather than
+  adding to it, so clients don't share the set. `download_database` builds
+  all four after the name index (~24 s, ~440 MiB in all).
+- A read-only file logs one failure per column and scans, as §34 did.
+- The answers are unchanged. The 2025 release has 893 SMILES held by more
+  than one row, and `get_by_smiles` returns the first. An index keeps equal
+  keys in rowid order, so for each of those 893 SMILES the first row matched
+  with and without the index (`NOT INDEXED`). The same held for the
+  100-row `search_by_formula` answers on 303 formulas: 300 random ones plus
+  `C9H8O4`, `C6H6` and `H2O`.
+
+Tests: `tests/test_comptox_inchikey_index.py` became
+`tests/test_comptox_lookup_indexes.py`, 23 tests on a six-row database. Two
+rows share a SMILES and three share a formula, so the order is tested too.
+The §34 tests are parametrised over the four columns. They check that each
+first lookup builds its own index and no other, and that concurrent first
+lookups on all four columns succeed. Removing the `SMILES` call fails 5 of
+them. With the `Search`, sources, CompTox, non-standard-key, ZeroPM,
+SQLite-lifecycle and dataset-manager suites: 702 passed. Doctests of
+`comptox`, `sources` and `search`: 41 passed, 3 skipped.

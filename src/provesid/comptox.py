@@ -44,9 +44,17 @@ adds to the database: one row per distinct name of each chemical, keyed by
 [`name_key`][provesid.comptox.name_key].
 """
 
-INCHIKEY_INDEX = "idx_inchikey"
-"""The index on ``chemicals(INCHIKEY)`` that the first InChIKey lookup adds
-(see [`get_by_inchikey`][provesid.comptox.CompToxID.get_by_inchikey]).  The
+LOOKUP_INDEXES: Dict[str, str] = {
+    "INCHIKEY": "idx_inchikey",
+    "SMILES": "idx_smiles",
+    "DTXCID": "idx_dtxcid",
+    "MOLECULAR_FORMULA": "idx_molecular_formula",
+}
+"""The indexes on ``chemicals`` that the first lookup by each column adds, by
+column: [`get_by_inchikey`][provesid.comptox.CompToxID.get_by_inchikey],
+[`get_by_smiles`][provesid.comptox.CompToxID.get_by_smiles],
+[`get_by_dtxcid`][provesid.comptox.CompToxID.get_by_dtxcid] and
+[`search_by_formula`][provesid.comptox.CompToxID.search_by_formula].  The
 downloaded database indexes ``DTXSID``, ``CASRN`` and ``PREFERRED_NAME`` only.
 """
 
@@ -152,22 +160,25 @@ def _build_name_index(connection: sqlite3.Connection) -> int:
     return connection.execute(f"SELECT COUNT(*) FROM {NAME_INDEX_TABLE}").fetchone()[0]
 
 
-def _build_inchikey_index(connection: sqlite3.Connection) -> None:
-    """Create [`INCHIKEY_INDEX`][provesid.comptox.INCHIKEY_INDEX] unless it exists.
+def _build_lookup_index(connection: sqlite3.Connection, column: str) -> None:
+    """Create the [`LOOKUP_INDEXES`][provesid.comptox.LOOKUP_INDEXES] index on
+    ``column`` unless it exists.
 
-    Without it every InChIKey lookup scans the 1.2 M rows, about 0.2 s; with
-    it a lookup takes microseconds.  On the 2025 release it takes about 1 s
-    to build and adds about 41 MiB.
+    Without it every lookup by the column scans the 1.2 M rows, 0.1 to 0.2 s;
+    with it a lookup takes well under a millisecond.  On the 2025 release
+    each takes 0.6 to 1.1 s to build and adds 21 to 57 MiB (``SMILES`` the
+    most).
 
     Args:
         connection: A read-write connection to a CompTox database.
+        column: A key of [`LOOKUP_INDEXES`][provesid.comptox.LOOKUP_INDEXES].
 
     Raises:
         sqlite3.OperationalError: If the database is read-only or stays locked
             beyond the connection's timeout.
     """
     connection.execute(
-        f"CREATE INDEX IF NOT EXISTS {INCHIKEY_INDEX} ON chemicals(INCHIKEY)"
+        f"CREATE INDEX IF NOT EXISTS {LOOKUP_INDEXES[column]} ON chemicals({column})"
     )
     connection.commit()
 
@@ -204,11 +215,11 @@ class CompToxID(SQLiteClient):
     # SQLiteClient) has it too; the first lookup sets it on the instance.
     # Whether exact name lookups can use the name index: None until the
     # first one checks, then True, or False for good when it cannot be built
-    # (a read-only file).  Whether the first InChIKey lookup has made sure of
-    # the InChIKey index; without it lookups still work, by scanning.  The
-    # lock keeps two threads, or two clients, from building either at once.
+    # (a read-only file).  The LOOKUP_INDEXES columns whose first lookup has
+    # made sure of their index; without one, lookups still work, by scanning.
+    # The lock keeps two threads, or two clients, from building any at once.
     _name_index_ready: Optional[bool] = None
-    _inchikey_index_checked = False
+    _lookup_indexes_checked: frozenset = frozenset()
     _index_lock = threading.Lock()
 
     def __init__(
@@ -351,18 +362,19 @@ class CompToxID(SQLiteClient):
 
         # Built now, while the user is already waiting for a download, rather
         # than on the first lookup.  A failure here costs nothing that the
-        # lazy builds in search_by_name and get_by_inchikey will not retry.
-        self.logger.warning("Building the CompTox name and InChIKey indexes (~20 s, ~330 MiB).")
+        # lazy builds in search_by_name and the lookups will not retry.
+        self.logger.warning("Building the CompTox name and lookup indexes (~24 s, ~440 MiB).")
         connection = sqlite3.connect(self.db_path)
         try:
             _build_name_index(connection)
-            _build_inchikey_index(connection)
+            for column in LOOKUP_INDEXES:
+                _build_lookup_index(connection, column)
         except sqlite3.Error as exc:
             self.logger.warning("CompTox indexes not built: %s", exc)
         finally:
             connection.close()
         self._name_index_ready = None
-        self._inchikey_index_checked = False
+        self._lookup_indexes_checked = frozenset()
         return self.db_path
 
     @property
@@ -450,37 +462,46 @@ class CompToxID(SQLiteClient):
                         self._name_index_ready = False
         return self._name_index_ready
 
-    def _ensure_inchikey_index(self) -> None:
-        """Make sure the InChIKey index exists, building it once if it does not.
+    def _ensure_lookup_index(self, column: str) -> None:
+        """Make sure the index on ``column`` exists, building it once if it does not.
 
-        Called by every InChIKey lookup; only the first one per client looks.
-        When the index cannot be built (a read-only file) the failure is
-        logged once and lookups scan the table instead.
+        Called by every lookup by a
+        [`LOOKUP_INDEXES`][provesid.comptox.LOOKUP_INDEXES] column; only the
+        first one per column and client looks.  When the index cannot be built
+        (a read-only file) the failure is logged once per column and lookups
+        scan the table instead.
+
+        Args:
+            column: A key of [`LOOKUP_INDEXES`][provesid.comptox.LOOKUP_INDEXES].
         """
-        if self._inchikey_index_checked:
+        if column in self._lookup_indexes_checked:
             return
         with self._index_lock:
-            if self._inchikey_index_checked:
+            if column in self._lookup_indexes_checked:
                 return
             exists = self.conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?",
-                (INCHIKEY_INDEX,),
+                (LOOKUP_INDEXES[column],),
             ).fetchone()
             if not exists:
                 self.logger.warning(
-                    "Building the CompTox InChIKey index, once (~1 s, ~41 MiB "
+                    "Building the CompTox %s index, once (~1 s, up to ~60 MiB "
                     "added to %s).",
+                    column,
                     self.db_file,
                 )
                 try:
-                    _build_inchikey_index(self.conn)
+                    _build_lookup_index(self.conn, column)
                 except sqlite3.OperationalError as exc:
                     self.logger.warning(
-                        "CompTox InChIKey index could not be built (%s); "
-                        "InChIKey lookups will scan the table (~0.2 s each).",
+                        "CompTox %s index could not be built (%s); %s lookups "
+                        "will scan the table (~0.2 s each).",
+                        column,
                         exc,
+                        column,
                     )
-            self._inchikey_index_checked = True
+            # A new set, not an update: the class attribute is shared.
+            self._lookup_indexes_checked = self._lookup_indexes_checked | {column}
 
     def _verify_database(self):
         """Verify the database has the expected table structure."""
@@ -697,7 +718,7 @@ class CompToxID(SQLiteClient):
             >>> CompToxID().get_by_inchikey("PGRHXDWITVMQBC-UHFFFAOYSA-N")["INCHIKEY"]
             'PGRHXDWITVMQBC-UHFFFAOYNA-N'
         """
-        self._ensure_inchikey_index()
+        self._ensure_lookup_index("INCHIKEY")
         spellings = inchikey_flag_variants(inchikey)
         placeholders = ", ".join("?" * len(spellings))
         cursor = self.conn.cursor()
@@ -722,6 +743,10 @@ class CompToxID(SQLiteClient):
         """
         Get chemical information by SMILES string.
 
+        The first call adds an index on ``SMILES`` to the database, about
+        1 s and 57 MiB, so that lookups take well under a millisecond rather
+        than a 0.17 s scan. A read-only database is scanned instead.
+
         Args:
             smiles (str): SMILES string, matched as a string against CompTox's
                 own: another valid SMILES for the same structure finds nothing
@@ -738,6 +763,7 @@ class CompToxID(SQLiteClient):
             >>> db.get_by_smiles("CC(=O)OC1=CC=CC=C1C(O)=O") is None
             True
         """
+        self._ensure_lookup_index("SMILES")
         cursor = self.conn.cursor()
         cursor.execute(
             """
@@ -793,6 +819,10 @@ class CompToxID(SQLiteClient):
         """
         Get chemical information by DTXCID.
 
+        The first call adds an index on ``DTXCID`` to the database, about
+        0.6 s and 27 MiB, so that lookups take well under a millisecond rather
+        than a 0.15 s scan. A read-only database is scanned instead.
+
         Args:
             dtxcid (str): DSSTox Compound ID (e.g., "DTXCID101")
 
@@ -805,6 +835,7 @@ class CompToxID(SQLiteClient):
             >>> CompToxID().get_by_dtxcid("DTXCID50108")["PREFERRED_NAME"]
             'Aspirin'
         """
+        self._ensure_lookup_index("DTXCID")
         cursor = self.conn.cursor()
         cursor.execute(
             """
@@ -922,6 +953,11 @@ class CompToxID(SQLiteClient):
         """
         Search chemicals by molecular formula.
 
+        The first call adds an index on ``MOLECULAR_FORMULA`` to the
+        database, about 0.7 s and 21 MiB, so that a formula no chemical has
+        is answered at once rather than after a 0.16 s scan. A read-only
+        database is scanned instead.
+
         Args:
             formula (str): Molecular formula (e.g., "C9H8O4")
             limit (int): Maximum number of results to return
@@ -934,6 +970,7 @@ class CompToxID(SQLiteClient):
             >>> [r["PREFERRED_NAME"] for r in CompToxID().search_by_formula("C9H8O4", limit=2)]
             ['Aspirin', '3,4-Dihydroxycinnamic acid']
         """
+        self._ensure_lookup_index("MOLECULAR_FORMULA")
         cursor = self.conn.cursor()
         cursor.execute(
             """

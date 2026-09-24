@@ -850,6 +850,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PubChemAPI.get_cache_info`.
 
 ### Changed
+- **CompTox SMILES, DTXCID and formula lookups use indexes too, each built
+  on first use.** `get_by_smiles`, `get_by_dtxcid` and `search_by_formula`
+  scanned 1.2 million rows, 0.14 to 0.16 s for each lookup that missed, and
+  `Search` paid this for each SMILES query. The first lookup by each column
+  now adds that column's index (0.6 to 1.1 s and 21 to 57 MiB each, logged
+  once), and `download_database` builds all four with the name index.
+  A lookup then takes under 0.1 ms. The answers are unchanged: where
+  several rows share a SMILES, the first is still returned. A read-only
+  database is scanned as before. `comptox.LOOKUP_INDEXES` replaces
+  `comptox.INCHIKEY_INDEX`.
 - **CompTox InChIKey lookups use an index, built on first use.** The
   downloaded database indexes DTXSID, CASRN and the preferred name only, so
   each `CompToxID.get_by_inchikey` scanned 1.2 million rows (0.2 s), and a

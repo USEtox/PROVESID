@@ -104,7 +104,6 @@ markers = [
     "pubchem: PubChem API specific tests",
     "cas: CAS Common Chemistry API specific tests",
     "chebi: ChEBI API specific tests",
-    "classyfire: ClassyFire API specific tests",
     "opsin: OPSIN API specific tests",
     "nci: NCI Chemical Identifier Resolver specific tests",
     "zeropm: ZeroPM database specific tests",

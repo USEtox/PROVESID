@@ -33,7 +33,6 @@ example on it is run as a doctest. Everything listed is importable from
 | [`ChEBI`](chebi.md) | ChEBI 2.0 REST |
 | [`CASCommonChem`](cascommonchem.md) | CAS Common Chemistry (needs a key) |
 | [`OPSIN`, `PYOPSIN`](opsin.md) | OPSIN name-to-structure, online or local |
-| [`ClassyFireAPI`](classyfire.md) | ClassyFire (frozen since 2023) |
 
 ## Classification
 

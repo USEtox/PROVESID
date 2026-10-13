@@ -79,7 +79,6 @@ the MyST tutorials, which needs the network.
 - ✅ **PubChem API** - No authentication required
 - ✅ **NCI Resolver** - No authentication required  
 - ✅ **OPSIN** - No authentication required
-- ✅ **ClassyFire** - No authentication required
 
 ### Authentication-Required Tests
 - 🔐 **CAS Common Chemistry** - Requires API key

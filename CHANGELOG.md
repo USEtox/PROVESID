@@ -160,6 +160,15 @@ it said whether that structure was usable, repaired, contested or echoed.
   0.9), a ChEBI structure was repaired, sources disagree, or no structure was
   found.
 
+### Removed
+
+- **`ClassyFireAPI`, `ClassyFireError` and `ClassyFireNotFoundError`**, with
+  the `provesid.classyfire` module, its API page and tutorial, and the
+  `classyfire` cache directory (`CACHE_SERVICES`). The ClassyFire service has
+  classified nothing new since February 2023: a submitted structure stays
+  queued forever, and its live test now fails with a broken connection. For
+  chemical classes computed offline, use Chebifier (`provesid.taxonomy`).
+
 ## [0.8.0] - 2026-09-24
 
 ### Added

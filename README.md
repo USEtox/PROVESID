@@ -117,10 +117,10 @@ set_cas_api_key("your-cas-api-key")
 CASCommonChem().cas_to_detail("7732-18-5")["name"]  # "Water"
 ```
 
-`ClassyFireAPI` is still in the package, but the ClassyFire service has not
-classified a new structure since February 2023. For ChEBI chemical classes
-computed offline, install the `chebifier` extra; see the
-[Chebifier guide](https://usetox.github.io/PROVESID/guide/chebifier/).
+For ChEBI chemical classes computed offline, install the `chebifier` extra;
+see the [Chebifier guide](https://usetox.github.io/PROVESID/guide/chebifier/).
+(`ClassyFireAPI` was removed in 0.9.0: the ClassyFire service has classified
+nothing new since February 2023.)
 
 ## Documentation and tutorials
 

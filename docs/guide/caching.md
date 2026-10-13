@@ -8,10 +8,10 @@ of this; they are installed data, covered in
 
 Caching is on by default and needs no set-up. It covers `PubChemAPI`,
 `PubChemView`, `NCIChemicalIdentifierResolver`, `CASCommonChem`, `OPSIN` and
-`ClassyFireAPI`, and the Chebifier classifier; the online `ChEBI` client is
-not cached. `PubChemAPI`, `PubChemView`, `CASCommonChem` and `OPSIN` take
-`use_cache=False`, and `ClassyFireAPI`'s calls take it per call. It means "do
-not *read* the cache": a successful result is still written.
+the Chebifier classifier; the online `ChEBI` client is not cached.
+`PubChemAPI`, `PubChemView`, `CASCommonChem` and `OPSIN` take
+`use_cache=False`. It means "do not *read* the cache": a successful result is
+still written.
 
 ## One cache per service
 
@@ -22,7 +22,7 @@ shared without touching the others:
 import provesid
 
 provesid.CACHE_SERVICES
-# ('pubchem', 'cas', 'nci', 'pubchemview', 'classyfire', 'opsin', 'chebifier')
+# ('pubchem', 'cas', 'nci', 'pubchemview', 'opsin', 'chebifier')
 
 for name, info in provesid.get_all_cache_info().items():
     print(f"{name:12s} {info['total_size_mb']:8.2f} MB")

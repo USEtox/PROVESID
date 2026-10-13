@@ -83,9 +83,6 @@ def pytest_configure(config):
         "markers", "chebi: mark test as ChEBI specific"
     )
     config.addinivalue_line(
-        "markers", "classyfire: mark test as ClassyFire specific"
-    )
-    config.addinivalue_line(
         "markers", "opsin: mark test as OPSIN specific"
     )
     config.addinivalue_line(
@@ -286,8 +283,6 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.cas)
         elif "test_chebi" in item.nodeid:
             item.add_marker(pytest.mark.chebi)
-        elif "test_classyfire" in item.nodeid:
-            item.add_marker(pytest.mark.classyfire)
         elif "test_opsin" in item.nodeid:
             item.add_marker(pytest.mark.opsin)
         elif "test_nci" in item.nodeid:

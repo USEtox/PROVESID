@@ -67,7 +67,6 @@ from .chebi import (
 )
 from .chebi_sdf import ChebiSDF
 from .chembl import CheMBL, ChEMBLError
-from .classyfire import ClassyFireAPI, ClassyFireError, ClassyFireNotFoundError
 from .opsin import OPSIN, OPSINError, OPSINNotFoundError, OPSINTimeoutError, PYOPSIN
 from .pubchem import (
     PubChemAPI,

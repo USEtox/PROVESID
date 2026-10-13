@@ -50,7 +50,6 @@ CACHE_SERVICES = (
     'cas',
     'nci',
     'pubchemview',
-    'classyfire',
     'opsin',
     'chebifier',
 )

@@ -51,7 +51,7 @@ REACH dossiers, and optional ChEBI classification with Chebifier.
 
 **Online.** `PubChemAPI` (PUG-REST), `PubChemView` (experimental properties,
 parsed into numbers with SI units), `NCIChemicalIdentifierResolver`, `ChEBI`,
-`CASCommonChem`, `OPSIN` and `ClassyFireAPI`. They share one transport that
+`CASCommonChem` and `OPSIN`. They share one transport that
 paces requests per host, retries what is worth retrying, and stops asking a
 host that has said to wait; their answers are cached on disk.
 

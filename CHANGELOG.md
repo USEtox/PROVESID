@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-13
+
 Structure quality control in `Search`, from the structure audit of 630
 pharmaceutical CAS numbers (`plans/2026-10-13-structure-qc-chebi-smiles.md`).
 A `Search` row is used as a structure by everything downstream, and nothing in

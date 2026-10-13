@@ -22,7 +22,9 @@ from typing import List, Optional, Dict, Any, Tuple
 import pandas as pd
 import logging
 import re
+from collections import Counter
 from difflib import SequenceMatcher
+from itertools import combinations
 
 from .utils import check_CASRN
 from .zeropm import ZeroPM
@@ -31,13 +33,15 @@ from .chembl import CheMBL
 # Optional RDKit import
 try:
     from rdkit import Chem, rdBase
-    from rdkit.Chem import Descriptors
+    from rdkit.Chem import Descriptors, rdMolDescriptors
     RDKIT_AVAILABLE = True
 except ImportError:
     Chem = None
     rdBase = None
     RDKIT_AVAILABLE = False
     logging.warning("RDKit not available. Install with: pip install rdkit-pypi")
+
+log = logging.getLogger(__name__)
 
 
 
@@ -420,6 +424,278 @@ def first_cas(cas_values: List[str]) -> Optional[str]:
     return cas_values[0] if cas_values else None
 
 
+STRUCTURE_STATUSES = (
+    "valid", "repaired:molfile", "repaired:inchi", "repaired:nh_repair", "invalid", "none",
+)
+"""The values of a candidate's and a result's ``structure_status``.
+
+``valid``
+    The SMILES the source gave parses as it is.
+``repaired:<origin>``
+    The SMILES the source gave does not parse, or parses to a structure other
+    than the one its InChIKey names, and the structure was rebuilt from the
+    source's own molfile, its InChI, or by putting back the hydrogen an
+    aromatic ring nitrogen lost (``nh_repair``). A rebuilt structure is kept
+    only when its InChIKey is the one the source states; see
+    [`repair_structure`][provesid.tools.repair_structure]. In the 2026-05
+    ChEBI SDF, 12,235 SMILES do not parse and 19,228 more parse to the wrong
+    compound --- guanine's ``Nc1nc(=O)c2ncnc2n1`` lacks two hydrogens --- or
+    without a double bond's configuration; the molfile rebuilds all but 437.
+``invalid``
+    The SMILES the source gave does not parse and could not be rebuilt, so
+    the candidate carries no structure.
+``none``
+    The source gave no structure.
+"""
+
+# How many ring nitrogens an aromatic N-H repair may protonate at once, and
+# how many combinations it may try.  Uracils and xanthines need two; a
+# structure needing more is rarely an export slip.
+_NH_REPAIR_MAX_HYDROGENS = 3
+_NH_REPAIR_MAX_TRIALS = 500
+
+
+def _mol_from_smiles_quietly(smiles: Optional[str]) -> Any:
+    """Parse a SMILES with RDKit's error log silenced; None when it fails."""
+    if is_missing(smiles) or not RDKIT_AVAILABLE or Chem is None:
+        return None
+    with rdBase.BlockLogs():
+        try:
+            return Chem.MolFromSmiles(str(smiles))
+        except Exception:
+            return None
+
+
+def is_parsable_smiles(smiles: Optional[str]) -> bool:
+    """Report whether RDKit can read and sanitise a SMILES.
+
+    ChEBI's ``SMILES`` field fails this for about 6% of its records, mostly
+    because an aromatic ring N-H was dropped on export (``c2nnnn2`` for a
+    tetrazole). Without RDKit installed nothing can be checked, so any
+    non-missing string passes.
+
+    Args:
+        smiles: The SMILES string, or None.
+
+    Returns:
+        True when the SMILES parses, False when it is missing or does not.
+
+    Examples:
+        >>> is_parsable_smiles("c1ccccc1"), is_parsable_smiles("c1nnnn1")
+        (True, False)
+    """
+    if is_missing(smiles):
+        return False
+    if not RDKIT_AVAILABLE or Chem is None:
+        return True
+    return _mol_from_smiles_quietly(smiles) is not None
+
+
+def _keys_agree(found: Optional[str], reference: Optional[str]) -> bool:
+    """Whether a rebuilt structure's InChIKey is the one its source states.
+
+    The full key must match, except where the source states no stereo
+    (``UHFFFAOY`` in the second block) and the rebuilt structure has some:
+    a molfile can carry wedges its InChI was generated without.
+    """
+    if is_missing(found) or is_missing(reference):
+        return False
+    found, reference = str(found), str(reference)
+    if found == reference:
+        return True
+    return (
+        len(found) == 27 and len(reference) == 27
+        and found[:14] == reference[:14]
+        and reference[15:23] == "UHFFFAOY"
+        and found[-1] == reference[-1]
+    )
+
+
+def _reference_inchikey(inchi: Optional[str], inchikey: Optional[str]) -> Optional[str]:
+    """The standard InChIKey a source states for its structure, if any.
+
+    The stated key when it is standard; otherwise the key of the stated InChI
+    when that is standard; otherwise None.
+    """
+    if not is_missing(inchikey) and len(str(inchikey)) == 27 and str(inchikey)[23] == "S":
+        return str(inchikey)
+    if not is_missing(inchi) and str(inchi).startswith("InChI=1S/") and RDKIT_AVAILABLE:
+        try:
+            return Chem.InchiToInchiKey(str(inchi)) or None
+        except Exception:
+            return None
+    return None
+
+
+def _inchikey_of(mol: Any) -> Optional[str]:
+    """The standard InChIKey of an RDKit molecule, or None."""
+    try:
+        with rdBase.BlockLogs():
+            return Chem.MolToInchiKey(mol) or None
+    except Exception:
+        return None
+
+
+def _add_aromatic_nh(smiles: str, reference_key: str) -> Optional[str]:
+    """Put back the hydrogen(s) a SMILES dropped from aromatic ring nitrogens.
+
+    The RDKit-cookbook repair for "can't kekulize": parse without
+    sanitising, then give one, two or three neutral two-connected aromatic
+    nitrogens an explicit hydrogen until the molecule sanitises *and* its
+    InChIKey is ``reference_key``. The standard InChI treats the ring
+    hydrogens as mobile, so any tautomer that sanitises gives the source's
+    key; one that does not is a different compound and is not accepted.
+
+    Args:
+        smiles: The SMILES that failed to parse.
+        reference_key: The InChIKey the source states for it.
+
+    Returns:
+        The repaired SMILES, or None when no combination gives the key.
+    """
+    with rdBase.BlockLogs():
+        try:
+            mol = Chem.MolFromSmiles(smiles, sanitize=False)
+        except Exception:
+            return None
+        if mol is None:
+            return None
+        sites = [
+            atom.GetIdx() for atom in mol.GetAtoms()
+            if atom.GetSymbol() == "N" and atom.GetIsAromatic()
+            and atom.GetNumExplicitHs() == 0 and atom.GetFormalCharge() == 0
+            and atom.GetDegree() == 2
+        ]
+        trials = 0
+        for n_hydrogens in range(1, min(_NH_REPAIR_MAX_HYDROGENS, len(sites)) + 1):
+            for chosen in combinations(sites, n_hydrogens):
+                trials += 1
+                if trials > _NH_REPAIR_MAX_TRIALS:
+                    return None
+                trial = Chem.RWMol(mol)
+                for idx in chosen:
+                    trial.GetAtomWithIdx(idx).SetNumExplicitHs(1)
+                try:
+                    Chem.SanitizeMol(trial)
+                except Exception:
+                    continue
+                if _keys_agree(_inchikey_of(trial), reference_key):
+                    return Chem.MolToSmiles(trial)
+    return None
+
+
+def repair_structure(
+    smiles: Optional[str],
+    *,
+    molfile: Optional[str] = None,
+    inchi: Optional[str] = None,
+    inchikey: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str], str]:
+    """Return a usable SMILES for a source's structure, rebuilding it if needed.
+
+    A SMILES that parses is returned as it is. One that does not --- ChEBI's
+    export drops the hydrogen of aromatic ring nitrogens, so valsartan's
+    tetrazole reads ``c2nnnn2`` --- is rebuilt from what else the source
+    says about the structure, in this order:
+
+    1. its molfile (ChEBI's curated record, of which the SMILES is an export);
+    2. its InChI;
+    3. the SMILES itself, with the missing ring N-H put back
+       (``nh_repair``).
+
+    A rebuilt structure is accepted only when its InChIKey is the one the
+    source states (or the key of the InChI it states): the full key, or the
+    skeleton and charge when the source states no stereo. Otherwise the
+    structure is given up as invalid rather than guessed.
+
+    A SMILES that parses but is not the compound the source's InChIKey names
+    is also rebuilt, from the molfile only, when one is given. ChEBI exports
+    about 19,000 such SMILES: most lost the configuration of a double bond
+    (``CCCCCC/C=CCCC...`` has one slash, so no stereo), and some 275 lost
+    ring hydrogens and still parse (guanine as ``Nc1nc(=O)c2ncnc2n1``,
+    C5H3N5O). The molfile is the curated record, and when its key is the
+    stated one it wins. Without a molfile
+    that agrees the SMILES is kept, and
+    [`identity_consistent`][provesid.tools.identity_consistent] reports the
+    disagreement.
+
+    A missing SMILES is not rebuilt from the other fields: the source gave no
+    structure, and that is reported as ``"none"``.
+
+    Args:
+        smiles: The source's SMILES, or None.
+        molfile: The source's molfile (V2000 or V3000 block), or None.
+        inchi: The source's InChI, or None.
+        inchikey: The source's InChIKey, or None.
+
+    Returns:
+        A ``(smiles, origin, status)`` tuple: the usable SMILES, or None; the
+        field it came from (``"smiles"``, ``"molfile"``, ``"inchi"``,
+        ``"nh_repair"``), or None; and the
+        [`STRUCTURE_STATUSES`][provesid.tools.STRUCTURE_STATUSES] entry.
+        Without RDKit installed nothing is checked, and a SMILES is returned
+        as ``"valid"``.
+
+    Examples:
+        >>> repair_structure("CCO")
+        ('CCO', 'smiles', 'valid')
+        >>> repair_structure("O=c1ncc(F)c(=O)n1",            # 5-fluorouracil, ChEBI
+        ...                  inchikey="GHASVSINZRGABV-UHFFFAOYSA-N")
+        ('O=c1[nH]cc(F)c(=O)[nH]1', 'nh_repair', 'repaired:nh_repair')
+        >>> repair_structure("O=c1ncc(F)c(=O)n1", inchikey="XLYOFNOQVPJJNP-UHFFFAOYSA-N")
+        (None, None, 'invalid')
+        >>> repair_structure(None)
+        (None, None, 'none')
+    """
+    if is_missing(smiles):
+        return None, None, "none"
+    if not RDKIT_AVAILABLE or Chem is None:
+        return str(smiles), "smiles", "valid"
+
+    def rebuild(origin: str) -> Optional[str]:
+        """The SMILES of the molfile or InChI, when its key is the reference."""
+        text = molfile if origin == "molfile" else inchi
+        if is_missing(text):
+            return None
+        with rdBase.BlockLogs():
+            try:
+                mol = Chem.MolFromMolBlock(str(text)) if origin == "molfile" else Chem.MolFromInchi(str(text))
+            except Exception:
+                mol = None
+        if mol is None or not _keys_agree(_inchikey_of(mol), reference):
+            return None
+        return Chem.MolToSmiles(mol)
+
+    reference = _reference_inchikey(inchi, inchikey)
+    parsed = _mol_from_smiles_quietly(smiles)
+    if parsed is not None:
+        if reference is None or is_missing(molfile) or _keys_agree(_inchikey_of(parsed), reference):
+            return str(smiles), "smiles", "valid"
+        rebuilt = rebuild("molfile")
+        if rebuilt is not None:
+            log.debug("SMILES %r is not %s; taken from the molfile.", smiles, reference)
+            return rebuilt, "molfile", "repaired:molfile"
+        return str(smiles), "smiles", "valid"
+
+    if reference is None:
+        log.debug("Unparsable SMILES %r and no InChIKey to check a repair against.", smiles)
+        return None, None, "invalid"
+
+    for origin in ("molfile", "inchi"):
+        rebuilt = rebuild(origin)
+        if rebuilt is not None:
+            log.debug("Unparsable SMILES %r rebuilt from the %s.", smiles, origin)
+            return rebuilt, origin, f"repaired:{origin}"
+
+    repaired = _add_aromatic_nh(str(smiles), reference)
+    if repaired is not None:
+        log.debug("Unparsable SMILES %r repaired to %r.", smiles, repaired)
+        return repaired, "nh_repair", "repaired:nh_repair"
+
+    log.debug("Unparsable SMILES %r could not be rebuilt to %s.", smiles, reference)
+    return None, None, "invalid"
+
+
 def make_candidate(
     source: str,
     *,
@@ -427,12 +703,14 @@ def make_candidate(
     iupac_name: Optional[str] = None,
     molecular_formula: Optional[str] = None,
     smiles: Optional[str] = None,
+    molfile: Optional[str] = None,
     inchi: Optional[str] = None,
     inchikey: Optional[str] = None,
     dtxsid: Optional[str] = None,
     molecular_mass: Optional[float] = None,
     synonyms: Optional[str] = None,
     cas_candidates: Optional[List[str]] = None,
+    derived_from: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build one source's answer in the shape every comparison expects.
 
@@ -446,6 +724,13 @@ def make_candidate(
     substances, is replaced by the standard one; see
     [`standardize_inchi_and_key`][provesid.tools.standardize_inchi_and_key].
 
+    A SMILES that RDKit cannot read is never passed on. It is rebuilt from the
+    source's molfile or InChI, or repaired, when the result has the InChIKey
+    the source states, and dropped otherwise; see
+    [`repair_structure`][provesid.tools.repair_structure]. The string the
+    source gave is kept in ``source_smiles_raw``, and ``structure_status``
+    says what happened.
+
     Args:
         source: Display name of the source, e.g. ``"ChEBI"``. This is what
             appears in ``source_details`` and in the consensus report.
@@ -453,6 +738,8 @@ def make_candidate(
         iupac_name: The IUPAC name, where the source distinguishes it.
         molecular_formula: The molecular formula as the source states it.
         smiles: The structure as SMILES.
+        molfile: The structure as a molfile, used only to rebuild a SMILES
+            that does not parse.
         inchi: The structure as InChI. A non-standard one is replaced.
         inchikey: The InChIKey. A non-standard one is replaced.
         dtxsid: The DSSTox identifier, for sources that carry one.
@@ -464,12 +751,20 @@ def make_candidate(
             Duplicates are dropped and the first occurrence kept, so the
             first number stays the one
             [`first_cas`][provesid.tools.first_cas] reports.
+        derived_from: For a candidate found by another source's answer
+            rather than by the query --- ChEMBL, which holds no CAS numbers,
+            looked up by the structure ChEBI found for one --- that source's
+            display name. Such a candidate is an echo, not a second opinion,
+            and [`compute_consensus`][provesid.tools.compute_consensus] does
+            not count it.
 
     Returns:
         The candidate record: a dict with the keys ``source``, ``name``,
         ``IUPAC_name``, ``molecular_formula``, ``SMILES``,
         ``canonical_smiles``, ``InChI``, ``InChIKey``, ``DTXSID``,
-        ``molecular_mass``, ``Synonyms`` and ``CAS_candidates``.
+        ``molecular_mass``, ``Synonyms``, ``CAS_candidates``,
+        ``structure_status``, ``structure_origin``, ``source_smiles_raw`` and
+        ``derived_from``.
 
     Examples:
         >>> cand = make_candidate("ChEBI", name="aspirin", smiles="CC(=O)Oc1ccccc1C(=O)O")
@@ -480,7 +775,18 @@ def make_candidate(
         >>> make_candidate("CompTox", smiles="CC(=O)C1C(=O)OC(C)=CC1=O",
         ...                inchikey="PGRHXDWITVMQBC-UHFFFAOYNA-N")["InChIKey"]
         'PGRHXDWITVMQBC-UHFFFAOYSA-N'
+
+        ChEBI's SMILES for allopurinol lacks its ring N-H:
+
+        >>> cand = make_candidate("ChEBI", smiles="Oc1ncnc2nncc12",
+        ...                       inchikey="OFCNXPDARWKPPY-UHFFFAOYSA-N")
+        >>> cand["structure_status"], cand["source_smiles_raw"]
+        ('repaired:nh_repair', 'Oc1ncnc2nncc12')
     """
+    raw_smiles = None if is_missing(smiles) else str(smiles)
+    smiles, structure_origin, structure_status = repair_structure(
+        raw_smiles, molfile=molfile, inchi=inchi, inchikey=inchikey
+    )
     canonical_smiles, rdkit_mass = smiles_to_canonical_and_mass(smiles)
     inchi, inchikey = standardize_inchi_and_key(smiles, inchi, inchikey)
     return {
@@ -496,6 +802,10 @@ def make_candidate(
         "molecular_mass": pick_first(to_float(molecular_mass), rdkit_mass),
         "Synonyms": synonyms,
         "CAS_candidates": list(dict.fromkeys(cas_candidates or [])),
+        "structure_status": structure_status,
+        "structure_origin": structure_origin,
+        "source_smiles_raw": raw_smiles,
+        "derived_from": derived_from,
     }
 
 
@@ -511,7 +821,10 @@ def candidate_similarity(left: Dict[str, Any], right: Dict[str, Any]) -> float:
     InChIKey (3 each), above InChI (2) and mass agreement (2), above formula
     (1) and name similarity (1). Mass and name score partially — a mass within
     0.2 scores full, within 1.0 scores half; a name similarity of 0.9 scores
-    full, 0.7 scores half.
+    full, 0.7 scores half. Two SMILES whose candidates carry the same
+    InChIKey count as agreeing: they are tautomers (ChEBI writes allopurinol
+    ``Oc1ncnc2[nH]ncc12``, PubChem ``O=c1[nH]cnc2[nH]ncc12``), which the
+    standard InChI deliberately does not tell apart.
 
     Args:
         left: One candidate record.
@@ -541,15 +854,17 @@ def candidate_similarity(left: Dict[str, Any], right: Dict[str, Any]) -> float:
         if left_cas.intersection(right_cas):
             score += 3.0
 
+    left_ik = left.get("InChIKey")
+    right_ik = right.get("InChIKey")
+    same_key = not is_missing(left_ik) and str(left_ik) == str(right_ik)
+
     left_smiles = left.get("canonical_smiles")
     right_smiles = right.get("canonical_smiles")
     if not is_missing(left_smiles) and not is_missing(right_smiles):
         weight += 4.0
-        if left_smiles == right_smiles:
+        if left_smiles == right_smiles or same_key:
             score += 4.0
 
-    left_ik = left.get("InChIKey")
-    right_ik = right.get("InChIKey")
     if not is_missing(left_ik) and not is_missing(right_ik):
         weight += 3.0
         if str(left_ik) == str(right_ik):
@@ -696,6 +1011,9 @@ def apply_candidate_to_result(result: Dict[str, Any], candidate: Optional[Dict[s
     the candidates together, so the caller chooses it with
     [`pick_casrn`][provesid.tools.pick_casrn].
 
+    A SMILES that RDKit cannot read counts as missing: it neither fills the
+    field nor keeps a later, compatible source's structure out of it.
+
     Args:
         result: The result dict to fill, modified in place.
         candidate: The candidate to read from. None is a no-op.
@@ -713,17 +1031,23 @@ def apply_candidate_to_result(result: Dict[str, Any], candidate: Optional[Dict[s
     if candidate is None:
         return
 
+    if not is_parsable_smiles(result.get("SMILES")):
+        result["SMILES"] = None
+    candidate_smiles = candidate.get("SMILES")
+    if not is_parsable_smiles(candidate_smiles):
+        candidate_smiles = None
+
     result["name"] = pick_first(result.get("name"), candidate.get("name"))
     result["IUPAC_name"] = pick_first(result.get("IUPAC_name"), candidate.get("IUPAC_name"))
     result["molecular_formula"] = pick_first(result.get("molecular_formula"), candidate.get("molecular_formula"))
-    result["SMILES"] = pick_first(result.get("SMILES"), candidate.get("SMILES"))
+    result["SMILES"] = pick_first(result.get("SMILES"), candidate_smiles)
     result["InChI"] = pick_first(result.get("InChI"), candidate.get("InChI"))
     result["InChIKey"] = pick_first(result.get("InChIKey"), candidate.get("InChIKey"))
     result["DTXSID"] = pick_first(result.get("DTXSID"), candidate.get("DTXSID"))
     result["molecular_mass"] = pick_first(result.get("molecular_mass"), candidate.get("molecular_mass"))
     result["Synonyms"] = pick_first(result.get("Synonyms"), normalize_synonyms(candidate.get("Synonyms")))
 
-    if is_missing(result.get("source")) and not is_missing(candidate.get("SMILES")):
+    if is_missing(result.get("source")) and candidate_smiles is not None:
         result["source"] = candidate.get("source")
 
 
@@ -742,14 +1066,21 @@ def compute_consensus(candidates: Dict[str, Optional[Dict[str, Any]]]) -> Tuple[
     Reputation order is ChEBI, CompTox, PubChemID, ZeroPM, ChEMBL; a source
     not on that list sorts last.
 
+    A candidate with ``derived_from`` set does not vote. It was found through
+    another source's answer --- ChEMBL by the structure ChEBI found for a CAS
+    number --- so it agrees with that answer by construction, and counting it
+    would hand any wrong first hit a free confirmation.
+
     Args:
         candidates: Source key to candidate record. Entries whose value is
-            None are ignored, so a source that found nothing does not vote.
+            None, or that are ``derived_from`` another source, are ignored,
+            so a source that found nothing does not vote.
 
     Returns:
         A tuple of:
 
-        - the winning source key, or None when no source found anything;
+        - the winning source key, or None when no independent source found
+          anything;
         - per-source agreement with the winner, the winner itself scoring 1.0;
         - the mean of those scores, which is what becomes ``confidence``.
 
@@ -759,8 +1090,14 @@ def compute_consensus(candidates: Dict[str, Optional[Dict[str, Any]]]) -> Tuple[
         >>> source, scores, overall = compute_consensus({"chebi": a, "comptox": b})
         >>> source, overall
         ('chebi', 1.0)
+        >>> echo = make_candidate("ChEMBL", smiles="CC(=O)Oc1ccccc1C(=O)O", derived_from="ChEBI")
+        >>> compute_consensus({"chebi": a, "chembl": echo})[1]
+        {'chebi': 1.0}
     """
-    valid = {k: v for k, v in candidates.items() if v is not None}
+    valid = {
+        k: v for k, v in candidates.items()
+        if v is not None and not v.get("derived_from")
+    }
     if not valid:
         return None, {}, 0.0
 
@@ -806,7 +1143,9 @@ def candidate_from_chebi_row(row: Dict[str, Any]) -> Dict[str, Any]:
 
     Returns:
         The candidate record. ChEBI states no mass, so the mass comes from
-        RDKit via [`make_candidate`][provesid.tools.make_candidate]. The CAS
+        RDKit via [`make_candidate`][provesid.tools.make_candidate]. The
+        row's molfile is passed on, so that a SMILES ChEBI exported without
+        an aromatic N-H (6% of its records) is rebuilt from it. The CAS
         numbers come from the ``CAS Registry Numbers`` field alone: the rest
         of the row, the InChI in particular, can contain CAS-shaped strings.
         ChEBI lists them sorted as text, which is no ranking, so they are
@@ -825,6 +1164,7 @@ def candidate_from_chebi_row(row: Dict[str, Any]) -> Dict[str, Any]:
         iupac_name=row.get("ChEBI NAME"),
         molecular_formula=row.get("FORMULA"),
         smiles=row.get("SMILES"),
+        molfile=row.get("molfile"),
         inchi=row.get("INCHI"),
         inchikey=row.get("INCHIKEY"),
         synonyms=normalize_synonyms(row.get("SYNONYM")),
@@ -1180,3 +1520,134 @@ def smiles_to_canonical_and_mass(smiles: Optional[str]) -> Tuple[Optional[str], 
         return None, None
 
 
+_FORMULA_TOKEN = re.compile(r"([A-Z][a-z]?)(\d*)")
+# A trailing charge as RDKit writes it, sign first: "C7H5NO5-2".
+_FORMULA_CHARGE = re.compile(r"[+-]\d*$")
+_ELEMENTS = frozenset(
+    Chem.GetPeriodicTable().GetElementSymbol(z) for z in range(1, 119)
+) | {"D", "T"} if RDKIT_AVAILABLE else frozenset()
+
+
+def formula_element_counts(formula: Optional[str]) -> Optional[Dict[str, int]]:
+    """Count the atoms of each element in a molecular formula.
+
+    Sources write formulas differently --- ChEBI's ``C17H21NO.HCl``, CompTox's
+    ``C17H22ClNO``, ``C2H3NaO2.3H2O`` for a hydrate --- so two formulas are
+    compared by their element counts, not their text. Dot-separated parts are
+    summed, each multiplied by a leading count; a trailing charge (``-``,
+    ``+2``) is dropped; deuterium and tritium count as hydrogen.
+
+    Args:
+        formula: The formula, or None.
+
+    Returns:
+        Element symbol to atom count, or None when the formula is missing or
+        is not a plain formula (``(C2H4O)n``, or ChEBI's ``C4H6O4R2`` for a
+        group with two attachment points).
+
+    Examples:
+        >>> formula_element_counts("C17H21NO.HCl") == formula_element_counts("C17H22ClNO")
+        True
+        >>> formula_element_counts("C2H3NaO2.3H2O")
+        {'C': 2, 'H': 9, 'Na': 1, 'O': 5}
+        >>> formula_element_counts("C7H5NO5-2") == formula_element_counts("C7H5NO5")
+        True
+        >>> formula_element_counts("C5H9O3-")
+        {'C': 5, 'H': 9, 'O': 3}
+        >>> formula_element_counts("(C2H4O)n") is None, formula_element_counts("C4H6O4R2") is None
+        (True, True)
+    """
+    if is_missing(formula):
+        return None
+    counts: Counter = Counter()
+    for part in str(formula).replace(" ", "").split("."):
+        part = _FORMULA_CHARGE.sub("", part)
+        multiplier_text = re.match(r"\d*", part).group()
+        multiplier = int(multiplier_text) if multiplier_text else 1
+        body = part[len(multiplier_text):]
+        if not body:
+            return None
+        tokens = _FORMULA_TOKEN.findall(body)
+        if "".join(symbol + count for symbol, count in tokens) != body:
+            return None
+        for symbol, count in tokens:
+            if _ELEMENTS and symbol not in _ELEMENTS:
+                return None
+            symbol = "H" if symbol in ("D", "T") else symbol
+            counts[symbol] += (int(count) if count else 1) * multiplier
+    return dict(sorted(counts.items())) if counts else None
+
+
+def structure_formula(smiles: Optional[str]) -> Optional[str]:
+    """The molecular formula of a structure, as RDKit computes it.
+
+    Args:
+        smiles: The SMILES, or None.
+
+    Returns:
+        The Hill-order formula, every fragment merged into one, or None when
+        the SMILES is missing or does not parse.
+
+    Examples:
+        >>> structure_formula("CNCC[C@@H](Oc1ccccc1C)c1ccccc1.Cl")
+        'C17H22ClNO'
+    """
+    mol = _mol_from_smiles_quietly(smiles)
+    if mol is None:
+        return None
+    return rdMolDescriptors.CalcMolFormula(mol)
+
+
+def identity_consistent(
+    smiles: Optional[str],
+    inchikey: Optional[str] = None,
+    formula: Optional[str] = None,
+) -> Optional[bool]:
+    """Check a structure against the InChIKey and formula stated for it.
+
+    A source states a structure, an InChIKey and a formula, and nothing makes
+    them agree: a result can be assembled whose key belongs to another
+    compound than its SMILES. This compares the key and formula RDKit derives
+    from the structure with the stated ones. The keys must have the same
+    skeleton (first block) and protonation flag (last letter): stereo is
+    not compared, because a SMILES export routinely loses a double bond's
+    or a centre's configuration that the key, made from the molfile, keeps
+    (ChEBI's cefodizime), and that is not a different compound. The formula
+    must have the same element counts (see
+    [`formula_element_counts`][provesid.tools.formula_element_counts]).
+
+    Args:
+        smiles: The structure, or None.
+        inchikey: The InChIKey stated for it, or None.
+        formula: The formula stated for it, or None.
+
+    Returns:
+        True when every stated value that can be compared agrees with the
+        structure, False when one does not, and None when there is no
+        structure or nothing stated to compare it with.
+
+    Examples:
+        >>> identity_consistent("CCO", "LFQSCWFLJHTTHZ-UHFFFAOYSA-N", "C2H6O")
+        True
+        >>> identity_consistent("CCO", formula="C3H8O")
+        False
+        >>> identity_consistent("C/C=C/C", "IAQRGUVFOMOMEM-UHFFFAOYSA-N")   # stereo is not compared
+        True
+        >>> identity_consistent(None, "LFQSCWFLJHTTHZ-UHFFFAOYSA-N") is None
+        True
+    """
+    mol = _mol_from_smiles_quietly(smiles)
+    if mol is None:
+        return None
+
+    verdicts: List[bool] = []
+    if not is_missing(inchikey):
+        structure_key, stated_key = _inchikey_of(mol) or "", str(inchikey)
+        verdicts.append(
+            structure_key[:14] == stated_key[:14] and structure_key[-1:] == stated_key[-1:]
+        )
+    stated_counts = formula_element_counts(formula)
+    structure_counts = formula_element_counts(structure_formula(smiles))
+    if stated_counts is not None and structure_counts is not None:
+        verdicts.append(stated_counts == structure_counts)
+    return all(verdicts) if verdicts else None

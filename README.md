@@ -21,8 +21,8 @@ df[["query", "name", "canonical_smiles", "InChIKey", "n_source_support", "confid
 ```text
        query          name         canonical_smiles                     InChIKey  n_source_support  confidence
 0    50-00-0  formaldehyde                      C=O  WSFSSNUMVMOOMR-UHFFFAOYSA-N                 3      0.9000
-1    64-17-5       ethanol                      CCO  LFQSCWFLJHTTHZ-UHFFFAOYSA-N                 4      0.8906
-2  1912-24-9      atrazine  CCNc1nc(Cl)nc(NC(C)C)n1  MXWJVTOOROXGIU-UHFFFAOYSA-N                 4      0.9000
+1    64-17-5       ethanol                      CCO  LFQSCWFLJHTTHZ-UHFFFAOYSA-N                 3      0.9000
+2  1912-24-9      atrazine  CCNc1nc(Cl)nc(NC(C)C)n1  MXWJVTOOROXGIU-UHFFFAOYSA-N                 3      0.9000
 ```
 
 `Search` asks every installed database about each identifier, keeps the

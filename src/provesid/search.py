@@ -45,8 +45,8 @@ Examples:
     >>> df = Search("cas", show_progress=False).search(["50-00-0", "64-17-5"])
     >>> df[["query", "name", "canonical_smiles", "confidence"]]
          query          name canonical_smiles  confidence
-    0  50-00-0  formaldehyde              C=O      0.9000
-    1  64-17-5       ethanol              CCO      0.8906
+    0  50-00-0  formaldehyde              C=O         0.9
+    1  64-17-5       ethanol              CCO         0.9
 
     Typos: fuzzy names are retrieved mainly through ZeroPM, so the
     ``"recall"`` preset, which turns both on, is what rescues most of them.
@@ -94,23 +94,30 @@ from .tools import (
     candidate_from_chembl_row,
     candidate_from_pubchem_row,
     compute_consensus,
+    formula_element_counts,
+    identity_consistent,
     inchikey_from_smiles,
     is_missing,
+    is_parsable_smiles,
     make_candidate,
     pick_casrn,
     pick_first,
+    structure_formula,
     text_similarity,
 )
 
 # ── Optional RDKit ─────────────────────────────────────────────────────────────
 try:
-    from rdkit import Chem, DataStructs
+    from rdkit import Chem, DataStructs, rdBase
     from rdkit.Chem import AllChem, Descriptors
+    from rdkit.Chem.MolStandardize import rdMolStandardize
     from rdkit.Chem.SaltRemover import SaltRemover as _SaltRemover
 
     RDKIT_AVAILABLE = True
 except ImportError:  # pragma: no cover
     Chem = None  # type: ignore[assignment]
+    rdBase = None  # type: ignore[assignment]
+    rdMolStandardize = None  # type: ignore[assignment]
     DataStructs = None  # type: ignore[assignment]
     AllChem = None  # type: ignore[assignment]
     Descriptors = None  # type: ignore[assignment]
@@ -165,6 +172,25 @@ _SUPPORT_FACTOR: Dict[int, float] = {
 }
 _SUPPORT_FACTOR_MAX = 1.00  # three or more databases agree
 
+# Confidence factor for a result that carries no usable structure.  A row with
+# a name and a DTXSID but no structure is not as useful as one with a
+# structure, and should not read as the same 0.765; it also makes a structured
+# reading of the same query win a tie (CompTox lists eprinomectin as a
+# structure-less mixture record, PubChem has a structure for it).
+_NO_STRUCTURE_FACTOR = 0.80
+
+# Match methods that claim the query *identifies* the compound.  Only clusters
+# found this way can contradict one another; the clusters of a formula, a
+# fuzzy name or a Tanimoto search are alternatives by design.
+_EXACT_METHODS = frozenset(
+    ["exact_inchikey", "exact_smiles", "inchi", "exact_cas", "dtxsid", "opsin", "exact_name"]
+)
+
+ON_CONFLICT_POLICIES = frozenset(["pick", "refuse"])
+"""What [`Search`][provesid.search.Search] does when independent sources
+return different compounds for one query: ``"pick"`` the best-supported one
+and flag the row, or ``"refuse"`` to return any of them."""
+
 OUTPUT_COLUMNS: List[str] = [
     "query",
     "CASRN",
@@ -192,11 +218,55 @@ OUTPUT_COLUMNS: List[str] = [
     "hit_rank",
     "n_source_support",
     "opsin_smiles",
+    "structure_status",
+    "identity_consistent",
+    "source_inchikey",
+    "source_formula",
+    "n_clusters",
+    "conflict",
+    "runner_up_inchikey",
+    "runner_up_sources",
+    "runner_up_confidence",
 ]
 """The columns of the DataFrame ``Search.search`` returns, in this order.
 
 ``return_alternatives=True`` adds an ``alternatives`` column after them. A
 column no candidate filled is still there, holding None.
+
+The last four are quality control, and say whether the structure in a row can
+be used as it is:
+
+``structure_status``
+    Where the structure came from: ``valid`` (the source's SMILES, as given),
+    ``repaired:molfile`` / ``repaired:inchi`` / ``repaired:nh_repair`` (the
+    source's SMILES did not parse and was rebuilt, with the source's InChIKey
+    checked), ``invalid`` (a source gave a structure no one can read, and no
+    other source gave a usable one) or ``none`` (no source gave one).  See
+    [`STRUCTURE_STATUSES`][provesid.tools.STRUCTURE_STATUSES].
+``identity_consistent``
+    Whether the InChIKey and formula the sources state belong to the
+    structure: True, False, or None when there is nothing to compare.  See
+    [`identity_consistent`][provesid.tools.identity_consistent].
+``source_inchikey``, ``source_formula``
+    The InChIKey and formula as the sources state them.  When there is a
+    structure, ``InChIKey``, ``InChI``, ``molecular_formula`` and
+    ``molecular_mass`` are computed from it, so they always describe the
+    ``SMILES`` of the row; these two keep what the sources said.
+``n_clusters``
+    How many distinct compounds the sources returned for the query.
+``conflict``
+    True when an independent source's best answer for the query is a
+    different compound --- not a salt, solvate or stereoisomer of this one.
+    The confidence of a contested row is multiplied by its share of the
+    independent sources behind the two readings, so a one-against-one or
+    two-against-two split scores half of what an unopposed answer would.
+    ``preset="strict"`` (``on_conflict="refuse"``) returns no structure for
+    a conflicted query.
+``runner_up_inchikey``, ``runner_up_sources``, ``runner_up_confidence``
+    The compound the row competed with: the best conflicting one when
+    ``conflict`` is True, otherwise the best other one, if any.  For the top
+    row that is the runner-up; for a lower row of ``n_hits="all"``, the
+    winner.
 """
 
 # Name-normalization: prefixes to strip before fuzzy matching.
@@ -474,6 +544,8 @@ class Search:
         min_confidence (float): Confidence floor applied before truncation.
         min_source_support (int): Minimum number of databases that must carry a
             structure for it to be returned (0 disables the filter).
+        on_conflict (str): ``"pick"`` or ``"refuse"``: what to return when
+            independent sources name different compounds.
         use_opsin (bool): Enable PYOPSIN IUPAC→structure anchoring (needs Java).
         sources (tuple): The offline sources queried, in
             [`SOURCE_KEYS`][provesid.sources.SOURCE_KEYS] order (ZeroPM off by
@@ -505,8 +577,8 @@ class Search:
         >>> df = s.search(["50-00-0", "64-17-5"])
         >>> df[["CASRN", "name", "canonical_smiles", "confidence"]]
              CASRN          name canonical_smiles  confidence
-        0  50-00-0  formaldehyde              C=O      0.9000
-        1  64-17-5       ethanol              CCO      0.8906
+        0  50-00-0  formaldehyde              C=O         0.9
+        1  64-17-5       ethanol              CCO         0.9
         >>> df.attrs["sources_available"]
         ['chebi', 'comptox', 'pubchem', 'chembl']
 
@@ -573,6 +645,7 @@ class Search:
             "n_hits": 1,
             "min_confidence": 0.0,
             "min_source_support": 0,
+            "on_conflict": "pick",
         },
     }
     """Named settings for the arguments that decide what counts as a match
@@ -584,11 +657,12 @@ class Search:
     preset='strict')``" says everything
     [`settings`][provesid.search.Search.settings] would.
     """
-    # Precision first: only exact matches, and only structures two
-    # independent databases agree on.
+    # Precision first: only exact matches, only structures two independent
+    # databases agree on, and nothing when independent databases disagree.
     PRESETS["strict"] = {
         **PRESETS["balanced"],
         "min_source_support": 2,
+        "on_conflict": "refuse",
     }
     # Recall first: every widening the resolver has, every plausible
     # compound returned, and ZeroPM back in the pool because it is the only
@@ -622,6 +696,7 @@ class Search:
         n_hits: Optional[Union[int, str]] = None,
         min_confidence: Optional[float] = None,
         min_source_support: Optional[int] = None,
+        on_conflict: Optional[str] = None,
         use_opsin: bool = False,
         opsin_jar_fpath: str = "default",
         sources: Optional[Union[str, Sequence[str]]] = None,
@@ -632,6 +707,7 @@ class Search:
         consensus_compat_threshold: Optional[float] = None,
         query_weight: Optional[float] = None,
         return_alternatives: bool = False,
+        validate: Optional[Dict[str, Any]] = None,
         online_fallback: bool = False,
         datasets: str = "present",
         data_dir: Optional[Union[str, Path]] = None,
@@ -657,8 +733,9 @@ class Search:
                 ``"strict"``
                     As ``"balanced"``, but a structure is returned only when
                     at least two independent databases carry it
-                    (``min_source_support=2``).  Fewer answers, fewer wrong
-                    ones.
+                    (``min_source_support=2``) and no independent database
+                    names another compound (``on_conflict="refuse"``).
+                    Fewer answers, fewer wrong ones.
                 ``"recall"``
                     Fuzzy names, InChIKey-skeleton and Tanimoto (0.7)
                     widening, ZeroPM queried, and every plausible compound
@@ -695,7 +772,16 @@ class Search:
                 ``0`` (balanced) accepts uncorroborated hits; ``2`` (strict)
                 requires at least two databases to agree, trading recall for
                 precision.  OPSIN-only clusters have no database support and
-                are dropped by any value above ``0``.
+                are dropped by any value above ``0``.  A record found only
+                through another source's answer (ChEMBL for a CAS number) is
+                not counted.
+            on_conflict: *Preset.*  What to do when independent sources
+                return different compounds for the query (``conflict`` in
+                the output; see [`OUTPUT_COLUMNS`][provesid.search.OUTPUT_COLUMNS]).
+                ``"pick"`` (balanced, recall) returns the best-supported one,
+                flagged and with its confidence lowered; ``"refuse"``
+                (strict) returns no structure for the query, a no-match row
+                with ``conflict=True``.
             use_opsin: Enable PYOPSIN IUPAC-name → structure anchoring for name
                 queries.  Requires a Java runtime; falls back to plain name
                 matching (with a one-time warning) when unavailable.  Defaults
@@ -740,6 +826,35 @@ class Search:
                 Balanced: ``0.5``.
             return_alternatives: When ``n_hits == 1``, attach compact runner-up
                 summaries in an ``alternatives`` column.  Defaults to ``False``.
+            validate: Check each hit against reference values in the input
+                table, and pass over a hit that fails for the next-ranked
+                compound --- what
+                [`resolve_cascade`][provesid.search.resolve_cascade] does
+                across stages, inside one search.  A dict naming columns of
+                the DataFrame (or file) passed to
+                [`search`][provesid.search.Search.search]:
+
+                ``"mw"``
+                    A reference molecular weight; the hit's must be within
+                    ``"mw_tolerance"`` Da (default ``0.5``).
+                ``"smiles"``
+                    A reference structure; the hit's molecular weight must
+                    be within the tolerance of its weight, and an identical
+                    canonical SMILES is reported as ``"smiles"``.
+                ``"formula"``
+                    A reference formula; the hit's must have the same
+                    element counts.
+                ``"name"``
+                    A reference name; reported as ``"name"`` when it is one
+                    of the hit's names, never required.
+
+                A row whose reference cell is empty skips that check.  A hit
+                without a structure fails every required check it is put
+                to.  The checks a hit passed are joined in a
+                ``validated_by`` column (``"mw+smiles"``; ``""`` when the
+                row had nothing to check against).  When every hit fails,
+                the query gets a no-match row.  Defaults to ``None``: hits
+                are returned unchecked.
             online_fallback: When True, a query that produced no candidate
                 from any offline source --- and only such a query --- is asked
                 of PubChem's PUG-REST service and of CACTUS, the NCI/CADD
@@ -813,7 +928,9 @@ class Search:
                 not one of
                 [`DATASET_POLICIES`][provesid.search.Search.DATASET_POLICIES],
                 or ``redownload=True`` was combined with a policy that does not
-                download, or ``sources`` names no source or an unknown one.
+                download, or ``sources`` names no source or an unknown one,
+                or ``on_conflict`` is not one of
+                [`ON_CONFLICT_POLICIES`][provesid.search.ON_CONFLICT_POLICIES].
             provesid.datasets.MissingDatasetError: If ``datasets="required"``
                 and a dataset a queried source needs is not on disk.
         """
@@ -843,6 +960,7 @@ class Search:
             "n_hits": n_hits,
             "min_confidence": min_confidence,
             "min_source_support": min_source_support,
+            "on_conflict": on_conflict,
         }
         chosen = dict(self.PRESETS[preset])
         chosen.update({k: v for k, v in explicit.items() if v is not None})
@@ -860,6 +978,12 @@ class Search:
         self.n_hits = self._validate_n_hits(chosen["n_hits"])
         self.min_confidence = float(chosen["min_confidence"])
         self.min_source_support = max(0, int(chosen["min_source_support"]))
+        if chosen["on_conflict"] not in ON_CONFLICT_POLICIES:
+            raise ValueError(
+                f"on_conflict must be one of {sorted(ON_CONFLICT_POLICIES)}, "
+                f"got {chosen['on_conflict']!r}"
+            )
+        self.on_conflict: str = chosen["on_conflict"]
         self.use_opsin = bool(use_opsin)
         self.opsin_jar_fpath = opsin_jar_fpath
         self.sources: Tuple[str, ...] = _normalise_sources(chosen["sources"])
@@ -875,6 +999,7 @@ class Search:
         self.consensus_compat_threshold = float(chosen["consensus_compat_threshold"])
         self.query_weight = float(chosen["query_weight"])
         self.return_alternatives = bool(return_alternatives)
+        self.validate: Optional[Dict[str, Any]] = _check_validate_spec(validate)
         self.online_fallback = bool(online_fallback)
 
         if datasets not in self.DATASET_POLICIES:
@@ -994,16 +1119,68 @@ class Search:
 
         Returns:
             Dict of the preset, the settings in force for the call, the
-            offline sources that backed it and the online-fallback counters.
+            ``validate`` spec, the offline sources that backed it, the
+            dataset files they read (`_dataset_versions`) and the
+            online-fallback counters.
         """
         return {
             "preset": self.preset,
             "settings": {**self.settings, **run_overrides},
+            "validate": dict(self.validate) if self.validate is not None else None,
             "sources_available": list(self.sources_available),
             "sources_unavailable": list(self.sources_unavailable),
+            "dataset_versions": self._dataset_versions(),
             "online_fallbacks": self._online_fallbacks,
             "online_resolved": self._online_resolved,
         }
+
+    def _dataset_versions(self) -> Dict[str, Any]:
+        """Which build of each dataset, and of provesid, produced a frame.
+
+        A result read months later can then be traced to the files behind
+        it: a lookup made with the ChEBI index whose byte offsets were
+        counted in text mode (fixed in 0.6.0) shows an index
+        ``format_version`` of 1.  The files are only ``stat``-ed, never read.
+
+        Returns:
+            ``{"provesid": version, <source>: {"path", "bytes", "modified",
+            "release"}, ...}`` for every offline source that backed the run;
+            ChEBI adds the ``index`` metadata its cached index was built
+            with.  ``modified`` is the file's UTC modification time, ISO 8601.
+        """
+        from datetime import datetime, timezone
+        from importlib.metadata import PackageNotFoundError, version
+        from .datasets import _release_of
+
+        try:
+            provesid_version = version("provesid")
+        except PackageNotFoundError:  # pragma: no cover - running from a source tree
+            provesid_version = None
+        versions: Dict[str, Any] = {"provesid": provesid_version}
+        for key in self.sources_available:
+            client = self._clients.get(key)
+            path = next(
+                (value for value in (getattr(client, "sdf_path", None), getattr(client, "db_path", None))
+                 if isinstance(value, (str, Path))),
+                None,
+            )
+            if path is None or not Path(path).exists():
+                versions[key] = {"path": str(path) if path is not None else None}
+                continue
+            stat = Path(path).stat()
+            entry: Dict[str, Any] = {
+                "path": str(path),
+                "bytes": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                .isoformat(timespec="seconds"),
+                "release": _release_of(key, str(path)) or None,
+            }
+            index = getattr(client, "index", None) if key == "chebi" else None
+            index_meta = index.get("_meta") if isinstance(index, dict) else None
+            if index_meta:
+                entry["index"] = dict(index_meta)
+            versions[key] = entry
+        return versions
 
     # ── Client lifecycle ──────────────────────────────────────────────────────
 
@@ -1362,6 +1539,13 @@ class Search:
         )
 
         query_list, extra_df = self._coerce_queries(queries, column)
+        if self.validate is not None:
+            columns = [col for key, col in self.validate.items() if key != "mw_tolerance"]
+            if extra_df is None or any(col not in extra_df.columns for col in columns):
+                raise ValueError(
+                    f"validate= reads the columns {columns} of the input table; "
+                    "pass a DataFrame or file holding them."
+                )
 
         iterator = (
             tqdm(query_list, desc=f"Resolving {self.identifier_type.upper()}")
@@ -1374,8 +1558,12 @@ class Search:
         rows: List[Dict[str, Any]] = []
         origin_index: List[int] = []
         for q_idx, q in enumerate(iterator):
+            reference = (
+                extra_df.iloc[q_idx].to_dict() if self.validate is not None else None
+            )
             hits = self._resolve_single(
-                q, effective_n_hits, effective_min_conf, effective_min_support
+                q, effective_n_hits, effective_min_conf, effective_min_support,
+                reference=reference,
             )
             for hit in hits:
                 rows.append(hit)
@@ -1389,6 +1577,10 @@ class Search:
         ordered = list(OUTPUT_COLUMNS)
         if self.return_alternatives and "alternatives" in result_df.columns:
             ordered = ordered + ["alternatives"]
+        if self.validate is not None:
+            if "validated_by" not in result_df.columns:
+                result_df["validated_by"] = None
+            ordered = ordered + ["validated_by"]
         result_df = result_df[ordered]
 
         # Broadcast extra columns from the original DataFrame across hit rows.
@@ -1579,6 +1771,7 @@ class Search:
         n_hits: Union[int, str],
         min_confidence: float,
         min_source_support: int = 0,
+        reference: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Dispatch one query to the appropriate resolver and return ranked hits.
 
@@ -1593,6 +1786,7 @@ class Search:
             min_confidence: Drop hits below this confidence before truncation.
             min_source_support: Drop hits corroborated by fewer than this many
                 databases before truncation.
+            reference: The query's input row, for ``validate``.
 
         Returns:
             List of result dicts matching
@@ -1618,6 +1812,7 @@ class Search:
             min_confidence,
             opsin_anchor,
             min_source_support=min_source_support,
+            reference=reference,
         )
 
     # ── Empty result template ─────────────────────────────────────────────────
@@ -1660,6 +1855,15 @@ class Search:
             "hit_rank": 0,
             "n_source_support": 0,
             "opsin_smiles": None,
+            "structure_status": "none",
+            "identity_consistent": None,
+            "source_inchikey": None,
+            "source_formula": None,
+            "n_clusters": 0,
+            "conflict": False,
+            "runner_up_inchikey": None,
+            "runner_up_sources": None,
+            "runner_up_confidence": None,
         }
 
     # ── Pool construction helpers ─────────────────────────────────────────────
@@ -1896,8 +2100,10 @@ class Search:
         """Resolve a CAS Registry Number into a unified identifier record.
 
         Queries ChEBI, CompTox and PubChemID (and ZeroPM when ``sources``
-        names it) by CAS number.  ChEMBL records no CAS numbers,
-        so it is asked for the first SMILES the others found.
+        names it) by CAS number.  ChEMBL records no CAS numbers, so it is
+        asked for each structure the others found (see
+        `_cross_references`); what it finds is an echo of their answer, not
+        a vote.
 
         The template leaves ``CASRN`` empty, so a hit reports the compound's
         current number, as a name or structure search does, and not
@@ -1915,11 +2121,56 @@ class Search:
         result["match_method"] = "exact_cas"
 
         hits = self._collect("cas", cas)
-        smiles = _first_smiles_from_candidates(hits)
-        if not is_missing(smiles):
-            hits.update(self._collect("smiles", str(smiles), sources=["chembl"]))
+        hits.update(self._cross_references(hits, ["chembl"]))
 
         return result, self._pool(hits, "exact_cas"), None
+
+    def _cross_references(
+        self, hits: Hits, sources: List[str], *, label: Optional[str] = None
+    ) -> Hits:
+        """Look up in ``sources`` every structure the other sources found.
+
+        For sources that do not hold the queried identifier.  Each distinct
+        InChIKey among the candidates is looked up, so that every compound
+        the sources proposed --- not only the first --- gets its record, and
+        each record found is marked ``derived_from`` the source whose key
+        found it.  Such a candidate fills fields the others left empty but
+        does not vote: it agrees with the answer that found it by
+        construction, and when it voted, a wrong ChEBI hit for a CAS number
+        came with a free ChEMBL confirmation (see
+        [`compute_consensus`][provesid.tools.compute_consensus]).
+
+        Args:
+            hits: The other sources' candidates, as `_collect` returns them.
+            sources: Source keys to look the InChIKeys up in; those not
+                queried by this search are skipped.
+            label: Name for a ZeroPM candidate (see `_collect`).
+
+        Returns:
+            Source key -> derived candidates, for the sources that found
+            something; ``{}`` when there was no InChIKey to look up.
+        """
+        sources = [
+            key for key in sources
+            if key in self._SOURCE_KEYS and self._clients.get(key) is not None
+        ]
+        origins: Dict[str, str] = {}
+        for key in SOURCE_KEYS:
+            for cand in hits.get(key) or []:
+                inchikey = cand.get("InChIKey")
+                if not is_missing(inchikey):
+                    origins.setdefault(str(inchikey), self._SOURCE_DISPLAY[key])
+        if not sources or not origins:
+            return {}
+
+        found: Hits = {}
+        for inchikey, origin in origins.items():
+            echoes = self._collect("inchikey", inchikey, label=label, sources=sources)
+            for key, cands in echoes.items():
+                for cand in cands:
+                    cand["derived_from"] = origin
+                    found.setdefault(key, []).append(cand)
+        return found
 
     # ── Name resolver ─────────────────────────────────────────────────────────
 
@@ -2135,8 +2386,24 @@ class Search:
     def _resolve_dtxsid(self, dtxsid: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """Resolve a CompTox DTXSID into a unified identifier record.
 
-        Queries CompTox as the primary source, then cross-references other
-        sources using the InChIKey derived from the CompTox result.
+        CompTox is asked for the DTXSID; the other sources do not hold it.
+        They are asked instead for the CAS number CompTox gives the
+        substance, so that each one that holds that number answers from its
+        own record: an independent vote on the structure, as for a CAS
+        query.  The sources that do not hold the number, and ChEMBL, are
+        then asked for each structure found, and what they find is an echo,
+        not a vote (see `_cross_references`).
+
+        Asking them for CompTox's InChIKey instead made every source agree
+        with CompTox by construction: the wrong thiadiazole CompTox records
+        for cefquinome sulfate (``DTXSID6048593``) came back with
+        ``n_source_support = 2`` and no conflict, where its CAS number finds
+        PubChem's aminothiazole.  A substance whose CAS number no other
+        source holds is supported by CompTox alone, and ``strict`` refuses
+        it.
+
+        CompTox's candidate leads the pool, so a one-against-one split goes
+        to the record the DTXSID names; the row is flagged ``conflict``.
 
         Args:
             dtxsid: CompTox DTXSID string (e.g., ``"DTXSID7020182"``).
@@ -2148,16 +2415,22 @@ class Search:
         result["match_method"] = "dtxsid"
         result["DTXSID"] = dtxsid
 
-        hits = self._collect("dtxsid", dtxsid)
-        comptox = hits.get("comptox") or []
-        inchikey = comptox[0].get("InChIKey") if comptox else None
-        if not is_missing(inchikey):
-            others = [key for key in self._SOURCE_KEYS if key != "comptox"]
-            hits.update(
-                self._collect("inchikey", str(inchikey), label=dtxsid, sources=others)
-            )
+        owner = self._collect("dtxsid", dtxsid, sources=["comptox"])
+        comptox = owner.get("comptox") or []
+        if not comptox:
+            return result, [], None
 
-        return result, self._pool(hits, "dtxsid"), None
+        others = [key for key in self._SOURCE_KEYS if key not in ("comptox", "chembl")]
+        # CompTox's own CASRN comes first among its numbers.
+        casrn = next(iter(comptox[0].get("CAS_candidates") or []), None)
+        votes: Hits = {}
+        if not is_missing(casrn):
+            votes = self._collect("cas", str(casrn), label=dtxsid, sources=others)
+        silent = [key for key in others if not votes.get(key)] + ["chembl"]
+        echoes = self._cross_references({**votes, **owner}, silent, label=dtxsid)
+
+        pool = self._pool(owner, "dtxsid") + self._pool({**votes, **echoes}, "dtxsid")
+        return result, pool, None
 
     # ── Formula resolver ──────────────────────────────────────────────────────
 
@@ -2459,6 +2732,7 @@ class Search:
         min_confidence: float,
         opsin_anchor: Optional[Dict[str, Any]] = None,
         min_source_support: int = 0,
+        reference: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Cluster a candidate pool, rank the clusters, and return ranked hits.
 
@@ -2471,6 +2745,8 @@ class Search:
             opsin_anchor: Optional OPSIN structure anchor for this query.
             min_source_support: Drop hits carried by fewer than this many
                 databases before truncation.  ``0`` disables the filter.
+            reference: The query's input row, against which ``validate``
+                checks each hit before truncation.
 
         Returns:
             List of fully-populated result dicts ordered by descending
@@ -2498,34 +2774,44 @@ class Search:
             self._build_result_for_cluster(base_template, cluster, opsin_smiles)
             for cluster in clusters
         ]
-
-        # Rank: OPSIN match first, then confidence, support, query agreement,
-        # and (lower) origin rank as a final tie-break.  Corroboration is folded
-        # into ``confidence`` itself (see ``_SUPPORT_FACTOR``), so
-        # ``n_source_support`` here only breaks ties between equally confident
-        # clusters.
-        hits.sort(
-            key=lambda h: (
-                1 if h["_opsin_match"] else 0,
-                h["confidence"],
-                h["n_source_support"],
-                h["_cluster_query_score"],
-                -h["_min_origin_rank"],
-            ),
-            reverse=True,
-        )
+        _rank_hits(hits)
+        _mark_conflicts(hits)
+        _rank_hits(hits)
 
         filtered = [
             h
             for h in hits
             if h["confidence"] >= min_confidence
             and h["n_source_support"] >= min_source_support
+            and not (h["conflict"] and self.on_conflict == "refuse")
         ]
+        if self.validate is not None:
+            for h in filtered:
+                checks = _validation_checks(h, reference or {}, self.validate)
+                h["validated_by"] = None if checks is None else "+".join(checks)
+            rejected = [h for h in filtered if h["validated_by"] is None]
+            if rejected:
+                log.debug(
+                    "%r: validate= rejected %s.", base_template.get("query"),
+                    ", ".join(f"{h.get('name')} ({h.get('molecular_formula')})" for h in rejected),
+                )
+            filtered = [h for h in filtered if h["validated_by"] is not None]
         if not filtered:
-            # Everything was below the floor — represent the query with a single
-            # no-match row so it is not silently dropped.
+            # Everything was below the floor, or disputed under "refuse" ---
+            # represent the query with a single no-match row so it is not
+            # silently dropped, and say whether a dispute was the reason.
             empty = self._build_result_for_cluster(base_template, {"members": []}, opsin_smiles)
             empty["hit_rank"] = 0
+            empty["n_clusters"] = len(hits)
+            empty["conflict"] = any(h["conflict"] for h in hits)
+            if empty["conflict"] and self.on_conflict == "refuse":
+                log.info(
+                    "%r: independent sources name different compounds (%s); "
+                    "on_conflict='refuse' returns none of them.",
+                    base_template.get("query"),
+                    "; ".join(f"{h.get('name')} [{', '.join(h['_independent_sources'])}]"
+                              for h in hits if h["conflict"]),
+                )
             return [empty]
 
         if n_hits != "all":
@@ -2547,8 +2833,64 @@ class Search:
             hit["hit_rank"] = rank
             if alternatives is not None and rank == 0:
                 hit["alternatives"] = alternatives
+            _warn_on_structure_quality(hit)
 
         return filtered
+
+    @staticmethod
+    def _set_structure_quality(
+        result: Dict[str, Any],
+        norm: Dict[str, Any],
+        applied: List[Dict[str, Any]],
+        query_structure_invalid: bool,
+    ) -> None:
+        """Fill a result's QC columns and make its structure authoritative.
+
+        With a structure, ``InChIKey``, ``InChI``, ``molecular_formula`` and
+        ``molecular_mass`` are computed from it, so that every identifier in
+        the row describes the same molecule; what the sources stated is kept
+        in ``source_inchikey`` and ``source_formula`` and checked against the
+        structure (``identity_consistent``).  A mismatch is logged when the
+        hit is returned (see `_finalise_hits`).  Without one, the sources'
+        values stay where they are.
+
+        Args:
+            result: The result being built, modified in place.
+            norm: [`normalize_structure`][provesid.search.normalize_structure]
+                of ``result["SMILES"]``.
+            applied: The candidates that filled the result, in the order
+                they were applied.
+            query_structure_invalid: Whether the query itself carried a
+                structure that does not parse.
+        """
+        source_inchikey = result.get("InChIKey")
+        source_formula = result.get("molecular_formula")
+        result["source_inchikey"] = source_inchikey
+        result["source_formula"] = source_formula
+
+        if norm["mol"] is None:
+            if not is_parsable_smiles(result.get("SMILES")):
+                result["SMILES"] = None
+            unusable = query_structure_invalid or any(
+                cand.get("structure_status") == "invalid" for cand in applied
+            )
+            result["structure_status"] = "invalid" if unusable else "none"
+            result["identity_consistent"] = None
+            return
+
+        provider = next(
+            (cand for cand in applied if cand.get("SMILES") == result["SMILES"]), None
+        )
+        result["structure_status"] = (provider or {}).get("structure_status") or "valid"
+        result["InChI"] = pick_first(norm["inchi"], result.get("InChI"))
+        result["InChIKey"] = pick_first(norm["inchikey"], source_inchikey)
+        result["molecular_formula"] = pick_first(
+            structure_formula(result["SMILES"]), source_formula
+        )
+        result["molecular_mass"] = pick_first(norm["mol_weight"], result.get("molecular_mass"))
+        result["identity_consistent"] = identity_consistent(
+            result["SMILES"], source_inchikey, source_formula
+        )
 
     def _build_result_for_cluster(
         self,
@@ -2601,8 +2943,19 @@ class Search:
         if opsin_match:
             cluster_method = "opsin"
 
+        # Candidates derived from another source's answer (ChEMBL for a CAS
+        # query) are left out of the vote and the support count.
         consensus_source, source_match_scores, match_score = compute_consensus(per_source)
         consensus_candidate = per_source.get(consensus_source) if consensus_source else None
+        independent = [key for key, cand in per_source.items() if not cand.get("derived_from")]
+
+        # A query structure no one can read (a SMILES or InChI query) is not
+        # kept: it would hold the field against the sources' structures.
+        query_structure_invalid = (
+            not is_missing(result.get("SMILES")) and not is_parsable_smiles(result.get("SMILES"))
+        )
+        if query_structure_invalid:
+            result["SMILES"] = None
 
         # ChEMBL, then the online services, fill only what the others left.
         fill_order = [k for k in self._SOURCE_KEYS if k != "chembl"] + ["chembl"] + self._ONLINE_KEYS
@@ -2624,18 +2977,7 @@ class Search:
         norm = normalize_structure(result.get("SMILES"))
         result["canonical_smiles"] = norm["canonical_smiles"]
         result["kekulized_smiles"] = norm["kekulized_smiles"]
-        result["molecular_mass"] = pick_first(result.get("molecular_mass"), norm["mol_weight"])
-
-        rdkit_inchi = norm["inchi"]
-        rdkit_ik = norm["inchikey"]
-        if not is_missing(result.get("InChIKey")) and not is_missing(rdkit_ik):
-            if result["InChIKey"] != rdkit_ik:
-                log.debug(
-                    "InChIKey mismatch for query %r: source=%r rdkit=%r",
-                    result["query"], result["InChIKey"], rdkit_ik,
-                )
-        result["InChI"] = pick_first(result.get("InChI"), rdkit_inchi)
-        result["InChIKey"] = pick_first(result.get("InChIKey"), rdkit_ik)
+        self._set_structure_quality(result, norm, applied, query_structure_invalid)
 
         result["name"] = pick_first(result.get("name"), result.get("IUPAC_name"))
         result["IUPAC_name"] = pick_first(result.get("IUPAC_name"), result.get("name"))
@@ -2660,7 +3002,7 @@ class Search:
         )
         fuzzy_score = cluster_query_score if cluster_method == "fuzzy_name" else None
         tanimoto = cluster_query_score if cluster_method == "tanimoto" else None
-        result["n_source_support"] = len(per_source)
+        result["n_source_support"] = len(independent)
         result["confidence"] = self._compute_confidence(
             cluster_method,
             match_score,
@@ -2669,6 +3011,8 @@ class Search:
             query_score=cluster_query_score,
             n_source_support=result["n_source_support"],
         )
+        if result["structure_status"] in ("none", "invalid"):
+            result["confidence"] = round(result["confidence"] * _NO_STRUCTURE_FACTOR, 4)
         result["opsin_smiles"] = opsin_smiles
 
         # Salt stripping
@@ -2681,6 +3025,14 @@ class Search:
                 result["parent_inchikey"] = parent_norm["inchikey"]
 
         # Transient ranking metadata (dropped before DataFrame assembly).
+        result["_independent_sources"] = [
+            per_source[key].get("source") for key in independent
+        ] + (["OPSIN"] if opsin_match else [])
+        # Whether some independent source's (or OPSIN's) *best* answer is this
+        # compound, rather than one of its lower-ranked alternatives.
+        result["_someones_first_answer"] = any(
+            m.get("_origin_rank", 0) == 0 and not m.get("derived_from") for m in members
+        )
         result["_opsin_match"] = opsin_match
         result["_cluster_query_score"] = cluster_query_score
         result["_min_origin_rank"] = min(
@@ -2692,6 +3044,94 @@ class Search:
 # ─────────────────────────────────────────────────────────────────────────────
 # Cascade resolution for experimental datasets
 # ─────────────────────────────────────────────────────────────────────────────
+
+_VALIDATE_KEYS = frozenset(["mw", "smiles", "formula", "name", "mw_tolerance"])
+
+
+def _check_validate_spec(validate: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Check a ``Search(validate=...)`` spec and fill in its defaults.
+
+    Args:
+        validate: The spec, or None.
+
+    Returns:
+        A copy with ``mw_tolerance`` set, or None.
+
+    Raises:
+        ValueError: If a key is unknown, no check is named, or the tolerance
+            is negative.
+    """
+    if validate is None:
+        return None
+    unknown = set(validate) - _VALIDATE_KEYS
+    if unknown:
+        raise ValueError(
+            f"validate keys must be among {sorted(_VALIDATE_KEYS)}; got {sorted(unknown)}"
+        )
+    spec = {"mw_tolerance": 0.5, **validate}
+    if not set(spec) - {"mw_tolerance"}:
+        raise ValueError("validate must name at least one of 'mw', 'smiles', 'formula', 'name'")
+    spec["mw_tolerance"] = float(spec["mw_tolerance"])
+    if spec["mw_tolerance"] < 0:
+        raise ValueError("validate['mw_tolerance'] must not be negative")
+    return spec
+
+
+def _validation_checks(
+    hit: Dict[str, Any], row: Dict[str, Any], spec: Dict[str, Any]
+) -> Optional[List[str]]:
+    """Check a hit against the reference values of its input row.
+
+    The semantics of [`mw_within`][provesid.search.mw_within], generalised
+    to the references ``Search(validate=...)`` names: molecular weight
+    (given, or computed from a reference structure) and formula must agree;
+    an identical structure and a matching name are reported but never
+    required.  A check whose reference cell is empty is skipped.
+
+    Args:
+        hit: The result to check.
+        row: The query's input row.
+        spec: The checked ``validate`` spec.
+
+    Returns:
+        The names of the checks that passed, in the order ``mw``,
+        ``smiles``, ``formula``, ``name`` (empty when the row had nothing to
+        check against), or None when a required check failed.
+    """
+    tolerance = spec["mw_tolerance"]
+    hit_mass = hit.get("molecular_mass") if hit.get("structure_status") not in ("none", "invalid") else None
+    passed: List[str] = []
+
+    reference_masses: List[float] = []
+    if "mw" in spec and not is_missing(row.get(spec["mw"])):
+        try:
+            reference_masses.append(float(row[spec["mw"]]))
+        except (TypeError, ValueError):
+            return None
+    reference_structure = None
+    if "smiles" in spec and not is_missing(row.get(spec["smiles"])):
+        reference_structure = normalize_structure(row[spec["smiles"]])
+        if reference_structure["mol_weight"] is None:
+            return None
+        reference_masses.append(reference_structure["mol_weight"])
+    if reference_masses:
+        if hit_mass is None or any(abs(float(hit_mass) - m) > tolerance for m in reference_masses):
+            return None
+        passed.append("mw")
+    if reference_structure is not None and reference_structure["canonical_smiles"] == hit.get("canonical_smiles"):
+        passed.append("smiles")
+
+    if "formula" in spec and not is_missing(row.get(spec["formula"])):
+        wanted = formula_element_counts(row[spec["formula"]])
+        if wanted is None or wanted != formula_element_counts(hit.get("molecular_formula")):
+            return None
+        passed.append("formula")
+
+    if "name" in spec and not is_missing(row.get(spec["name"])):
+        if _matches_name_exactly(str(row[spec["name"]]), hit):
+            passed.append("name")
+    return passed
+
 
 def mw_within(
     tolerance: float = 0.5,
@@ -2923,6 +3363,169 @@ def resolve_cascade(
 # Module-level private helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _rank_hits(hits: List[Dict[str, Any]]) -> None:
+    """Sort cluster results best first, in place.
+
+    OPSIN match first, then confidence, then a structure over none, support,
+    query agreement, and (lower) origin rank as a final tie-break.
+    Corroboration is folded into ``confidence`` itself (see
+    `_SUPPORT_FACTOR`), so ``n_source_support`` here only breaks ties between
+    equally confident clusters.  The sort is stable, so clusters still tied
+    keep pool order, which is source reputation order.
+
+    Args:
+        hits: Results from ``Search._build_result_for_cluster``.
+    """
+    hits.sort(
+        key=lambda h: (
+            1 if h["_opsin_match"] else 0,
+            h["confidence"],
+            0 if h["structure_status"] in ("none", "invalid") else 1,
+            h["n_source_support"],
+            h["_cluster_query_score"],
+            -h["_min_origin_rank"],
+        ),
+        reverse=True,
+    )
+
+
+def _parent_skeleton(canonical_smiles: Optional[str]) -> Optional[str]:
+    """The InChIKey skeleton of a structure's neutral, canonical-tautomer parent.
+
+    What two clusters are compared on to decide whether they are different
+    compounds: a salt, a solvate, a charge state, a stereoisomer or a
+    tautomer of one compound has the same parent skeleton.  The standard
+    InChI already merges mobile ring hydrogens, but not keto/enol or
+    azo/hydrazone forms, and CompTox and PubChem often store different ones:
+    of 500 random CompTox CAS numbers, 6 of the 8 that looked contested were
+    one compound drawn as two tautomers.  RDKit's tautomer canonicaliser is
+    slow on large molecules, so this is computed only for queries that
+    returned more than one compound.
+
+    Args:
+        canonical_smiles: The structure, or None.
+
+    Returns:
+        The 14-character skeleton, or None without a readable structure.
+    """
+    if is_missing(canonical_smiles):
+        return None
+    parent_smiles = strip_salts(canonical_smiles) or canonical_smiles
+    mol = Chem.MolFromSmiles(parent_smiles) if RDKIT_AVAILABLE else None
+    if mol is None:
+        return None
+    try:
+        with rdBase.BlockLogs():
+            mol = rdMolStandardize.Uncharger().uncharge(mol)
+            mol = rdMolStandardize.TautomerEnumerator().Canonicalize(mol)
+            inchikey = Chem.MolToInchiKey(mol)
+    except Exception:
+        inchikey = normalize_structure(parent_smiles)["inchikey"]
+    return inchikey[:14] if inchikey else None
+
+
+def _disputes(hit: Dict[str, Any], other: Dict[str, Any]) -> bool:
+    """Whether ``other`` contradicts ``hit`` as the compound the query names.
+
+    It does when both were found by an exact identifier match, ``other`` is
+    the best answer of an independent source (not a lower-ranked
+    alternative, and not a record found through another source's answer)
+    and matches the query at least as well as ``hit`` does (a name search's
+    top row that is not called by the name contests nothing), and the two
+    are different compounds: their parent skeletons differ (see
+    `_parent_skeleton`; the InChIKey skeleton stands in when there is no
+    structure).
+
+    Args:
+        hit: One cluster's result.
+        other: Another cluster's result for the same query.
+
+    Returns:
+        True when the two are rival answers.
+    """
+    def skeleton(h: Dict[str, Any]) -> Optional[str]:
+        if "_parent_skeleton" not in h:
+            h["_parent_skeleton"] = _parent_skeleton(h.get("canonical_smiles"))
+        inchikey = h.get("InChIKey")
+        return h["_parent_skeleton"] or (str(inchikey)[:14] if not is_missing(inchikey) else None)
+
+    mine, theirs = skeleton(hit), skeleton(other)
+    return (
+        hit.get("match_method") in _EXACT_METHODS
+        and other.get("match_method") in _EXACT_METHODS
+        and other["_someones_first_answer"]
+        and other["_cluster_query_score"] >= hit["_cluster_query_score"]
+        and bool(other["_independent_sources"])
+        and mine is not None
+        and theirs is not None
+        and mine != theirs
+    )
+
+
+def _mark_conflicts(hits: List[Dict[str, Any]]) -> None:
+    """Fill the conflict columns of ranked cluster results, in place.
+
+    Each result's rival is the best-ranked other result that disputes it
+    (see `_disputes`).  A result with a rival is flagged ``conflict`` and
+    its confidence multiplied by its share of the independent sources
+    behind the two, ``own / (own + rival's)``: a one-against-one split
+    halves it, three against one keeps three quarters.  The penalty is the
+    point --- the support factor punishes a lone source, but before this a
+    *contested* answer read the same as an unopposed one, and cefquinome's
+    CAS resolved to a wrong CompTox record at 0.765 with no sign that
+    PubChem said otherwise.
+
+    ``runner_up_*`` describe the rival, or the best other result when there
+    is none, with the confidence it has after its own penalty.
+
+    Args:
+        hits: Results ranked by `_rank_hits`; re-rank after this.
+    """
+    rivals = [
+        next((other for other in hits if other is not hit and _disputes(hit, other)), None)
+        for hit in hits
+    ]
+    for hit, rival in zip(hits, rivals):
+        hit["n_clusters"] = len(hits)
+        hit["conflict"] = rival is not None
+        if rival is not None:
+            own = max(1, len(hit["_independent_sources"]))
+            theirs = max(1, len(rival["_independent_sources"]))
+            hit["confidence"] = round(hit["confidence"] * own / (own + theirs), 4)
+    for hit, rival in zip(hits, rivals):
+        shown = rival or next((other for other in hits if other is not hit), None)
+        if shown is not None:
+            hit["runner_up_inchikey"] = shown.get("InChIKey")
+            hit["runner_up_sources"] = list(shown["_independent_sources"])
+            hit["runner_up_confidence"] = shown["confidence"]
+
+
+def _warn_on_structure_quality(hit: Dict[str, Any]) -> None:
+    """Log a returned hit whose structure cannot be used as it is.
+
+    Logged at WARNING, because a row that looks resolved --- a name, an
+    InChIKey, a confidence --- but has no readable structure, or a structure
+    its stated InChIKey does not belong to, is exactly what a downstream
+    pipeline takes at face value.
+
+    Args:
+        hit: A finished result dict.
+    """
+    if hit.get("structure_status") == "invalid":
+        log.warning(
+            "%r (%s): the structure %s gave cannot be read or repaired; "
+            "the row has no structure.",
+            hit.get("query"), hit.get("name"), hit.get("consensus_source"),
+        )
+    if hit.get("identity_consistent") is False:
+        log.warning(
+            "%r (%s): the stated InChIKey %s / formula %s do not belong to "
+            "the structure %s (InChIKey %s).",
+            hit.get("query"), hit.get("name"), hit.get("source_inchikey"),
+            hit.get("source_formula"), hit.get("SMILES"), hit.get("InChIKey"),
+        )
+
+
 def _candidate_names(cand: Dict[str, Any]) -> List[str]:
     """Every name a candidate is known by: name, IUPAC name and each synonym.
 
@@ -3043,6 +3646,14 @@ def _cluster_candidates(
     carrying a full InChIKey and one carrying only the matching skeleton end up
     in the same cluster.  Candidates with no usable identity become singletons.
 
+    A record with no structure --- CompTox lists eprinomectin, gentamicin and
+    other mixtures by name and DTXSID alone --- has no structure key to share,
+    so it would form a cluster of its own and compete with the structured
+    record of the same substance instead of supporting it.  Such a cluster is
+    therefore merged into a structured one when exactly one structured
+    cluster shares its DTXSID, else its name, else a CAS number (see
+    `_structured_cluster_for`).  When several do, it is left alone.
+
     Args:
         pool: Flat list of tagged candidate records.
         by_skeleton: Merge stereo/charge/isotope variants via skeleton keys.
@@ -3083,7 +3694,79 @@ def _cluster_candidates(
     for cand, anchor in zip(pool, cand_anchor):
         groups.setdefault(find(anchor), []).append(cand)
 
-    return [{"members": members} for members in groups.values()]
+    structured = [m for m in groups.values() if any(_has_structure_identity(c) for c in m)]
+    clusters = list(structured)
+    for members in groups.values():
+        if any(_has_structure_identity(c) for c in members):
+            continue
+        target = _structured_cluster_for(members, structured)
+        if target is None:
+            clusters.append(members)
+        else:
+            target.extend(members)
+
+    # Keep the clusters in the order their first member was pooled.
+    first_seen = {id(cand): idx for idx, cand in enumerate(pool)}
+    clusters.sort(key=lambda members: min(first_seen[id(c)] for c in members))
+    return [{"members": members} for members in clusters]
+
+
+def _has_structure_identity(cand: Dict[str, Any]) -> bool:
+    """Whether a candidate carries a structure or an InChIKey to cluster on."""
+    return not is_missing(cand.get("InChIKey")) or not is_missing(cand.get("canonical_smiles"))
+
+
+def _structured_cluster_for(
+    members: List[Dict[str, Any]], structured: List[List[Dict[str, Any]]]
+) -> Optional[List[Dict[str, Any]]]:
+    """The structured cluster a structure-less one describes, if exactly one.
+
+    Tried in order, the first test that any structured cluster passes
+    decides: the same DTXSID; a preferred name of one side among the names
+    (synonyms included) of the other; a CAS number in common.  The decision
+    is taken only when exactly one cluster passes it, so a structure-less
+    record is never attached to one of two competing compounds.
+
+    Args:
+        members: The candidates of a cluster without structure.
+        structured: The member lists of the clusters with one.
+
+    Returns:
+        The member list to merge into, or None.
+    """
+    def normalise(text: Any) -> str:
+        return re.sub(r"\s+", " ", str(text).strip().lower())
+
+    def preferred_names(cands: List[Dict[str, Any]]) -> set:
+        return {
+            normalise(c.get(field)) for c in cands for field in ("name", "IUPAC_name")
+            if not is_missing(c.get(field))
+        }
+
+    def all_names(cands: List[Dict[str, Any]]) -> set:
+        return {normalise(name) for c in cands for name in _candidate_names(c)}
+
+    def values(cands: List[Dict[str, Any]], field: str) -> set:
+        return {str(c.get(field)) for c in cands if not is_missing(c.get(field))}
+
+    def cas_numbers(cands: List[Dict[str, Any]]) -> set:
+        return {cas for c in cands for cas in (c.get("CAS_candidates") or [])}
+
+    tests = (
+        lambda other: bool(values(members, "DTXSID") & values(other, "DTXSID")),
+        lambda other: bool(
+            preferred_names(members) & all_names(other)
+            or preferred_names(other) & all_names(members)
+        ),
+        lambda other: bool(cas_numbers(members) & cas_numbers(other)),
+    )
+    for passes in tests:
+        matches = [other for other in structured if passes(other)]
+        if len(matches) == 1:
+            return matches[0]
+        if matches:
+            return None
+    return None
 
 
 def _any_candidate(hits: Hits) -> bool:
@@ -3096,26 +3779,3 @@ def _any_candidate(hits: Hits) -> bool:
         True when at least one source's list is non-empty.
     """
     return any(hits.values())
-
-
-def _first_smiles_from_candidates(hits: Hits) -> Optional[str]:
-    """Return the first non-missing SMILES among each source's top candidate.
-
-    Priority order is
-    [`provesid.sources.SOURCE_KEYS`][provesid.sources.SOURCE_KEYS]: chebi,
-    comptox, pubchem, zeropm, chembl.
-
-    Args:
-        hits: Source key -> candidates, as ``Search._collect`` returns.
-
-    Returns:
-        SMILES string or None.
-    """
-    for key in SOURCE_KEYS:
-        cands = hits.get(key)
-        if not cands:
-            continue
-        smiles = cands[0].get("SMILES") or cands[0].get("canonical_smiles")
-        if not is_missing(smiles):
-            return smiles
-    return None

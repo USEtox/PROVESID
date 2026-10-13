@@ -7,6 +7,159 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Structure quality control in `Search`, from the structure audit of 630
+pharmaceutical CAS numbers (`plans/2026-10-13-structure-qc-chebi-smiles.md`).
+A `Search` row is used as a structure by everything downstream, and nothing in
+it said whether that structure was usable, repaired, contested or echoed.
+
+### Fixed
+
+- **ChEBI structures whose SMILES does not parse are rebuilt.** 12,235 of the
+  192,479 records in the 2026-05 ChEBI SDF have a SMILES RDKit cannot read,
+  almost all because the export drops the hydrogen of an aromatic ring
+  nitrogen (valsartan's tetrazole reads `c2nnnn2`). `Search` passed the string
+  on: the row had `canonical_smiles = None`, an InChIKey, and a normal
+  confidence (valsartan 0.82), and 30 of the 630 audited CAS numbers had no
+  usable structure. Each candidate's structure is now rebuilt from the
+  source's molfile, then its InChI, then by putting the ring N-H back, and a
+  rebuild is kept only when its InChIKey is the one the source states
+  (`provesid.tools.repair_structure`). The molfile rebuilds 11,734 and the
+  InChI 64; 437 stay unusable (25 with a CAS number) and are dropped instead
+  of passed on, so another source's structure can fill the row.
+
+- **ChEBI SMILES that parse but are not the compound ChEBI names give way to
+  its molfile.** 19,228 more ChEBI SMILES have a different InChIKey from the
+  record's own: 18,953 lost a double bond's or a centre's configuration, and
+  275 lost ring hydrogens and still parse — guanine's
+  `Nc1nc(=O)c2ncnc2n1` is C5H3N5O. When the molfile has the stated key it is
+  used instead (`structure_status = "repaired:molfile"`).
+
+- **`ChebiSDF` molfiles are readable.** The index records a record's offset at
+  its first non-blank line, and 55% of ChEBI records have a blank title line,
+  so `get_compound_by_id(...)["molfile"]` started one line late and no parser
+  could read it. The header is restored on read; the index is unchanged.
+
+- **ChEMBL no longer confirms the answer that found it.** For a CAS query,
+  ChEMBL (which holds no CAS numbers) was asked for the first SMILES another
+  source found and then counted as an independent vote and as source support.
+  Any wrong first hit got a free ChEMBL confirmation; in the pre-0.6.0 lookups
+  this turned 8 wrong ChEBI hits into 2-against-2 ties that ChEBI won on
+  reputation. ChEMBL is now asked for every InChIKey the other sources found,
+  its records are marked `derived_from` that source, and
+  `compute_consensus` and `n_source_support` leave them out. Aspirin's CAS
+  now reports `n_source_support = 3`, not 4.
+
+- **A DTXSID query no longer counts echoes of CompTox as support.** The other
+  sources were asked for CompTox's InChIKey, so they agreed with CompTox by
+  construction: `DTXSID6048593` (cefquinome sulfate) came back as CompTox's
+  wrong 1,2,4-thiadiazole with `n_source_support = 2` and no conflict. They
+  are now asked for the CAS number CompTox gives the substance, and each that
+  holds it votes from its own record, as for a CAS query; the others, and
+  ChEMBL, are asked for each structure found and marked `derived_from`. The
+  cefquinome DTXSID is now flagged `conflict` (confidence 0.38), tirapazamine's
+  (`DTXSID30865361`, CompTox C8H7N3O2) returns ChEBI's and PubChem's
+  C7H6N4O2, and eprinomectin's returns PubChem's structure instead of
+  CompTox's structure-less record. In a one-against-one split the CompTox
+  record the DTXSID names wins, flagged. A substance whose CAS number no
+  other source holds has `n_source_support = 1`, so `strict` refuses it.
+
+- **A structure-less record no longer beats the structure of the same
+  substance.** CompTox lists eprinomectin, gentamicin, neomycin, milbemycin
+  oxime and others as mixtures with a DTXSID and no structure. Such a record
+  formed its own cluster, tied PubChem's structured one at 0.765 and won on
+  reputation, so 9 audited CAS numbers came back without a structure. A
+  structure-less cluster now joins the structured one that shares its DTXSID,
+  name or CAS number, when exactly one does, and a row without a structure
+  has its confidence multiplied by 0.8.
+
+- **Two tautomers with one InChIKey agree.** `candidate_similarity` scored
+  ChEBI's `Oc1ncnc2[nH]ncc12` and PubChem's `O=c1[nH]cnc2[nH]ncc12`
+  (allopurinol) as disagreeing on the SMILES although their standard
+  InChIKeys are equal.
+
+### Added
+
+- **Quality-control columns** in every `Search` result:
+  `structure_status` (`valid`, `repaired:molfile`, `repaired:inchi`,
+  `repaired:nh_repair`, `invalid`, `none`), `identity_consistent`,
+  `source_inchikey`, `source_formula`, `n_clusters`, `conflict`,
+  `runner_up_inchikey`, `runner_up_sources` and `runner_up_confidence`.
+  A returned row with an `invalid` structure, or whose stated identifiers do
+  not belong to its structure, is logged at WARNING.
+
+  ```python
+  df = Search("cas").search(["137862-53-4", "118443-89-3"])
+  df[["name", "structure_status", "conflict", "runner_up_sources", "confidence"]]
+  #                  name  structure_status  conflict runner_up_sources  confidence
+  # 0           valsartan  repaired:molfile     False              None      0.8109
+  # 1  Cefquinome sulfate             valid      True       [PubChemID]      0.3825
+  ```
+
+- **Conflicts are reported and cost confidence.** A conflict is a different
+  compound (not a salt, solvate, charge state, stereoisomer or tautomer: the
+  parents are compared after RDKit's tautomer canonicalisation, since CompTox
+  and PubChem often draw azo/hydrazone and keto/enol compounds differently) as
+  the best answer of an independent source, both found by an exact
+  identifier. The
+  confidence of a contested row is multiplied by its share of the independent
+  sources behind the two readings, so a one-against-one or two-against-two
+  split scores half. Cefquinome sulfate's CAS used to resolve to a wrong
+  CompTox record at 0.765 with no trace of PubChem's answer; it is now 0.3825
+  with `conflict=True`.
+
+- **`on_conflict=`**, a preset setting: `"pick"` (balanced, recall) returns
+  the best-supported reading, flagged; `"refuse"` (strict) returns a no-match
+  row with `conflict=True`. Under strict this also refuses queries the
+  majority gets right, such as tirapazamine's CAS (ChEBI and PubChem against a
+  wrong CompTox formula).
+
+- **`Search(validate={...})`** checks each hit against reference columns of
+  the input table — `"mw"`, `"smiles"`, `"formula"`, `"name"`, with
+  `"mw_tolerance"` — and passes over a hit that fails for the next-ranked
+  compound, recording the checks passed in `validated_by`: `resolve_cascade`'s
+  `accept=` inside one search.
+
+- **`df.attrs["dataset_versions"]`**: the path, size, modification time and
+  release of every dataset file behind a frame, ChEBI's index format, and the
+  provesid version, so a saved result can be traced to the build that made it.
+
+- **`make_candidate(molfile=, derived_from=)`**, and candidates carry
+  `structure_status`, `structure_origin`, `source_smiles_raw` and
+  `derived_from`. New helpers in `provesid.tools`: `repair_structure`,
+  `is_parsable_smiles`, `formula_element_counts`, `structure_formula`,
+  `identity_consistent`, `STRUCTURE_STATUSES`.
+
+- **`scripts/qc_sources.py`**, a source-level QC report to run after each
+  dataset fetch: unparsable structures and what recovers them,
+  self-consistency of stated InChIKey / formula / mass, CAS numbers mapped to
+  several skeletons, and cross-source conflicts on a CAS sample. On the
+  2026-05 ChEBI SDF: 31,463 SMILES rebuilt or unusable (above), 224 records
+  whose structure and InChIKey skeleton still disagree, 67 whose formula does,
+  and 96 CAS numbers given to more than one skeleton. On the CompTox table
+  (1,156,094 structures): 1,042 SMILES RDKit cannot read, none recoverable
+  (CompTox publishes no molfile or InChI), and 1,459 whose InChIKey skeleton,
+  806 whose formula and 1,729 whose mass differ from the structure. Of 500
+  random CompTox CAS numbers resolved with the default sources, 2 come back
+  with `conflict=True` (8 before tautomers were compared), 38 with no
+  structure and 1 with an unusable one.
+
+- `examples/search/structure_qc_demo.py`; `tests/test_structure_qc.py`, with
+  the audit's regression set.
+
+### Changed
+
+- **The structure decides the identifiers.** When a row has a structure,
+  `InChIKey`, `InChI`, `molecular_formula` and `molecular_mass` are computed
+  from it (the formula in Hill order, salts merged: atomoxetine hydrochloride
+  is `C17H22ClNO`, not ChEBI's `C17H21NO.HCl`); what the sources stated is in
+  `source_inchikey` and `source_formula`.
+
+- **The strict preset** is `min_source_support=2` and `on_conflict="refuse"`.
+
+- Confidences change wherever ChEMBL used to vote (ethanol's CAS: 0.8906 to
+  0.9), a ChEBI structure was repaired, sources disagree, or no structure was
+  found.
+
 ## [0.8.0] - 2026-09-24
 
 ### Added

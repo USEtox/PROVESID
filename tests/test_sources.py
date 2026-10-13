@@ -195,12 +195,12 @@ class TestCollect:
         pool = s._pool({"pubchem": [{"n": 3}]}, "formula", lambda c: c["n"] / 10)
         assert pool[0]["query_match_score"] == pytest.approx(0.3)
 
-    def test_cas_reaches_chembl_through_the_smiles_found(self):
+    def test_cas_reaches_chembl_through_the_inchikeys_found(self):
         class ChEMBL:
             asked = []
 
-            def search_by_smiles(self, smiles):
-                self.asked.append(smiles)
+            def search_by_inchikey(self, inchikey):
+                self.asked.append(inchikey)
                 return {
                     "molregno": 1, "chembl_id": "CHEMBL25", "pref_name": "ASPIRIN",
                     "canonical_smiles": _ASPIRIN_SMILES,
@@ -215,4 +215,7 @@ class TestCollect:
         s._ensure_clients()
         _, pool, _ = s._resolve_cas("50-78-2")
         assert {c["_source_key"] for c in pool} == {"pubchem", "chembl"}
-        assert chembl.asked == [_ASPIRIN_SMILES]
+        assert chembl.asked == [_ASPIRIN_IK]
+        # ChEMBL holds no CAS numbers: its record echoes PubChem's answer.
+        [echo] = [c for c in pool if c["_source_key"] == "chembl"]
+        assert echo["derived_from"] == "PubChemID"

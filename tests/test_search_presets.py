@@ -68,12 +68,17 @@ def test_balanced_is_the_default():
     assert s.settings == Search.PRESETS["balanced"]
 
 
-def test_strict_differs_from_balanced_only_in_source_support():
+def test_strict_differs_from_balanced_in_support_and_conflicts():
     diff = {
         k: v for k, v in Search.PRESETS["strict"].items()
         if Search.PRESETS["balanced"][k] != v
     }
-    assert diff == {"min_source_support": 2}
+    assert diff == {"min_source_support": 2, "on_conflict": "refuse"}
+
+
+def test_on_conflict_is_validated():
+    with pytest.raises(ValueError, match="on_conflict"):
+        Search("cas", on_conflict="ignore")
 
 
 def test_recall_widens_every_way():

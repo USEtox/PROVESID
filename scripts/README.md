@@ -31,6 +31,33 @@ database records about itself.
 to a new version of the Zenodo record, and point `PubChemID.DEFAULT_DB_URL` at
 it.
 
+## Source quality control
+
+### qc_sources.py
+
+Reads the offline sources record by record and reports what `Search` would
+have to repair or flag in them. Run it after every dataset fetch and put the
+counts in the CHANGELOG with the dataset bump, so a change in a source --- a
+new ChEBI export, a CompTox refresh --- shows up before it reaches a result.
+
+**Usage:**
+```bash
+uv run python scripts/qc_sources.py --out qc/2026-10-13                 # ChEBI + CompTox + 500 CAS
+uv run python scripts/qc_sources.py --sources chebi --cas-sample 0 --out qc/chebi
+uv run python scripts/qc_sources.py --sources pubchem --limit 100000 --cas-sample 0
+```
+
+**Writes**, per source: `<source>_structure_parsing.csv` (SMILES RDKit cannot
+read, or that are not the record's own compound, and which fallback rebuilds
+them), `<source>_self_consistency.csv` (stated InChIKey skeleton, formula or
+mass that does not fit the structure), `<source>_ambiguous_cas.csv` (CAS
+numbers given to several skeletons); `cross_source_conflicts.csv` (a random
+CompTox CAS sample resolved with `Search`, rows with `conflict=True`); and
+`summary.json` with every count.
+
+**Cost:** ChEBI about 4 minutes, CompTox about half an hour; PubChem reads
+only its CAS-bearing compounds and is the slowest, so cap it with `--limit`.
+
 ## chebifier backend installer
 
 ### install_chebifier.sh

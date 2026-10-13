@@ -30,6 +30,38 @@ from .datasets import CHUNK_SIZE, download_file
 from .utils import user_dataset_path
 
 
+def _restore_molfile_header(molfile: str) -> str:
+    """Give a molfile back the header lines the index skipped.
+
+    A molfile starts with three header lines (title, program, comment) and
+    then the counts line. The index records a record's offset at its first
+    non-blank line, and 55% of ChEBI's records have a blank title, so the
+    molfile read from that offset starts one line late and no parser reads
+    it: the counts line is taken for the comment and an atom line for the
+    counts. Blank lines are put back in front until the counts line is the
+    fourth, which needs no re-index.
+
+    Args:
+        molfile: The molfile as read from the record's offset.
+
+    Returns:
+        The molfile with a three-line header, or the input unchanged when it
+        has no V2000/V3000 counts line.
+
+    Examples:
+        >>> _restore_molfile_header("  Marvin  01291015152D\\n\\n  1  0  0  0  0  0 999 V2000\\n")
+        '\\n  Marvin  01291015152D\\n\\n  1  0  0  0  0  0 999 V2000\\n'
+    """
+    lines = molfile.splitlines(keepends=True)
+    counts_line = next(
+        (i for i, line in enumerate(lines) if line.rstrip().endswith(("V2000", "V3000"))),
+        None,
+    )
+    if counts_line is None or counts_line >= 3:
+        return molfile
+    return "\n" * (3 - counts_line) + molfile
+
+
 class ChebiSDF:
     """
     Parser for ChEBI SDF (Structure-Data File) for offline access to ChEBI data.
@@ -431,6 +463,7 @@ class ChebiSDF:
                 if line.startswith('$$$$'):
                     break
 
+        data['molfile'] = _restore_molfile_header(data['molfile'])
         return data
 
     def get_compound_by_id(self, chebi_id: str) -> Optional[Dict[str, str]]:

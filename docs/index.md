@@ -14,7 +14,7 @@ df[["query", "name", "canonical_smiles", "InChIKey", "confidence"]]
 ```text
        query          name         canonical_smiles                     InChIKey  confidence
 0    50-00-0  formaldehyde                      C=O  WSFSSNUMVMOOMR-UHFFFAOYSA-N      0.9000
-1    64-17-5       ethanol                      CCO  LFQSCWFLJHTTHZ-UHFFFAOYSA-N      0.8906
+1    64-17-5       ethanol                      CCO  LFQSCWFLJHTTHZ-UHFFFAOYSA-N      0.9000
 2  1912-24-9      atrazine  CCNc1nc(Cl)nc(NC(C)C)n1  MXWJVTOOROXGIU-UHFFFAOYSA-N      0.9000
 ```
 
